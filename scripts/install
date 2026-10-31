@@ -1,0 +1,655 @@
+#!/usr/bin/env bash
+# scripts/install — build cauldron (release) and install it for THE CURRENT USER.
+#
+#   scripts/install [--dry-run] [--env <name>] [--from <dir>] [--replace-running]
+#
+# What it does, in order, and says as it goes:
+#   1. Refuses anything but macOS (launchd, codesign and ~/Library are the
+#      supervisor's substrate; there is no Linux path yet).
+#   2. Refuses a HOME that is unset, missing, or not owned by the user running
+#      this — an install writes under HOME and into that user's launchd domain.
+#   2b. REFUSES if a cauldron job for this environment is already LOADED in
+#      this user's launchd domain, under ANY label (the configured prefix,
+#      the default `ai.broomstick`, the pre-release `com.broomstick`, or any
+#      other `<prefix>.cauldron[-<env>]` that `launchctl list` shows). An
+#      install boots that job out and bootstraps it again, i.e. RESTARTS the
+#      running holder, so it is refused unless `--replace-running` is passed
+#      — the refusal prints what it found and the exact command to proceed
+#      (absolute path, so it works from any directory). This check runs in
+#      --dry-run too (read-only: `launchctl print|list`). A failed `list`
+#      is a stderr WARNING, not a silent skip. `cauldron install` repeats the
+#      same check itself, and gets --replace-running passed through.
+#   2c. When this run will build threads (step 4b), REFUSES a checkout that
+#      is not clean — any modified, staged or UNTRACKED file — before it
+#      builds or writes anything. `cauldron build threads` names the version
+#      by the commit and refuses a dirty tree itself (a commit does not
+#      identify bytes built from uncommitted files); without this pre-flight
+#      that refusal came at step 4b, after the release build and after step
+#      4 had created env.toml (REL-4.S5 D3). Read-only (`git status`), so it
+#      runs in --dry-run too. It checks THIS checkout and ALSO the tree
+#      `cauldron build threads` actually compiles (REL-4.S5c M1), when that
+#      is another one: the workspace the `--from` cauldron was built from,
+#      which 2c asks that binary for (read-only: `versions` of a service no
+#      one declares, whose refusal names the shipped declarations directory,
+#      `<workspace>/services`), or a `[build] workspace` named by an override
+#      declaration `<root>/services/threads.toml`. Without `--from`, step 3
+#      builds cauldron from this checkout, so the two are the same tree.
+#   3. Builds `cauldron` and `tui` in release (skipped with `--from <dir>`,
+#      which installs binaries already built into <dir>).
+#   4. Creates the environment (default `prod`) with `auto_restart = true` if it
+#      has no env.toml yet; an existing env.toml is left exactly as it is.
+#   4b. Brings up the THREADS daemon (the Threads tab, `cauldron tui --chat`,
+#      inference and accounts all need it) the way the operator's own prod
+#      has it: `cauldron --env <name> build threads --env-copy`, a release
+#      build from this tree installed as a NEW version `<label>+<env>` (or
+#      `+<env>.N`) under <root>/data/shared/builds/threads/. The plain
+#      `<label>` directory (commit + profile) is SHARED by every environment
+#      in the root and another one (prod) may be pinned to it, so it is never
+#      written — not by the build (REL-4.S8c) and not by the signer
+#      (REL-4.S8b). The new version's image is copied into THIS environment's
+#      own data dir, signed there by
+#      services/threads/scripts/build-threads.sh --sign-only — AD-HOC unless
+#      HARNESS_SIGN_SCRIPT is set (REL-4.S3) — and renamed back over the
+#      unsigned one inside that new version. Then
+#      `cauldron --env <name> pin threads <label>+<env> --addr auto`: an
+#      environment named `prod` keeps the declared default port
+#      (127.0.0.1:3653) only if it is free and unclaimed; every other
+#      environment gets its OWN free loopback port, never one of prod's
+#      (3653, 3651, 3753, 9010). The supervisor installed in step 5 launches
+#      it. Done ONLY for an environment this run creates in step 4: an
+#      existing env.toml is never edited, so an existing pin (its version and
+#      its address) is untouched; an existing env with no threads pin is told
+#      the two commands that add one. ONE exception, so a re-run completes a
+#      partial install (REL-4.S5b): step 4 writes a marker,
+#      <root>/data/.install-threads-pending.<env>, BEFORE it runs
+#      `env create` (REL-4.S5c M2: written after, a stop between the two left
+#      env.toml with no marker and no pin, which no re-run could finish), and
+#      4b removes it once threads is pinned. If `env create` fails, the
+#      marker is removed again (a failed create wrote no env.toml, and one
+#      that is there now is another writer's). The marker sits beside the
+#      environment's data dir, not in it, because `env create` refuses a
+#      data dir that already holds anything. Because it sits OUTSIDE the
+#      data dir it can outlive the env it marks, so the marker must PROVE
+#      ownership (REL-4.S5d): the moment `env create` returns, install records
+#      in it the fingerprint of the env.toml that create wrote (device, inode,
+#      birth time and sha256), and a re-run finishes 4b ONLY for an env.toml
+#      with exactly that fingerprint — re-checked again right before the pin.
+#      A marker beside any other env.toml (no fingerprint: the run stopped
+#      inside `env create` or before recording it; another file; other bytes)
+#      makes install REFUSE (rc 2) with env.toml untouched, and say how to
+#      proceed. A marker with NO env.toml (the create never finished, or
+#      `cauldron env remove` deleted the env around it) is stale and removed.
+#      An env.toml without the marker (made by `cauldron env create`, or by
+#      an install that finished) is never touched.
+#   5. Runs `cauldron --env <name> install`: copies the binary to
+#      <root>/bin/cauldron (and `tui` beside it), writes
+#      ~/Library/LaunchAgents/<label>.plist, and bootstraps it into this user's
+#      gui/<uid> domain, verifying that launchd actually loaded it.
+#
+# Everything lands under the invoking user's own HOME: the cauldron root is
+# $CAULDRON_HOME if set, else $HOME/.cauldron. Nothing is signed with an
+# identity (`cauldron install` prints how to do that deliberately).
+#
+# RE-RUNNING: rebuilds, keeps env.toml (finishing step 4b first if an
+# earlier run stopped before the threads pin), re-places the binaries (the previous
+# one is kept as `.prev`), and reloads the job — which RESTARTS this user's
+# holder, so a re-run over a loaded job needs `--replace-running` (2b). Run
+# `scripts/install --replace-running` after a `git pull` to upgrade.
+#
+# --dry-run prints the plan and runs nothing that writes: no build, no
+# env create, no install. If a built `cauldron` is already available it also
+# prints what that binary resolves (`env show`, read-only).
+#
+# Exit codes: 0 done (or planned); 2 usage / refused precondition; 70 the
+# script itself aborted (an internal error, e.g. an unset variable); 129 / 130
+# / 143 stopped by SIGHUP / SIGINT / SIGTERM; else the failing step's own code.
+set -euo pipefail
+
+# ── the EXIT trap (REL-4.S5e) ───────────────────────────────────────────────
+# ONE trap for the whole run. It removes what this run made and has not
+# handed over yet: the temp file of a marker write (MARKER_TMP), the signing
+# staging dir (STAGE) and the unsigned, unpinned version this run claimed
+# (CLAIMED). And it keeps an abort from reading as success: /bin/bash 3.2
+# (macOS's) exits 0 from a `set -u` abort when an EXIT trap is set, and `$?`
+# inside the trap is 0 too (measured, 3.2.57). So every deliberate success
+# sets FINISHED=1, and an exit with rc 0 and no FINISHED is an abort: rc 70.
+# A non-zero rc (a refusal, a failed step, a signal) passes through as it is.
+# SIGKILL runs no trap at all; a temp marker that one leaves is removed by
+# the next run (step 2c).
+FINISHED=0
+MARKER_TMP=""
+STAGE=""
+CLAIMED=""
+on_exit() {
+    local rc=$?
+    if [[ -n "${MARKER_TMP}" ]]; then rm -f "${MARKER_TMP}" || :; fi
+    if [[ -n "${STAGE}" ]]; then rm -rf "${STAGE}" || :; fi
+    if [[ -n "${CLAIMED}" ]]; then rm -rf "${CLAIMED}" || :; fi
+    if [[ ${rc} -eq 0 && ${FINISHED} -ne 1 ]]; then
+        printf 'install: ABORTED: the script stopped on an internal error (above), not because it finished; nothing after that point ran. rc 70.\n' >&2
+        rc=70
+    fi
+    exit "${rc}"
+}
+trap on_exit EXIT
+trap 'exit 129' HUP
+trap 'exit 130' INT
+trap 'exit 143' TERM
+
+ORIG_ARGS=("$@")
+REPO="$(cd -P "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
+# This script's own resolved path: the command to proceed names THE FILE THAT
+# RAN, not `${REPO}/scripts/install` (which is a different file for a copy).
+SELF="$(cd -P "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)/$(basename "${BASH_SOURCE[0]}")"
+DRY=0
+ENV_NAME="prod"
+FROM=""
+REPLACE_RUNNING=0
+
+usage() { sed -n '2,4p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//' >&2; exit 2; }
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --dry-run) DRY=1 ;;
+        --replace-running) REPLACE_RUNNING=1 ;;
+        --env) [[ $# -ge 2 ]] || usage; ENV_NAME="$2"; shift ;;
+        --env=*) ENV_NAME="${1#--env=}" ;;
+        --from) [[ $# -ge 2 ]] || usage; FROM="$2"; shift ;;
+        --from=*) FROM="${1#--from=}" ;;
+        -h|--help) usage ;;
+        *) echo "install: unknown argument '$1'" >&2; usage ;;
+    esac
+    shift
+done
+
+say()  { printf 'install: %s\n' "$*"; }
+step() { printf '\ninstall: == %s\n' "$*"; }
+die()  { printf 'install: REFUSED: %s\n' "$*" >&2; exit 2; }
+run()  {
+    # Print every command; run it only when not a dry run.
+    printf 'install: $'; printf ' %q' "$@"; printf '\n'
+    if [[ ${DRY} -eq 0 ]]; then "$@"; fi
+}
+
+[[ ${DRY} -eq 1 ]] && say "DRY RUN — nothing below is executed; this is the plan."
+
+# ── 1. macOS ────────────────────────────────────────────────────────────────
+step "1. platform"
+os="$(uname -s)"
+[[ "${os}" == "Darwin" ]] || die "cauldron's supervisor runs under launchd and needs macOS; this is ${os}."
+say "macOS $(sw_vers -productVersion 2>/dev/null || echo '?') ($(uname -m))"
+
+# ── 2. who and where ────────────────────────────────────────────────────────
+step "2. user and HOME"
+[[ -n "${HOME:-}" ]] || die "HOME is not set."
+[[ -d "${HOME}" ]] || die "HOME (${HOME}) is not a directory."
+uid="$(id -u)"
+home_uid="$(stat -f %u "${HOME}")"
+[[ "${home_uid}" == "${uid}" ]] || die "HOME (${HOME}) is owned by uid ${home_uid}, not by you (uid ${uid}). An install writes under HOME and into gui/${uid}; run it as the user who owns HOME."
+case "${ENV_NAME}" in
+    ''|*[!A-Za-z0-9_-]*) die "--env '${ENV_NAME}' is not a usable environment name ([A-Za-z0-9_-])." ;;
+esac
+ROOT="${CAULDRON_HOME:-${HOME}/.cauldron}"
+say "user       $(id -un) (uid ${uid})"
+say "HOME       ${HOME}"
+say "root       ${ROOT}"
+say "env        ${ENV_NAME}"
+say "launchd    gui/${uid}, plist under ${HOME}/Library/LaunchAgents"
+
+# ── 2b. a job that is already running ───────────────────────────────────────
+# Read-only launchctl calls only (`print`, `list`), resolved on PATH.
+step "2b. is a cauldron job for '${ENV_NAME}' already loaded?"
+if [[ "${ENV_NAME}" == prod ]]; then PNAME="cauldron"; else PNAME="cauldron-${ENV_NAME}"; fi
+MANIFEST="${ROOT}/data/${ENV_NAME}/env.toml"
+command -v launchctl >/dev/null 2>&1 \
+    || die "launchctl is not on PATH, so whether a cauldron job is already running cannot be checked."
+cfg_prefix=""
+if [[ -r "${MANIFEST}" ]]; then
+    cfg_prefix="$(awk '/^[[:space:]]*\[/{sec=$0; gsub(/[[:space:]]/,"",sec)}
+        sec=="[supervisor]" && /^[[:space:]]*label_prefix[[:space:]]*=/ {
+            sub(/^[^=]*=[[:space:]]*"/,""); sub(/".*$/,""); print; exit }' "${MANIFEST}")"
+fi
+running=()   # "label|pid"
+seen=" "
+note_job() {
+    case "${seen}" in *" $1 "*) return ;; esac
+    seen="${seen}$1 "
+    running+=("$1|$2")
+}
+for prefix in ${cfg_prefix} ai.broomstick com.broomstick; do
+    lab="${prefix}.${PNAME}"
+    if out="$(launchctl print "gui/${uid}/${lab}" 2>/dev/null)"; then
+        pid="$(awk '$1=="pid" && $2=="=" {print $3; exit}' <<<"${out}")"
+        note_job "${lab}" "${pid:--}"
+    fi
+done
+# Any other prefix: `launchctl list` is "PID Status Label" per loaded job.
+# A failed scan is said LOUDLY (stderr): it means a job under an unknown
+# prefix cannot be seen. The named prefixes above were still checked.
+if ! list_out="$(launchctl list 2>/dev/null)"; then
+    printf 'install: WARNING: launchctl list failed, so a cauldron job for %s under an UNKNOWN label prefix cannot be detected; only the configured, default and legacy labels were checked.\n' "'${ENV_NAME}'" >&2
+    list_out=""
+fi
+while read -r pid _ lab; do
+    [[ -n "${lab:-}" ]] || continue
+    case "${lab}" in
+        ?*".${PNAME}") ;;
+        *) continue ;;
+    esac
+    note_job "${lab}" "${pid}"
+done <<<"${list_out}"
+if [[ ${#running[@]} -eq 0 ]]; then
+    say "no cauldron job for '${ENV_NAME}' is loaded in gui/${uid}"
+else
+    for j in "${running[@]}"; do
+        say "LOADED     ${j%%|*} (pid ${j##*|}) in gui/${uid}"
+    done
+    if [[ ${REPLACE_RUNNING} -eq 0 ]]; then
+        # Absolute (from the script's own resolved location), so it works from any cwd.
+        proceed="$(printf '%q' "${SELF}"; printf ' %q' --replace-running "${ORIG_ARGS[@]+"${ORIG_ARGS[@]}"}")"
+        {
+            printf 'install: REFUSED: a cauldron job for environment %s is already loaded (listed above).\n' "'${ENV_NAME}'"
+            printf 'install: Installing over it boots it out and bootstraps it again, which RESTARTS that\n'
+            printf 'install: running holder. Nothing was built, written or loaded.\n'
+            printf 'install: To replace it and restart it, run exactly:\n'
+            printf 'install:   %s\n' "${proceed}"
+        } >&2
+        exit 2
+    fi
+    for j in "${running[@]}"; do
+        say "WILL RESTART ${j%%|*} (pid ${j##*|}): step 5 boots it out and bootstraps it again (--replace-running)"
+    done
+fi
+
+# ── 2c. a clean checkout, when this run builds threads ──────────────────────
+# Decided here, before any build, so a tree `cauldron build threads` would
+# refuse is refused BEFORE the release build and before step 4 writes
+# env.toml (REL-4.S5 D3). Which case applies is re-stated in step 4b.
+THREADS_PENDING="${ROOT}/data/.install-threads-pending.${ENV_NAME}"
+threads_pinned() { grep -qE '^[[:space:]]*\[services\.threads\][[:space:]]*$' "${MANIFEST}"; }
+# THE MARKER PROVES OWNERSHIP (REL-4.S5d). It is written `state=creating`
+# before `env create`, and rewritten `state=created` with the FINGERPRINT of
+# the env.toml that create wrote — `<device>:<inode>:<birth time>` and the
+# sha256 of its bytes — the moment create returns. A re-run resumes step 4b
+# ONLY when the env.toml there now has exactly that fingerprint: the same
+# file, never re-created, never edited. Anything else beside an env.toml
+# (no fingerprint, because the run stopped inside `env create` or before the
+# fingerprint was written; a different file; changed bytes; an empty marker
+# from an older install) proves nothing, so install REFUSES and leaves that
+# env.toml exactly as it is. A marker with NO env.toml (the create never
+# finished, or `cauldron env remove` deleted the environment around it) is
+# stale: it is removed and the run proceeds as a first install.
+manifest_fingerprint() {
+    local id h
+    id="$(stat -f '%d:%i:%B' "${MANIFEST}")" || return 1
+    h="$(shasum -a 256 <"${MANIFEST}")" || return 1
+    printf '%s sha256=%s' "${id}" "${h%% *}"
+}
+# write_marker <state> [<fingerprint>]: replaced whole (a temp file in the
+# same dir, then mv), so a stop mid-write leaves the old marker or the new
+# one, never half of one. The temp file is named for this run's pid and is
+# removed by the EXIT trap if the run stops between the write and the mv
+# (REL-4.S5e M3); a SIGKILL there leaves it for the next run's sweep below.
+write_marker() {
+    printf 'install: $ write %q (state=%s)\n' "${THREADS_PENDING}" "$1"
+    [[ ${DRY} -eq 0 ]] || return 0
+    MARKER_TMP="${THREADS_PENDING}.tmp.$$"
+    printf '# scripts/install: env %s is being created by an install; do not edit.\nstate=%s\ntoml=%s\n' \
+        "${ENV_NAME}" "$1" "${2:-}" >"${MARKER_TMP}"
+    mv -f "${MARKER_TMP}" "${THREADS_PENDING}"
+    MARKER_TMP=""
+}
+# A temp marker `<marker>.tmp.<pid>` whose install is no longer running was
+# left by a SIGKILL between the write and the mv (no trap runs on SIGKILL).
+# It is never read; it is removed. One whose pid is alive is another
+# install's write in flight, and is left alone.
+for tmp_marker in "${THREADS_PENDING}".tmp.*; do
+    [[ -f "${tmp_marker}" ]] || continue
+    tmp_pid="${tmp_marker##*.tmp.}"
+    case "${tmp_pid}" in ''|*[!0-9]*) continue ;; esac
+    if kill -0 "${tmp_pid}" 2>/dev/null; then continue; fi
+    say "removing ${tmp_marker}: a temp marker an install (pid ${tmp_pid}, no longer running) left when it was killed mid-write"
+    run rm -f "${tmp_marker}"
+done
+# marker_field <key>: the value of `<key>=` in the marker, or nothing.
+marker_field() {
+    local k v
+    [[ -f "${THREADS_PENDING}" && -r "${THREADS_PENDING}" ]] || return 0
+    while IFS='=' read -r k v; do
+        if [[ "${k}" == "$1" ]]; then printf '%s' "${v}"; return 0; fi
+    done <"${THREADS_PENDING}"
+}
+# marker_owns_manifest: true only if the marker says `state=created` and the
+# env.toml there now has the fingerprint it recorded.
+marker_owns_manifest() {
+    local want now
+    [[ "$(marker_field state)" == created ]] || return 1
+    want="$(marker_field toml)"
+    [[ -n "${want}" ]] || return 1
+    now="$(manifest_fingerprint)" || return 1
+    [[ "${now}" == "${want}" ]]
+}
+NEED_THREADS=0
+RESUME_THREADS=0
+if [[ -e "${THREADS_PENDING}" && ! -e "${MANIFEST}" ]]; then
+    say "stale marker ${THREADS_PENDING}: there is no ${MANIFEST}, so the install that wrote it never finished \`env create\` (or the environment was removed since); removing it"
+    run rm -f "${THREADS_PENDING}"
+fi
+if [[ ! -e "${MANIFEST}" ]]; then
+    NEED_THREADS=1
+elif [[ -e "${THREADS_PENDING}" ]] && ! threads_pinned; then
+    if ! marker_owns_manifest; then
+        # REL-4.S5e M2: written to the person who ran install, who is most
+        # often the one who stopped the earlier run (a Ctrl-C right after
+        # `env create`), and who may never have heard of a marker. It says
+        # what happened in his terms and gives him the exact commands.
+        rerun="$(printf '%q' "${SELF}"; printf ' %q' "${ORIG_ARGS[@]+"${ORIG_ARGS[@]}"}")"
+        if [[ -n "${FROM}" ]]; then recover_bin="${FROM%/}/cauldron"; else recover_bin="${CARGO_TARGET_DIR:-${REPO}/target}/release/cauldron"; fi
+        {
+            case "$(marker_field state)" in
+                creating)
+                    printf 'install: REFUSED: environment %s is half made. An earlier run of this install was\n' "'${ENV_NAME}'"
+                    printf 'install: stopped (Ctrl-C, a closed terminal, a crash) while it was creating it, before\n'
+                    printf 'install: it could record that this env.toml is the one it created:\n' ;;
+                created)
+                    printf 'install: REFUSED: an earlier run of this install created environment %s and stopped\n' "'${ENV_NAME}'"
+                    printf 'install: before it set up threads, and its env.toml has been replaced or edited since\n'
+                    printf 'install: (it is not the file, or not the bytes, that install recorded):\n' ;;
+                *)
+                    printf 'install: REFUSED: an earlier install left a marker for environment %s that does not\n' "'${ENV_NAME}'"
+                    printf 'install: record which env.toml it created, so this env.toml cannot be proven to be its own:\n' ;;
+            esac
+            printf 'install:   %s\n' "${MANIFEST}"
+            printf 'install: Install only edits an env.toml it can prove it created, so it has not built or\n'
+            printf 'install: pinned threads into this one. Nothing was built, written or loaded; env.toml is\n'
+            printf 'install: exactly as it was. The marker is %s.\n' "${THREADS_PENDING}"
+            if [[ "${ENV_NAME}" != prod ]]; then
+                printf 'install: To START %s OVER and get a full install with threads (this DELETES\n' "'${ENV_NAME}'"
+                printf 'install: %s and everything in it), run:\n' "${ROOT}/data/${ENV_NAME}"
+                printf 'install:   %s\n' "$(printf '%q' "${recover_bin}"; printf ' %q' --env "${ENV_NAME}" env remove "${ENV_NAME}" --yes)"
+                printf 'install:   %s\n' "${rerun}"
+                printf 'install: Or, to KEEP this env.toml exactly as it is, run:\n'
+            else
+                printf 'install: To finish the install and KEEP this env.toml exactly as it is, run:\n'
+            fi
+            printf 'install:   rm -f %q\n' "${THREADS_PENDING}"
+            printf 'install:   %s\n' "${rerun}"
+            printf 'install: That installs everything else, never edits env.toml, and prints the two commands\n'
+            printf 'install: that add threads to it. If you made or edited this env.toml yourself, that is the\n'
+            printf 'install: way to take.\n'
+        } >&2
+        exit 2
+    fi
+    NEED_THREADS=1
+    RESUME_THREADS=1
+fi
+# A service name no declaration uses: `versions` of it is refused with the
+# two places declarations are looked for, `<root>/services/<name>.toml` and
+# then `<workspace the binary was built from>/services/<name>.toml`.
+WS_PROBE="install-workspace-probe"
+# check_tree <dir> <why>: refuse (rc 2) unless <dir> is a git checkout with
+# no modified, staged or untracked file.
+check_tree() {
+    local dir="$1" why="$2" tree_state
+    if ! tree_state="$(git -C "${dir}" status --porcelain --untracked-files=normal)"; then
+        die "\`git status\` failed in ${dir} (its error is above), so whether ${why} is clean cannot be told. \`cauldron build threads\` names the version by the commit and refuses a tree it cannot read. Install from a git clone. Nothing was built, written or loaded."
+    fi
+    if [[ -n "${tree_state}" ]]; then
+        {
+            printf 'install: REFUSED: %s has uncommitted or untracked files:\n' "${dir}"
+            printf '%s\n' "${tree_state}" | sed 's/^/install:     /'
+            printf 'install: (%s is %s.)\n' "${dir}" "${why}"
+            printf 'install: Step 4b runs `cauldron build threads`, which names the version it installs by\n'
+            printf 'install: the commit, and so refuses a tree whose files the commit does not contain.\n'
+            printf 'install: Commit, remove or move these files (or add them to .git/info/exclude), then\n'
+            printf 'install: run the install again. Nothing was built, written or loaded.\n'
+        } >&2
+        exit 2
+    fi
+    say "clean: ${dir} at $(git -C "${dir}" rev-parse --short=12 HEAD 2>/dev/null || echo '?') with no uncommitted or untracked files"
+}
+step "2c. is this checkout clean? (only needed when step 4b builds threads)"
+if [[ ${NEED_THREADS} -eq 0 ]]; then
+    say "step 4b will not build threads for '${ENV_NAME}', so the tree is not checked"
+else
+    command -v git >/dev/null 2>&1 \
+        || die "git is not on PATH. Step 4b runs \`cauldron build threads\`, which names the version by the commit of the tree it compiles and needs git to read it."
+    check_tree "${REPO}" "this checkout (scripts/install's own)"
+    # Which tree step 4b compiles (REL-4.S5c M1).
+    BUILD_TREE="${REPO}"
+    BUILD_WHY="the tree \`cauldron build threads\` compiles: step 3 builds cauldron from it"
+    if [[ -n "${FROM}" ]]; then
+        probe_bin="${FROM%/}/cauldron"
+        [[ -x "${probe_bin}" ]] \
+            || die "--from ${FROM} holds no executable cauldron, so which checkout \`cauldron build threads\` compiles (the one that binary was built from) cannot be asked. Nothing was built, written or loaded."
+        printf 'install: $'; printf ' %q' "${probe_bin}" --env "${ENV_NAME}" versions "${WS_PROBE}"; printf '   (read-only; expected to be refused)\n'
+        probe_out="$("${probe_bin}" --env "${ENV_NAME}" versions "${WS_PROBE}" 2>&1 || true)"
+        looked="$(grep -E "^  /.*/services/${WS_PROBE}\.toml\$" <<<"${probe_out}" || true)"
+        first="$(sed -n 1p <<<"${looked}")"
+        second="$(sed -n 2p <<<"${looked}")"
+        if [[ "$(grep -c . <<<"${looked}" || true)" != 2 || "${first}" != "  ${ROOT}/services/${WS_PROBE}.toml" ]]; then
+            die "${probe_bin} did not say which workspace it was built from (asked: \`versions ${WS_PROBE}\`, expecting its two declaration paths, ${ROOT}/services first). It printed: ${probe_out}. \`cauldron build threads\` compiles that workspace, so whether it is clean cannot be checked. Nothing was built, written or loaded."
+        fi
+        BUILD_TREE="${second#  }"
+        BUILD_TREE="${BUILD_TREE%/services/${WS_PROBE}.toml}"
+        BUILD_WHY="the tree \`cauldron build threads\` compiles: the workspace ${probe_bin} was built from"
+    fi
+    OVERRIDE_DECL="${ROOT}/services/threads.toml"
+    if [[ -f "${OVERRIDE_DECL}" ]]; then
+        # The three TOML spellings of build.workspace (REL-4.S5d, inspect
+        # REL-4.S5c-I M-b): `workspace = "…"` under `[build]`, a top-level
+        # inline table `build = { …, workspace = "…" }`, and a top-level
+        # dotted key `build.workspace = "…"`. A basic string only: any other
+        # value there (single-quoted, empty, multi-line) prints `?` and is
+        # refused below, never skipped.
+        ovr_ws="$(awk '
+            function val(s) { if (match(s, /^"[^"]+"/)) return substr(s, 2, RLENGTH - 2); return "?" }
+            /^[[:space:]]*\[/ { sec=$0; gsub(/[[:space:]]/,"",sec); next }
+            sec=="[build]" && /^[[:space:]]*workspace[[:space:]]*=/ {
+                s=$0; sub(/^[^=]*=[[:space:]]*/,"",s); print val(s); exit }
+            sec=="" && /^[[:space:]]*build[[:space:]]*\.[[:space:]]*workspace[[:space:]]*=/ {
+                s=$0; sub(/^[^=]*=[[:space:]]*/,"",s); print val(s); exit }
+            sec=="" && /^[[:space:]]*build[[:space:]]*=[[:space:]]*\{/ {
+                s=$0; if (match(s, /[{,][[:space:]]*workspace[[:space:]]*=[[:space:]]*/)) { print val(substr(s, RSTART + RLENGTH)); exit } }
+            ' "${OVERRIDE_DECL}")"
+        if [[ "${ovr_ws}" == "?" ]]; then
+            die "${OVERRIDE_DECL} names a [build] workspace in a form this script cannot read (it reads \`workspace = \"…\"\` under [build], \`build = { workspace = \"…\" }\` and \`build.workspace = \"…\"\`, basic strings only), so whether the tree \`cauldron build threads\` compiles is clean cannot be checked. Nothing was built, written or loaded."
+        fi
+        if [[ -n "${ovr_ws}" ]]; then
+            case "${ovr_ws}" in
+                "~") ovr_ws="${HOME}" ;;
+                "~/"*) ovr_ws="${HOME}/${ovr_ws#"~/"}" ;;
+            esac
+            BUILD_TREE="${ovr_ws}"
+            BUILD_WHY="the tree \`cauldron build threads\` compiles: [build] workspace in ${OVERRIDE_DECL}"
+        fi
+    fi
+    repo_real="$(cd -P "${REPO}" && pwd -P)"
+    build_real="$(cd -P "${BUILD_TREE}" 2>/dev/null && pwd -P)" \
+        || die "${BUILD_TREE} (${BUILD_WHY}) is not a directory, so \`cauldron build threads\` cannot compile it. Nothing was built, written or loaded."
+    if [[ "${build_real}" != "${repo_real}" ]]; then
+        say "step 4b compiles another tree: ${BUILD_TREE} (${BUILD_WHY})"
+        check_tree "${BUILD_TREE}" "${BUILD_WHY}"
+    fi
+fi
+
+# ── 3. binaries ─────────────────────────────────────────────────────────────
+step "3. binaries"
+if [[ -n "${FROM}" ]]; then
+    BIN_DIR="$(cd -P "${FROM}" 2>/dev/null && pwd -P)" || die "--from ${FROM} is not a directory."
+    say "using prebuilt binaries in ${BIN_DIR} (no build)"
+else
+    command -v cargo >/dev/null 2>&1 || die "cargo is not on PATH. Install Rust (https://rustup.rs) and re-run, or pass --from <dir> with prebuilt binaries."
+    BIN_DIR="${CARGO_TARGET_DIR:-${REPO}/target}/release"
+    say "building in ${REPO}; binaries land in ${BIN_DIR}"
+    (cd "${REPO}" && run cargo build --release -p cauldron --bin cauldron -p tui --bin tui)
+fi
+CAULDRON="${BIN_DIR}/cauldron"
+if [[ ${DRY} -eq 0 ]]; then
+    [[ -x "${CAULDRON}" ]] || die "no executable cauldron at ${CAULDRON}."
+    [[ -x "${BIN_DIR}/tui" ]] || say "WARNING: no tui at ${BIN_DIR}/tui; the holder installs without a face."
+fi
+
+# ── 4. environment ──────────────────────────────────────────────────────────
+step "4. environment '${ENV_NAME}'"
+CREATED_ENV=0
+if [[ -e "${MANIFEST}" ]]; then
+    say "kept the existing ${MANIFEST} (its pins, supervision policy and label_prefix are untouched)"
+else
+    # The marker that lets a re-run finish step 4b if this run stops before
+    # the pin, written BEFORE env.toml exists (REL-4.S5c M2), so no stop
+    # leaves an env.toml without it. Removed by 4b once threads is pinned.
+    say "marking ${THREADS_PENDING} until threads is pinned (a re-run finishes step 4b)"
+    run mkdir -p "${ROOT}/data"
+    write_marker creating
+    say "no ${MANIFEST}: creating the environment with auto_restart = true"
+    create_rc=0
+    run "${CAULDRON}" --env "${ENV_NAME}" env create "${ENV_NAME}" --auto-restart || create_rc=$?
+    if [[ ${create_rc} -ne 0 ]]; then
+        # A failed create wrote no env.toml of its own; one that exists now
+        # is another writer's, which install never edits. So: no marker.
+        rm -f "${THREADS_PENDING}"
+        printf 'install: `cauldron env create %s` failed (rc %s, output above); its marker was removed.\n' "${ENV_NAME}" "${create_rc}" >&2
+        exit "${create_rc}"
+    fi
+    CREATED_ENV=1
+    # Bind the marker to the env.toml THIS create wrote (REL-4.S5d).
+    if [[ ${DRY} -eq 0 ]]; then
+        fp="$(manifest_fingerprint)" \
+            || die "\`cauldron env create ${ENV_NAME}\` succeeded but ${MANIFEST} cannot be read to record it in ${THREADS_PENDING}; threads was not built or pinned."
+        write_marker created "${fp}"
+    else
+        write_marker created "<fingerprint of ${MANIFEST}>"
+    fi
+fi
+
+# ── 4b. the threads daemon ──────────────────────────────────────────────────
+step "4b. threads daemon for '${ENV_NAME}'"
+THREADS_SIGNER="${REPO}/services/threads/scripts/build-threads.sh"
+THREADS_PINNED=""
+if [[ ${CREATED_ENV} -eq 0 && ${RESUME_THREADS} -eq 0 ]]; then
+    if threads_pinned; then
+        say "threads is already pinned in ${MANIFEST}; left exactly as it is (its version and address are not changed)"
+        if [[ -e "${THREADS_PENDING}" ]]; then
+            say "an earlier install pinned it and stopped before clearing its marker; clearing it"
+            run rm -f "${THREADS_PENDING}"
+        fi
+    else
+        say "threads is NOT pinned in the existing ${MANIFEST}, and install never edits an existing env.toml."
+        say "  to host it:  ${CAULDRON} --env ${ENV_NAME} build threads --env-copy"
+        say "         then: ${CAULDRON} --env ${ENV_NAME} pin threads <the label that build printed> --addr auto"
+    fi
+else
+    if [[ ${RESUME_THREADS} -eq 1 ]]; then
+        say "an earlier install created ${MANIFEST} and stopped before pinning threads"
+        say "  (${THREADS_PENDING} is still there); finishing step 4b now"
+    fi
+    [[ -f "${THREADS_SIGNER}" ]] || die "no threads signer at ${THREADS_SIGNER}; this checkout is incomplete."
+    if [[ ${DRY} -eq 0 ]]; then
+        command -v cargo >/dev/null 2>&1 || die "cargo is not on PATH, and \`cauldron build threads\` compiles it from ${REPO}. Install Rust (https://rustup.rs) and re-run."
+    fi
+    if [[ -n "${HARNESS_SIGN_SCRIPT:-}" ]]; then
+        say "signer     HARNESS_SIGN_SCRIPT=${HARNESS_SIGN_SCRIPT} (identity)"
+    else
+        say "signer     ad-hoc (set HARNESS_SIGN_SCRIPT to sign with an identity)"
+    fi
+    if [[ "${ENV_NAME}" == prod ]]; then
+        say "ports      prod keeps the declared default (127.0.0.1:3653) ONLY if it is free and no"
+        say "           other environment claims it; otherwise it gets its own port (pin --addr auto)"
+    else
+        say "ports      '${ENV_NAME}' is not prod: it gets its OWN free loopback port, never one of"
+        say "           prod's (3653, 3651, 3753, 9010) (pin --addr auto)"
+    fi
+    # Build with `--env-copy` (REL-4.S8c): cauldron installs the build as a
+    # NEW version `<label>+<env>` (or `+<env>.N`), a directory it CLAIMS with
+    # create_dir, so the shared `<label>` — which another environment (prod)
+    # may be pinned to — is never renamed over, and neither is any copy that
+    # existed before. `--json` puts the record on stdout (cargo's output stays
+    # on stderr); it names that label.
+    printf 'install: $'; printf ' %q' "${CAULDRON}" --env "${ENV_NAME}" build threads --json --env-copy; printf '\n'
+    BUILDS="${ROOT}/data/shared/builds/threads"
+    if [[ ${DRY} -eq 1 ]]; then
+        ENV_LABEL="<label>+${ENV_NAME}"
+    else
+        build_json="$("${CAULDRON}" --env "${ENV_NAME}" build threads --json --env-copy)"
+        labels="$(grep -oE '"label"[[:space:]]*:[[:space:]]*"[^"]*"' <<<"${build_json}" | sed -E 's/.*"([^"]*)"$/\1/')"
+        [[ -n "${labels}" && "$(wc -l <<<"${labels}" | tr -d ' ')" == 1 ]] \
+            || die "\`cauldron build threads --json --env-copy\` did not name exactly one version label; it printed: ${build_json}"
+        # Only ever a per-environment label from here on: a shared `<label>`
+        # coming back would mean the build wrote where prod may be pinned.
+        [[ "${labels}" =~ ^[^+/]+\+${ENV_NAME}(\.[0-9]+)?$ ]] \
+            || die "\`cauldron build threads --env-copy\` returned version '${labels}', which is not a copy of its own for '${ENV_NAME}' (<label>+${ENV_NAME}); nothing was signed or pinned."
+        ENV_LABEL="${labels}"
+        CLAIMED="${BUILDS}/${ENV_LABEL}"
+        say "built threads as this environment's own version ${ENV_LABEL}"
+    fi
+    VDIR="${BUILDS}/${ENV_LABEL}"
+    # Sign it in THIS environment's own data dir, then rename the signed image
+    # over the unsigned one inside the new version directory (nothing pins it
+    # yet). On any failure the EXIT trap (on_exit) removes the staging dir AND the
+    # unpinned, unsigned version directory this run claimed — never anything
+    # else: CLAIMED is set only to a label checked to end `+<env>[.N]`.
+    STAGE="${ROOT}/data/${ENV_NAME}/.threads-image.$$"
+    say "this environment's own copy: version ${ENV_LABEL}, signed in ${STAGE}"
+    run mkdir "${STAGE}"
+    run cp -p "${VDIR}/threads" "${STAGE}/threads"
+    if [[ ${DRY} -eq 0 ]]; then
+        [[ "$(grep -cF "\"label\": \"${ENV_LABEL}\"" "${VDIR}/build.json")" == 1 ]] \
+            || die "the build record ${VDIR}/build.json does not name ${ENV_LABEL}; nothing was pinned."
+    fi
+    printf 'install: $'; printf ' %q' bash "${THREADS_SIGNER}" --sign-only "${STAGE}/threads"; printf '\n'
+    if [[ ${DRY} -eq 0 ]]; then
+        if ! bash "${THREADS_SIGNER}" --sign-only "${STAGE}/threads"; then
+            die "signing this environment's copy ${STAGE}/threads failed (output above); threads was built but NOT pinned, its unsigned copy ${VDIR} is removed, and no other build was touched."
+        fi
+    fi
+    run mv "${STAGE}/threads" "${VDIR}/threads"
+    run rm -rf "${STAGE}"
+    STAGE=""
+    # Signed and in place: from here a failure leaves it, never removes it.
+    CLAIMED=""
+    # The pin is the one edit of env.toml: re-check, right before it, that
+    # the file is still the one this install (or the one it resumes) created.
+    if [[ ${DRY} -eq 0 ]] && ! marker_owns_manifest; then
+        die "${MANIFEST} is no longer the env.toml this install created (its marker ${THREADS_PENDING} records another identity or other bytes, or is gone), so threads is NOT pinned into it. The signed version ${VDIR} is left in place; to host it there: ${CAULDRON} --env ${ENV_NAME} pin threads ${ENV_LABEL} --addr auto"
+    fi
+    run "${CAULDRON}" --env "${ENV_NAME}" pin threads "${ENV_LABEL}" --addr auto
+    THREADS_PINNED="${ENV_LABEL}"
+    run rm -f "${THREADS_PENDING}"
+fi
+
+# ── 5. supervisor ───────────────────────────────────────────────────────────
+step "5. supervisor (launchd job)"
+# `cauldron install` has the same running-job guard (REL-4.S3c), so the
+# operator's --replace-running is passed through to it.
+INSTALL_ARGS=(install)
+if [[ ${REPLACE_RUNNING} -eq 1 ]]; then INSTALL_ARGS+=(--replace-running); fi
+run "${CAULDRON}" --env "${ENV_NAME}" "${INSTALL_ARGS[@]}"
+
+if [[ ${DRY} -eq 1 ]]; then
+    if [[ -x "${CAULDRON}" ]]; then
+        step "what ${CAULDRON} resolves for this HOME (read-only: env show)"
+        "${CAULDRON}" --env "${ENV_NAME}" env show || say "(env show exited $?)"
+    else
+        say "(no built cauldron at ${CAULDRON} yet, so the label and paths it would resolve are not shown)"
+    fi
+    say "DRY RUN complete: nothing was built, written or loaded."
+    FINISHED=1
+    exit 0
+fi
+
+step "done"
+say "installed cauldron for $(id -un): ${ROOT}/bin/$( [[ "${ENV_NAME}" == prod ]] && echo cauldron || echo "cauldron-${ENV_NAME}" )"
+say "status:   ${ROOT}/bin/cauldron --env ${ENV_NAME} status"
+if [[ -n "${THREADS_PINNED}" ]]; then
+    say "services: threads pinned at ${THREADS_PINNED}; the supervisor launches it (its address: ${ROOT}/bin/cauldron --env ${ENV_NAME} status)."
+fi
+say "more:     cauldron build <service>   then   cauldron pin <service> <label>"
+# `cauldron` is only a bare command once ${ROOT}/bin is on PATH; install
+# never edits a shell startup file, so it says exactly how (REL-4.S5 D1).
+if [[ "$(command -v cauldron 2>/dev/null || true)" != "${ROOT}/bin/cauldron" ]]; then
+    say ""
+    say "PATH:     \`cauldron\` is not on your PATH yet (it is in ${ROOT}/bin). For zsh, run"
+    say "            echo 'export PATH=\"${ROOT}/bin:\$PATH\"' >> ~/.zshrc"
+    say "          and open a new terminal (for bash, use ~/.bash_profile)."
+fi
+FINISHED=1

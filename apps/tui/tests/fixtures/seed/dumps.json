@@ -1,0 +1,37 @@
+{
+  "_note": "FAKE DATA: the prod environment's dumps already sent, and the one bucket being written (design 0138 §7). A dump here is numbered before any sent from a face; the draft here is used only while the cauldron has no bucket of its own on disk. `at` of -2h is that long before the face opens.",
+  "dumps": [
+    {
+      "seq": 11,
+      "at": "-2h",
+      "env": "prod",
+      "text": "> [Q-3]\nLet's call them dumps, not batches.\n\nAnd no log on Overview.",
+      "tags": [
+        "[Q-3]"
+      ],
+      "targets": [
+        "X-1"
+      ],
+      "notes": [
+        {
+          "n": 1,
+          "start": 0,
+          "end": 52,
+          "anchors": [
+            "Q-3"
+          ],
+          "chips": []
+        },
+        {
+          "n": 2,
+          "start": 54,
+          "end": 77,
+          "anchors": [],
+          "chips": []
+        }
+      ],
+      "from_cluster": "X-1"
+    }
+  ],
+  "draft": ""
+}

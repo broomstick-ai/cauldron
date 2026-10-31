@@ -1,0 +1,195 @@
+#!/bin/bash
+# ════════════════════════════════════════════════════════════════════════════
+#  prove-hosts-all — R5.S3: the REAL ui-server and soup-backup declarations,
+#  under a THROWAWAY cauldron daemon (`--env r5s3-proof` in a scratch root).
+# ════════════════════════════════════════════════════════════════════════════
+#
+# Nothing here reads or writes ~/.cauldron, signals a live daemon, or touches
+# launchd. The live ui-server holds 127.0.0.1:9009/9010 (compiled-in ports), so
+# the REAL ui-server image is built and its seal checked, and its launch is
+# shown REFUSED pre-fork (the guard that keeps a second instance off the live
+# one); the start/kill/restart of the ui-server FORM runs on a stub bundle
+# with the same declaration shape on free ports. soup-backup runs FOR REAL,
+# against a throwaway config, BACKUP_ROOT and soup database.
+#
+# usage: CAULDRON=<binary> scripts/prove-hosts-all
+
+set -euo pipefail
+# REL-4.S7i: bash 3.2 (this machine's /bin/bash) exits 0 from a `set -u`
+# abort under `set -e` when an EXIT trap is set. Every deliberate `exit`
+# marks itself; the EXIT trap ends in __abort_guard, which turns an UNMARKED
+# exit whose status reads 0 into 2.
+__deliberate=
+exit() { local s=$?; __deliberate=1; builtin exit "${1:-$s}"; }
+__abort_guard() {
+  if [ -z "$__deliberate" ] && [ "${__st:-0}" -eq 0 ]; then
+    echo "$(basename "$0"): ABORTED (set -e/-u abort; not a pass)" >&2; builtin exit 2
+  fi
+}
+trap 'rc=$?; printf "\nABORTED at line %s: %s (exit %s) -- %d passed, %d failed before the abort\n" "$LINENO" "$BASH_COMMAND" "$rc" "$PASS" "$FAIL" >&2' ERR
+
+REPO="$(cd "$(dirname "$0")/.." && pwd)"
+CAULDRON="${CAULDRON:?set CAULDRON to the cauldron binary under test}"
+ROOT="${PROOF_ROOT:-/tmp/cauldron-r5s3-proof-$$}"
+ENVN=r5s3-proof
+PASS=0; FAIL=0
+ok()  { PASS=$((PASS+1)); printf '  PASS %s\n' "$1"; }
+bad() { FAIL=$((FAIL+1)); printf '  FAIL %s\n' "$1"; }
+chk() { if [[ "$2" == *"$3"* ]]; then ok "$1"; else bad "$1 -- wanted \"$3\" in: ${2:0:600}"; fi; }
+sec() { printf '\n== %s\n' "$1"; }
+cau() { CAULDRON_HOME="$ROOT" "$CAULDRON" --env "$ENVN" "$@" 2>&1; }
+waitfor() { # $1 seconds, $2 description, rest: command that must succeed
+  local n=$(( $1 * 5 )) what="$2"; shift 2
+  for ((i=0;i<n;i++)); do if "$@" >/dev/null 2>&1; then return 0; fi; sleep 0.2; done
+  echo "  (timed out after ${n}x0.2s waiting for: $what)"; return 1
+}
+
+sec "0. sentinel"
+bad "SENTINEL deliberate failure"; [[ $FAIL -eq 1 ]] && { FAIL=0; PASS=$((PASS+1)); echo "  PASS sentinel counted and retracted"; }
+case "$ROOT" in ~/.cauldron*) echo "FATAL: proof root is the live root"; exit 1;; esac
+mkdir -p "$ROOT/services" "$ROOT/data/$ENVN"
+DAEMON_PID=""
+cleanup() {
+  [[ -n "$DAEMON_PID" ]] && kill -9 "$DAEMON_PID" 2>/dev/null || true
+  for p in $(cat "$ROOT"/kill-pids 2>/dev/null || true); do kill -9 "$p" 2>/dev/null || true; done
+  [[ -n "${KEEP:-}" ]] || rm -rf "$ROOT"
+}
+trap '__st=$?; cleanup; __abort_guard' EXIT
+cat > "$ROOT/data/$ENVN/env.toml" <<EOF
+[supervisor]
+auto_restart = true
+auto_rollback = false
+poll_secs = 1
+down_after = 1
+max_start_failures = 3
+backoff_base_secs = 2
+backoff_max_secs = 30
+stable_after_secs = 600
+EOF
+# Root overrides = the SHIPPED declarations minus [migration] (what the cut-over commit does).
+strip_migration() { awk '/^\[migration\]/{skip=1} /^\[/{if($0!="[migration]")skip=0} !skip' "$1"; }
+strip_migration "$REPO/services/soup-backup.toml" > "$ROOT/services/soup-backup.toml"
+strip_migration "$REPO/services/ui-server.toml"   > "$ROOT/services/ui-server.toml"
+# R5.S3b: the two operands are DIFFERENT files — the SHIPPED declaration and the
+# override written above (it used to diff strip_migration's output against
+# itself, x == x). The diff from shipped to override must ONLY remove lines,
+# and what it removes must be one block starting at the `[migration]` header
+# (the last section of both shipped files).
+for f in soup-backup ui-server; do
+  D=$(diff "$REPO/services/$f.toml" "$ROOT/services/$f.toml" || true)
+  chk "premise: the shipped $f carries [migration]" "$(cat "$REPO/services/$f.toml")" "[migration]"
+  if grep -q '^\[migration\]' "$ROOT/services/$f.toml"; then bad "the $f override still carries [migration]"; else ok "the $f override carries no [migration]"; fi
+  if grep -q '^>' <<<"$D"; then bad "the $f override ADDS lines to the shipped file: $D"; else ok "the $f override only removes lines from the shipped file"; fi
+  chk "what the $f override removes STARTS at the [migration] header" "$(grep -m1 '^<' <<<"$D" || true)" "< [migration]"
+  chk "the $f override removes ONE contiguous block" "hunks=$(grep -c '^[0-9]' <<<"$D" || true)" "hunks=1"
+done
+
+sec "1. ui-server: the REAL AUI.app installs whole, seal intact, labelled by the commit off its bytes"
+OUT=$(cau build ui-server); echo "$OUT" | tail -2
+chk "build names the commit the image states" "$OUT" "the image itself states \`commit="
+LABEL=$(cau versions ui-server --json | python3 -c 'import json,sys; print(json.load(sys.stdin)[0]["label"])')
+INST="$ROOT/data/shared/builds/ui-server/$LABEL/AUI.app"
+if codesign --verify --strict "$INST" 2>/dev/null; then ok "installed copy verifies: $INST"; else bad "installed copy does not verify"; fi
+chk "installed copy keeps the designated requirement" "$(codesign -d -r- "$INST" 2>&1)" 'identifier "com.harness.ui-server"'
+cau pin ui-server "$LABEL" >/dev/null
+OUT=$(cau start ui-server || true)
+chk "launching it beside the LIVE ui-server is refused BEFORE any fork (9009 is held)" "$OUT" "something is ALREADY listening on 127.0.0.1:9009"
+# unpin again so the daemon does not try (presence is the pin)
+chk "it is pinned before the unpin" "$(cat "$ROOT/data/$ENVN/env.toml")" "[services.ui-server]"
+python3 - "$ROOT/data/$ENVN/env.toml" <<'EOF'
+import sys,re
+p=sys.argv[1]; s=open(p).read()
+out=[]; skip=False
+for line in s.splitlines(keepends=True):
+    if re.match(r'^\[', line): skip = line.strip() == '[services.ui-server]'
+    if not skip: out.append(line)
+open(p,'w').write(''.join(out))
+EOF
+
+sec "2. soup-backup: the REAL tool as a cauldron job, on a throwaway config/root/database"
+DATA="$ROOT/data/$ENVN/soup-backup"; mkdir -p "$DATA" "$ROOT/soups"
+sqlite3 "$ROOT/soups/a.soup" 'PRAGMA journal_mode=wal; create table t(x); insert into t values (1);' >/dev/null
+OUT=$(cau build soup-backup); LB=$(cau versions soup-backup --json | python3 -c 'import json,sys; print(json.load(sys.stdin)[0]["label"])')
+cau pin soup-backup "$LB" >/dev/null
+CAULDRON_HOME="$ROOT" CAULDRON_ENV="$ENVN" "$CAULDRON" daemon > "$ROOT/daemon.log" 2>&1 &
+DAEMON_PID=$!; echo "  throwaway holder pid $DAEMON_PID"
+chk "the holder pid is the cauldron daemon itself" "$(ps -o command= -p "$DAEMON_PID")" "cauldron daemon"
+waitfor 20 "blocked" bash -c "CAULDRON_HOME='$ROOT' '$CAULDRON' --env $ENVN status soup-backup | grep -q job:blocked"
+chk "with no env config the job is BLOCKED (never runs on the ~/.soup-backups defaults)" "$(cau status soup-backup)" "job:blocked"
+if grep -q '"service":"soup-backup".*"act":"run"' "$ROOT/data/$ENVN/supervisions.jsonl" 2>/dev/null; then bad "a run was recorded while blocked"; else ok "no run record while blocked"; fi
+cat > "$DATA/config" <<EOF
+INTERVAL_MINUTES=15
+POLL_SECONDS=300
+BACKUP_ROOT="$ROOT/backups"
+KEEP_RECENT=5
+TARGET_GLOBS=("$ROOT/soups/*.soup")
+# proof only: make each pass long enough to be killed mid-flight
+[ "\${1:-}" = run ] && sleep 12
+EOF
+waitfor 60 "a pass" bash -c "grep -q '\"act\":\"run\"' '$ROOT/data/$ENVN/supervisions.jsonl'"
+PASSPID=$(python3 -c "import json;print(json.load(open('$ROOT/data/$ENVN/jobs.json'))['soup-backup']['pid'])")
+echo "$PASSPID" >> "$ROOT/kill-pids"
+chk "the running pass is the holder's child" "$(ps -o ppid= -p "$PASSPID" | tr -d ' ')" "$DAEMON_PID"
+chk "and runs the INSTALLED copy" "$(ps -o command= -p "$PASSPID")" "builds/soup-backup/$LB/soup-backup run"
+kill -9 "$PASSPID"
+waitfor 60 "the retry" bash -c "grep -q '\"why\":\"retry\"' '$ROOT/data/$ENVN/supervisions.jsonl'"
+SUP=$(cau supervisions --service soup-backup)
+echo "$SUP" | tail -4
+chk "the kill is recorded" "$SUP" "killed by signal 9"
+chk "and the pass is re-run on retry (restart = always)" "$(grep '"why":"retry"' "$ROOT/data/$ENVN/supervisions.jsonl")" '"act":"run"'
+waitfor 40 "a completed pass" bash -c "CAULDRON_HOME='$ROOT' '$CAULDRON' --env $ENVN status soup-backup | grep -q job:ok"
+ST=$(cau status soup-backup); echo "$ST" | grep -E 'soup-backup' | head -3
+chk "status: job:ok with soup-backup's own health check OK" "$ST" "health OK"
+GZ=$(find "$ROOT/backups" -name 'a-*.soup.gz' | head -1)
+if [[ -n "$GZ" ]] && gunzip -c "$GZ" > "$ROOT/restored.soup" && [[ "$(sqlite3 "$ROOT/restored.soup" 'select x from t')" == 1 ]]; then
+  ok "the real tool backed up the throwaway database, and the backup restores to its row: $GZ"
+else bad "no restorable backup of the throwaway database under $ROOT/backups"; fi
+[[ -f "$ROOT/backups/.state/heartbeat" ]] && ok "the heartbeat landed in the THROWAWAY backup root" || bad "no heartbeat in the throwaway root"
+
+sec "3. ui-server's FORM (bundle, http probe on a second port, cwd) — stub bundle, start / kill / restart"
+P1=$(python3 -c 'import socket;s=socket.socket();s.bind(("127.0.0.1",0));print(s.getsockname()[1])')
+P2=$(python3 -c 'import socket;s=socket.socket();s.bind(("127.0.0.1",0));print(s.getsockname()[1])')
+mkdir -p "$ROOT/Stub.app/Contents/MacOS" "$ROOT/stub-cwd"
+cat > "$ROOT/Stub.app/Contents/MacOS/ui-stub" <<'EOF'
+#!/usr/bin/env python3
+import os, socket, threading
+open(os.environ["STUB_PIDS"],"a").write(f"{os.getpid()}\n")
+l=socket.socket(); l.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR,1); l.bind(("127.0.0.1",int(os.environ["P1"]))); l.listen(16)
+threading.Thread(target=lambda: [l.accept()[0].close() for _ in iter(int,1)], daemon=True).start()
+h=socket.socket(); h.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR,1); h.bind(("127.0.0.1",int(os.environ["P2"]))); h.listen(16)
+while True:
+    c,_=h.accept(); c.recv(1024); c.sendall(b"HTTP/1.0 200 OK\r\n\r\nok\n"); c.close()
+EOF
+chmod +x "$ROOT/Stub.app/Contents/MacOS/ui-stub"
+sed -e 's/^name *=.*/name = "ui-stub"/' \
+    -e "s#^addr *=.*#addr = \"127.0.0.1:$P1\"#" \
+    -e "s#^health *=.*#health = \"http://127.0.0.1:$P2/health\"#" \
+    -e "s#^cwd *=.*#cwd = \"$ROOT/stub-cwd\"#" \
+    -e "s#^artifact *=.*#artifact = \"$ROOT/Stub.app\"#" \
+    -e 's#^bin *=.*#bin = "Stub.app/Contents/MacOS/ui-stub"#' \
+    -e '/^stamp_args/d' -e '/^\[permissions\]/,$d' \
+    "$ROOT/services/ui-server.toml" > "$ROOT/services/ui-stub.toml"
+printf '\n[env]\nP1 = "%s"\nP2 = "%s"\nSTUB_PIDS = "%s"\n' "$P1" "$P2" "$ROOT/kill-pids" >> "$ROOT/services/ui-stub.toml"
+cau build ui-stub >/dev/null
+cau pin ui-stub "$(cau versions ui-stub --json | python3 -c 'import json,sys; print(json.load(sys.stdin)[0]["label"])')" >/dev/null
+waitfor 30 "ui-stub live" bash -c "CAULDRON_HOME='$ROOT' '$CAULDRON' --env $ENVN status ui-stub | grep -q live:unverified"
+S1=$(lsof -tnP -iTCP:"$P1" -sTCP:LISTEN | head -1)
+chk "ui-stub is live because its health answered 200" "$(cau status ui-stub)" "answered 200"
+chk "its parent is the throwaway holder" "$(ps -o ppid= -p "$S1" | tr -d ' ')" "$DAEMON_PID"
+chk "it runs in its declared cwd" "$(lsof -a -p "$S1" -d cwd -Fn | grep '^n' | cut -c2-)" "$ROOT/stub-cwd"
+kill -9 "$S1"
+waitfor 30 "ui-stub relaunched" bash -c "p=\$(lsof -tnP -iTCP:$P1 -sTCP:LISTEN | head -1); [ -n \"\$p\" ] && [ \"\$p\" != $S1 ]"
+S2=$(lsof -tnP -iTCP:"$P1" -sTCP:LISTEN | head -1)
+[[ "$S1" != "$S2" ]] && ok "pid changed $S1 -> $S2" || bad "pid did not change"
+chk "the relaunch is in supervisions (launch, why=down)" "$(grep '"service":"ui-stub"' "$ROOT/data/$ENVN/supervisions.jsonl" | grep '"act":"launch"' | tail -1)" '"why":"down"'
+
+sec "4. stop the env"
+kill -TERM "$DAEMON_PID"; sleep 1; kill -9 "$DAEMON_PID" 2>/dev/null || true
+for p in $(cat "$ROOT/kill-pids"); do kill -9 "$p" 2>/dev/null || true; done
+DAEMON_PID=""
+sleep 1
+[[ -z "$(lsof -tnP -iTCP:"$P1" -sTCP:LISTEN)" ]] && ok "nothing left listening on the stub's port" || bad "stub still listening"
+
+printf '\nRESULT: %d passed, %d failed\n' "$PASS" "$FAIL"
+[[ $FAIL -eq 0 ]]
+exit  # REL-4.S7i: a fall-through end is a deliberate exit (see __abort_guard)

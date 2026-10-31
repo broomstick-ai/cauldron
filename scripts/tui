@@ -1,0 +1,80 @@
+#!/bin/bash
+# ════════════════════════════════════════════════════════════════════════════
+#  tui — the operator's terminal face, launched THROUGH cauldron (R7.S1c)
+# ════════════════════════════════════════════════════════════════════════════
+#
+# `/opt/homebrew/bin/tui` is retargeted here at ship (R7.S1d), so `$ tui` keeps
+# working. This shim does ONE thing: find a `cauldron` router and exec
+# `cauldron [--env <name>] tui <args>`. The router finds the face BESIDE ITSELF,
+# exports the environment (`CAULDRON_ENV`, `CAULDRON_HOME`) and its own path
+# (`CAULDRON_BIN`, which the down page's restart button runs), and the face
+# resolves its threads port from that environment. So the shim decides NOTHING
+# about ports — the harness shim it replaces resolved an endpoint of its own,
+# which was a second place that could disagree about which daemon this is.
+#
+# Which router, in order:
+#   1. --dev            build THIS checkout (`cargo build -p cauldron -p tui`)
+#                       and run `<target>/debug/cauldron` — for working on it.
+#   2. $CAULDRON_ROUTER an explicit router binary.
+#   3. <root>/bin/cauldron, root = $CAULDRON_HOME or ~/.cauldron — the install.
+# A missing router is an error that says how to get one; it never falls back to
+# whatever `tui` or `cauldron` PATH finds, because on this machine that has
+# been the HARNESS face.
+#
+# Flags it owns (before anything else):
+#   --env <name> | --env=<name>   the environment; passed to the router
+#   --dev                         build and run this checkout
+#   --print-router                print the router it would exec, and exit
+# Everything else passes through to the face (`tui --help` lists its own).
+set -euo pipefail
+
+die() { printf 'tui: %s\n' "$1" >&2; shift; for l in "$@"; do printf '  %s\n' "$l" >&2; done; exit 1; }
+
+# The script's own location, through any symlink (/opt/homebrew/bin/tui).
+self="${BASH_SOURCE[0]}"
+while [ -L "$self" ]; do
+  target="$(readlink "$self")"
+  case "$target" in
+    /*) self="$target" ;;
+    *)  self="$(cd "$(dirname "$self")" && pwd)/$target" ;;
+  esac
+done
+REPO_ROOT="$(cd "$(dirname "$self")/.." && pwd)"
+
+env_args=()
+dev=0
+print_router=0
+passthrough=()
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --env)
+      [ $# -ge 2 ] || die "--env needs an environment name after it."
+      env_args=(--env "$2"); shift 2 ;;
+    --env=*)        env_args=(--env "${1#--env=}"); shift ;;
+    --dev)          dev=1; shift ;;
+    --print-router) print_router=1; shift ;;
+    *)              passthrough+=("$1"); shift ;;
+  esac
+done
+
+if [ "$dev" = 1 ]; then
+  ( cd "$REPO_ROOT" && cargo build -q -p cauldron -p tui ) \
+    || die "the dev build of $REPO_ROOT failed."
+  router="$(cd "$REPO_ROOT" && cargo metadata --format-version 1 --no-deps \
+    | /usr/bin/python3 -c 'import json,sys; print(json.load(sys.stdin)["target_directory"])')/debug/cauldron"
+elif [ -n "${CAULDRON_ROUTER:-}" ]; then
+  router="$CAULDRON_ROUTER"
+else
+  router="${CAULDRON_HOME:-$HOME/.cauldron}/bin/cauldron"
+fi
+
+[ -x "$router" ] || die "no cauldron router at $router." \
+  "Install one (cauldron's build path puts it in ~/.cauldron/bin), set CAULDRON_ROUTER," \
+  "or run this checkout with: tui --dev"
+
+if [ "$print_router" = 1 ]; then
+  printf '%s\n' "$router"
+  exit 0
+fi
+
+exec "$router" ${env_args[@]+"${env_args[@]}"} tui ${passthrough[@]+"${passthrough[@]}"}

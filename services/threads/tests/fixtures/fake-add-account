@@ -1,0 +1,90 @@
+#!/usr/bin/env bash
+# A stand-in for `scripts/add-account --login`, reproducing the EXACT protocol
+# measured against claude v2.1.220 on a pipe during the pty spike:
+#
+#   * a banner line, then the URL on a line beginning `If the browser didn't
+#     open, visit: `, then a prompt with NO TRAILING NEWLINE;
+#   * it then BLOCKS reading one line from stdin — the `read` runs AFTER the
+#     prompt is printed, so input pre-fed into the pipe is not what satisfies
+#     it, exactly as the real binary behaves;
+#   * exit 0 on a code containing '#', non-zero otherwise, standing in for the
+#     token exchange succeeding or being refused.
+#
+# THE MODE COMES FROM THE LABEL, not from the environment. Integration tests
+# share one process and `std::env::set_var` is global to it, so an env-selected
+# mode races between concurrent tests — which it did, on the first run of this
+# fixture. The label is per-test and cannot race.
+#
+#   refuse-*  exit before printing a URL, as a credential guard does
+#   hang-*    print the URL and never exit, even on EOF — the measured
+#             behaviour that makes the parent own every timeout
+#   *         the normal two-round-trip flow
+#
+# R12.5b — LANDING A CREDENTIAL. When `$CLAUDE_ACCOUNTS_HOME/fake-keychain/`
+# exists (a test made it; see tests/support/fake_login.rs), a successful
+# exchange writes what `claude auth login` would: the slot's keychain item (a
+# FILE named by the service the slot dir derives, `tok|<who>|<nonce>`), its
+# `.claude.json`, and the login hint add-account writes. <who> is --email, or
+# `<label>@x.test`, except:
+#   cross-*      the consent page was answered as ANOTHER account: b@x.test
+#   failafter-*  lands as cross-* does, then exits 1 (a non-zero exit AFTER
+#                the credential was written)
+#   elsewhere-*  exits 0 and lands NOTHING in the slot that is checked
+set -uo pipefail
+LABEL=""
+EMAIL=""
+SKIP_NEXT=0
+for a in "$@"; do
+  if [ "$SKIP_NEXT" -eq 1 ]; then SKIP_NEXT=0; EMAIL="$a"; continue; fi
+  case "$a" in
+    --email) SKIP_NEXT=1 ;;
+    --login|--no-browser|--force|--allow-same-account) ;;
+    *) [ -z "$LABEL" ] && LABEL="$a" ;;
+  esac
+done
+
+land() {  # land <who>
+  local kc="${CLAUDE_ACCOUNTS_HOME:-}/fake-keychain" slot svc
+  [ -n "${CLAUDE_ACCOUNTS_HOME:-}" ] && [ -d "$kc" ] || return 0
+  slot="$CLAUDE_ACCOUNTS_HOME/accounts/$LABEL"
+  mkdir -p "$slot"
+  svc="Claude Code-credentials-$(printf %s "$slot" | shasum -a 256 | cut -c1-8)"
+  printf 'tok|%s|%s-%s' "$1" "$$" "$RANDOM" > "$kc/$svc"
+  printf '{"oauthAccount":{"emailAddress":"%s"}}' "$1" > "$slot/.claude.json"
+  printf '%s\n' "${EMAIL:-$1}" > "$slot/login-hint"
+}
+
+case "$LABEL" in
+  refuse-*)
+    echo "add-account: CLAUDE_CODE_OAUTH_TOKEN is set. Unset it and re-run." >&2
+    exit 2
+    ;;
+esac
+
+echo "add-account: logging in ${LABEL}"
+echo "Opening browser to sign in…"
+echo "If the browser didn't open, visit: https://claude.com/cai/oauth/authorize?code=true&client_id=9d1c250a&state=SPIKE${LABEL}"
+printf 'Paste code here if prompted > '
+
+case "$LABEL" in
+  hang-*) sleep 600; exit 0 ;;
+esac
+
+IFS= read -r CODE || CODE=""
+echo
+case "$CODE" in
+  *"#"*)
+    case "$LABEL" in
+      cross-*) land "b@x.test" ;;
+      failafter-*) land "b@x.test"; echo "add-account: adopt failed" >&2; exit 1 ;;
+      elsewhere-*) ;;
+      *) land "${EMAIL:-${LABEL}@x.test}" ;;
+    esac
+    echo "add-account: exchanged the code; ${LABEL} is a distinct account"
+    exit 0
+    ;;
+  *)
+    echo "Login failed: Request failed with status code 400"
+    exit 1
+    ;;
+esac

@@ -1,0 +1,250 @@
+#!/usr/bin/env python3
+"""drift-check — has the harness code an extracted crate was lifted from moved on?
+
+For every crate in this workspace -- wherever its kinded directory puts it
+(apps/, libs/, services/, testkit/, cli/) -- whose Cargo.toml carries a
+[package.metadata.provenance] block (source_repo, source_paths, source_sha,
+extracted), this diffs the recorded source paths between the recorded sha and
+the source repo's HEAD, and also reports uncommitted changes to those paths in
+the source working tree.
+
+    scripts/drift-check            summary per crate
+    scripts/drift-check --diff     also print the full upstream diff
+
+Exit 0: no drift anywhere. Exit 1: at least one crate has drifted.
+Exit 2: a provenance record is malformed, its sha/repo cannot be read, or one
+of its source_paths names nothing at the recorded sha -- refused loudly rather
+than reported as "no drift".
+Exit 3: drift-check itself CRASHED (an uncaught exception). Never 1: a crash
+is not evidence of drift, and a caller must be able to tell the two apart.
+
+Runs under any python3 >= 3.6, including macOS's /usr/bin/python3 (3.9, no
+`tomllib`). With `tomllib` (3.11+) it parses manifests with it; without, it
+uses the small reader below, which understands exactly the shape a provenance
+table takes (string and array-of-string values) and refuses anything else.
+
+The date key is `extracted` or `moved` (the H179 rounds "moved" crates in).
+A source_paths entry is a git pathspec, so magic such as
+":(exclude)apps/tui/render" is allowed; every non-exclude entry must match at
+least one file at source_sha, or the record is refused -- a pathspec that
+matches nothing would otherwise diff to empty and read as "no drift".
+
+Path dependencies on live harness crates (e.g. tui-render) track harness
+automatically and carry no provenance block, so they are not checked here.
+"""
+
+import json
+import os
+import pathlib
+import subprocess
+import sys
+import traceback
+
+try:
+    import tomllib  # 3.11+
+except ImportError:  # macOS /usr/bin/python3 is 3.9
+    tomllib = None
+
+ROOT = pathlib.Path(__file__).resolve().parent.parent
+REQUIRED = ("source_repo", "source_paths", "source_sha")
+DATE_KEYS = ("extracted", "moved")
+TABLE = "[package.metadata.provenance]"
+# git's well-known empty tree: diffing it against a commit lists that commit's
+# files, filtered by any pathspec (globs and magic included).
+EMPTY_TREE = "4b825dc642cb6eb9a060e54bf8d69288fbee4904"
+EXIT_CRASH = 3
+
+
+class Unparseable(Exception):
+    """The fallback reader met TOML it does not handle. Refused, never guessed."""
+
+
+def _scan_value(text, i, path):
+    """Parse one value (basic string or array of them) at text[i]; return (value, next_i)."""
+    while i < len(text) and text[i] in " \t\r\n":
+        i += 1
+    if i >= len(text):
+        raise Unparseable(f"{path}: value expected at end of table")
+    c = text[i]
+    if c == '"':
+        if text.startswith('"""', i):
+            raise Unparseable(f"{path}: multi-line strings are not supported")
+        j = i + 1
+        while j < len(text):
+            if text[j] == "\\":
+                j += 2
+                continue
+            if text[j] == '"':
+                return json.loads(text[i : j + 1]), j + 1
+            if text[j] == "\n":
+                break
+            j += 1
+        raise Unparseable(f"{path}: unterminated string")
+    if c == "[":
+        items, i = [], i + 1
+        while True:
+            while i < len(text) and (text[i] in " \t\r\n,"):
+                i += 1
+            if i < len(text) and text[i] == "#":
+                while i < len(text) and text[i] != "\n":
+                    i += 1
+                continue
+            if i >= len(text):
+                raise Unparseable(f"{path}: unterminated array")
+            if text[i] == "]":
+                return items, i + 1
+            v, i = _scan_value(text, i, path)
+            items.append(v)
+    raise Unparseable(f"{path}: unsupported value starting {text[i:i + 20]!r}")
+
+
+def provenance_fallback(text, path):
+    """The [package.metadata.provenance] table of a manifest, without tomllib."""
+    lines = text.splitlines(keepends=True)
+    start = None
+    for n, line in enumerate(lines):
+        if line.strip() == TABLE:
+            start = n + 1
+            break
+    if start is None:
+        return None
+    body = "".join(lines[start:])
+    out, i = {}, 0
+    while i < len(body):
+        while i < len(body) and body[i] in " \t\r\n":
+            i += 1
+        if i >= len(body):
+            break
+        if body[i] == "#":
+            while i < len(body) and body[i] != "\n":
+                i += 1
+            continue
+        if body[i] == "[":  # the next table header ends this one
+            break
+        eq = body.find("=", i)
+        nl = body.find("\n", i)
+        if eq == -1 or (nl != -1 and nl < eq):
+            raise Unparseable(f"{path}: expected `key = value` at {body[i:i + 30]!r}")
+        key = body[i:eq].strip()
+        if not key.replace("_", "").replace("-", "").isalnum():
+            raise Unparseable(f"{path}: unsupported key {key!r}")
+        out[key], i = _scan_value(body, eq + 1, path)
+        rest = body.find("\n", i)
+        tail = body[i : len(body) if rest == -1 else rest].strip()
+        if tail and not tail.startswith("#"):
+            raise Unparseable(f"{path}: trailing text after {key}: {tail!r}")
+    return out
+
+
+def provenance(manifest):
+    text = manifest.read_text()
+    if tomllib is not None:
+        meta = tomllib.loads(text)
+        return meta.get("package", {}).get("metadata", {}).get("provenance")
+    return provenance_fallback(text, manifest)
+# Anything that is a build artifact or not ours; everything else is searched, so
+# a crate moving between kinded directories never silently drops out of here.
+SKIP = {".git", "target", ".target", "scripts", "data"}
+
+
+def manifests():
+    """Every crate manifest in the workspace, the workspace root's excluded."""
+    found = []
+    for m in ROOT.rglob("Cargo.toml"):
+        rel = m.relative_to(ROOT)
+        if len(rel.parts) == 1 or any(part in SKIP for part in rel.parts):
+            continue
+        found.append(m)
+    return sorted(found)
+
+
+def git(repo, *args):
+    r = subprocess.run(["git", "-C", repo, *args], capture_output=True, text=True)
+    if r.returncode != 0:
+        raise RuntimeError(f"git {' '.join(args)} in {repo}: {r.stderr.strip()}")
+    return r.stdout
+
+
+def main():
+    show_diff = "--diff" in sys.argv[1:]
+    drifted = False
+    errors = False
+    found = 0
+    for manifest in manifests():
+        crate = manifest.parent.name
+        try:
+            prov = provenance(manifest)
+        except Unparseable as e:
+            print(f"{crate}: UNPARSEABLE provenance: {e}")
+            errors = True
+            continue
+        if prov is None:
+            continue
+        found += 1
+        missing = [k for k in REQUIRED if k not in prov]
+        if not any(k in prov for k in DATE_KEYS):
+            missing.append(" or ".join(DATE_KEYS))
+        if missing:
+            print(f"{crate}: MALFORMED provenance, missing {', '.join(missing)}")
+            errors = True
+            continue
+        repo, sha, paths = prov["source_repo"], prov["source_sha"], prov["source_paths"]
+        # `~/...` is the portable spelling of a source repo under the user's
+        # home (REL-4.S4 scrubbed the literal home out of every manifest).
+        # `git -C` does no tilde expansion, so without this every such crate
+        # was "cannot change to '~/code/harness'", rc 2 (REL-4.S4-I F5).
+        repo = os.path.expanduser(repo)
+        try:
+            head = git(repo, "rev-parse", "HEAD").strip()
+            git(repo, "cat-file", "-e", f"{sha}^{{commit}}")
+            empty = [
+                p for p in paths
+                if not p.startswith(":(exclude)") and not p.startswith(":!")
+                and not git(repo, "diff", "--name-only", EMPTY_TREE, sha, "--", p).strip()
+            ]
+            if empty:
+                raise RuntimeError(
+                    "source_paths match no file at " + sha[:12] + ": "
+                    + ", ".join(repr(p) for p in empty)
+                )
+            committed = git(repo, "diff", "--stat", sha, head, "--", *paths).strip()
+            log = git(repo, "log", "--oneline", f"{sha}..{head}", "--", *paths).strip()
+            dirty = git(repo, "status", "--porcelain", "--", *paths).strip()
+        except RuntimeError as e:
+            print(f"{crate}: ERROR {e}")
+            errors = True
+            continue
+        date_key = next(k for k in DATE_KEYS if k in prov)
+        print(f"{crate}: {date_key} {prov[date_key]} at {sha[:12]}; source HEAD {head[:12]}")
+        if not committed and not dirty:
+            print("  no drift")
+            continue
+        drifted = True
+        if committed:
+            n = len(log.splitlines())
+            print(f"  DRIFTED upstream: {n} commit(s) touch the source since extraction")
+            for line in log.splitlines():
+                print(f"    {line}")
+            for line in committed.splitlines():
+                print(f"    {line}")
+        if dirty:
+            print("  UNCOMMITTED changes in the source working tree:")
+            for line in dirty.splitlines():
+                print(f"    {line}")
+        if show_diff:
+            print(git(repo, "diff", sha, "--", *paths))
+    if found == 0:
+        print("no extracted crates carry a provenance block")
+    sys.exit(2 if errors else 1 if drifted else 0)
+
+
+if __name__ == "__main__":
+    try:
+        main()
+    except SystemExit:
+        raise
+    except BaseException:
+        traceback.print_exc()
+        print(f"drift-check CRASHED (exit {EXIT_CRASH}); this is not a drift verdict",
+              file=sys.stderr)
+        sys.exit(EXIT_CRASH)

@@ -1,0 +1,50 @@
+[package]
+name = "tts"
+version.workspace = true
+edition.workspace = true
+description = "The text-to-speech cache and synthesis daemon: a websocket API over a SQLite store, hosted by cauldron as a registering service."
+
+# Rewritten from substrate `lib/tts` (trunk 5a17b66) file by file, not copied.
+# Two dependency facts changed on the way over, and both are deliberate:
+#
+#   * `env` is the one path dependency. It is what makes tts a cauldron service
+#     rather than a binary cauldron hosts: `ServiceEnv` hands it its data root,
+#     and `ServiceEnv::register` takes the warnings attestation that only a
+#     `ServesWarnings` impl can mint. The substrate crate depended on no other
+#     crate so it could be lifted out; it has now been lifted out.
+#   * `reqwest` is gone. Its only caller was a test probing `/health`, which a
+#     plain HTTP/1.0 request over a `TcpStream` does as well.
+
+[lib]
+path = "src/lib.rs"
+
+[[bin]]
+name = "tts"
+path = "src/main.rs"
+
+[dependencies]
+env = { path = "../../libs/env" }
+anyhow = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+toml = { workspace = true }
+toml_edit = "0.22"
+chrono = "0.4"
+rusqlite = { version = "0.31", features = ["bundled"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+thiserror = "1"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time", "process", "signal", "net", "fs"] }
+futures = "0.3"
+axum = { version = "0.7", features = ["ws"] }
+uuid = { version = "1", features = ["v4"] }
+async-trait = "0.1"
+# THE identity function: sha256 of the normalized text plus the module
+# fingerprint, byte-identical to the face's own cache key.
+sha2 = "0.10"
+# killpg(2) on a synthesis process group, and kill(pid, 0) liveness.
+libc = "0.2"
+
+[dev-dependencies]
+tempfile = "3"
+tokio-tungstenite = "0.21"

@@ -1,0 +1,310 @@
+{
+ "death_keeps_every_row": {
+  "dead_reason": "the shape task panicked",
+  "exported": true,
+  "exports": 2,
+  "held": {
+   "kim": {
+    "as_of": "2026-09-25T12:00:01.000000+00:00",
+    "at": "2026-09-25T12:00:01.000000+00:00",
+    "cells": {},
+    "dead_reason": "the shape task panicked",
+    "row": {
+     "share": 0.75
+    }
+   },
+   "sam": {
+    "as_of": "2026-09-25T12:00:00.000000+00:00",
+    "at": "2026-09-25T12:00:00.000000+00:00",
+    "cells": {
+     "share": {
+      "complete": true,
+      "covers_since": null,
+      "folded_at": "2026-09-25T12:00:00.000000+00:00",
+      "kind": "known",
+      "reason": null,
+      "since_init": false
+     }
+    },
+    "dead_reason": "the shape task panicked",
+    "row": {
+     "share": 0.25
+    }
+   }
+  },
+  "init_at": "2026-09-25T11:00:00.000000+00:00",
+  "keys": [
+   "kim",
+   "sam"
+  ],
+  "last_frame_at": "2026-09-25T12:10:00.000000+00:00",
+  "lost": 2,
+  "moved": [
+   true,
+   true,
+   true
+  ],
+  "name": "accounts",
+  "reinit": 1,
+  "shared": {
+   "warn_below_days": 3
+  },
+  "shared_cells": {
+   "warn_below_days": {
+    "complete": true,
+    "covers_since": null,
+    "folded_at": null,
+    "kind": "dead",
+    "reason": "the shape task panicked",
+    "since_init": false
+   }
+  },
+  "state": "dead"
+ },
+ "hydrate_replace_and_leave": {
+  "dead_reason": null,
+  "exported": true,
+  "exports": 3,
+  "held": {
+   "sam": {
+    "as_of": "2026-09-25T12:03:00.000000+00:00",
+    "at": "2026-09-25T12:03:00.000000+00:00",
+    "cells": {
+     "share": {
+      "complete": true,
+      "covers_since": null,
+      "folded_at": "2026-09-25T12:03:00.000000+00:00",
+      "kind": "known",
+      "reason": null,
+      "since_init": false
+     }
+    },
+    "dead_reason": null,
+    "row": {
+     "share": 0.5
+    }
+   }
+  },
+  "init_at": "2026-09-25T11:59:59.000000+00:00",
+  "keys": [
+   "sam"
+  ],
+  "last_frame_at": "2026-09-25T12:06:00.000000+00:00",
+  "lost": 0,
+  "moved": [
+   true,
+   true,
+   true,
+   true,
+   true,
+   false
+  ],
+  "name": "accounts",
+  "reinit": 0,
+  "shared": {},
+  "shared_cells": {},
+  "state": "known"
+ },
+ "membership_promises_and_subscribes": {
+  "dead_reason": null,
+  "exported": true,
+  "exports": 2,
+  "held": {
+   "a": {
+    "as_of": "2026-09-25T12:03:00.000000+00:00",
+    "at": "2026-09-25T12:03:00.000000+00:00",
+    "cells": {},
+    "dead_reason": null,
+    "row": {
+     "account": "default"
+    }
+   }
+  },
+  "init_at": "2026-09-25T11:59:59.000000+00:00",
+  "keys": [
+   "a"
+  ],
+  "last_frame_at": "2026-09-25T12:03:00.000000+00:00",
+  "lost": 0,
+  "moved": [
+   true,
+   true,
+   false,
+   true,
+   true
+  ],
+  "name": "threads",
+  "reinit": 0,
+  "shared": {},
+  "shared_cells": {},
+  "state": "known"
+ },
+ "threads_status_level_versus_log": {
+  "dead_reason": null,
+  "exported": true,
+  "exports": 1,
+  "held": {
+   "t1": {
+    "as_of": "2026-09-25T12:00:00.000000+00:00",
+    "at": "2026-09-25T12:01:00.000000+00:00",
+    "cells": {
+     "status": {
+      "complete": true,
+      "covers_since": null,
+      "folded_at": "2026-09-25T12:00:00.000000+00:00",
+      "kind": "known",
+      "reason": null,
+      "since_init": false
+     },
+     "status_transitions": {
+      "complete": true,
+      "covers_since": null,
+      "folded_at": "2026-09-25T12:00:00.000000+00:00",
+      "kind": "known",
+      "reason": null,
+      "since_init": false
+     }
+    },
+    "dead_reason": null,
+    "row": {
+     "status": [
+      {
+       "at": "2026-09-25T12:01:00Z",
+       "from": "running",
+       "to": "idle"
+      }
+     ],
+     "status_transitions": [
+      {
+       "at": "2026-09-25T11:00:00+00:00",
+       "to": "running"
+      }
+     ]
+    }
+   }
+  },
+  "init_at": "2026-09-25T11:59:59.000000+00:00",
+  "keys": [
+   "t1"
+  ],
+  "last_frame_at": "2026-09-25T12:01:00.000000+00:00",
+  "lost": 0,
+  "moved": [
+   true,
+   true
+  ],
+  "name": "threads",
+  "reinit": 0,
+  "shared": {},
+  "shared_cells": {},
+  "state": "known"
+ },
+ "transition_stamped_from_the_frame": {
+  "dead_reason": null,
+  "exported": true,
+  "exports": 1,
+  "held": {
+   "sam": {
+    "as_of": "2026-09-25T12:00:00.000000+00:00",
+    "at": "2026-09-25T12:02:00.000000+00:00",
+    "cells": {
+     "moves": {
+      "complete": true,
+      "covers_since": null,
+      "folded_at": "2026-09-25T12:00:00.000000+00:00",
+      "kind": "known",
+      "reason": null,
+      "since_init": false
+     }
+    },
+    "dead_reason": null,
+    "row": {
+     "moves": [
+      {
+       "at": "2026-09-25T11:00:00+00:00",
+       "from": "idle",
+       "to": "busy"
+      },
+      {
+       "at": "2026-09-25T12:01:00Z",
+       "from": "busy",
+       "to": "idle"
+      },
+      {
+       "at": "2026-09-25T09:00:00+00:00",
+       "to": "busy"
+      }
+     ]
+    }
+   }
+  },
+  "init_at": "2026-09-25T11:59:59.000000+00:00",
+  "keys": [
+   "sam"
+  ],
+  "last_frame_at": "2026-09-25T12:03:00.000000+00:00",
+  "lost": 0,
+  "moved": [
+   true,
+   true,
+   true,
+   false
+  ],
+  "name": "accounts",
+  "reinit": 0,
+  "shared": {},
+  "shared_cells": {},
+  "state": "known"
+ },
+ "unexported_row_and_unknown_cell_word": {
+  "dead_reason": null,
+  "exported": true,
+  "exports": 1,
+  "held": {
+   "sam": {
+    "as_of": "2026-09-25T12:02:00.000000+00:00",
+    "at": "2026-09-25T12:02:00.000000+00:00",
+    "cells": {
+     "share": {
+      "complete": true,
+      "covers_since": null,
+      "folded_at": null,
+      "kind": "not_hydrated",
+      "reason": "unrecognised cell state 'estimated'",
+      "since_init": false
+     }
+    },
+    "dead_reason": null,
+    "row": {
+     "share": 0.25
+    }
+   },
+   "stranger": {
+    "as_of": null,
+    "at": "2026-09-25T12:01:00.000000+00:00",
+    "cells": {},
+    "dead_reason": null,
+    "row": {
+     "share": 0.1
+    }
+   }
+  },
+  "init_at": "2026-09-25T11:59:59.000000+00:00",
+  "keys": [
+   "sam",
+   "stranger"
+  ],
+  "last_frame_at": "2026-09-25T12:03:00.000000+00:00",
+  "lost": 0,
+  "moved": [
+   true,
+   true,
+   true
+  ],
+  "name": "accounts",
+  "reinit": 0,
+  "shared": {},
+  "shared_cells": {},
+  "state": "known"
+ }
+}

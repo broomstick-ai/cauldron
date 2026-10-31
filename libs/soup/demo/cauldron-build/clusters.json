@@ -1,0 +1,981 @@
+{
+ "_note": "The curated cauldron-build environment: cauldron's own development, scrubbed. Owned by the soup crate (libs/soup), installed into the environment's own seed by `cauldron env create cauldron-build`.",
+ "clusters": [
+  {
+   "id": "X-1",
+   "name": "The face",
+   "description": "The terminal interface: the Cauldron, Threads and Status tabs, and how it reads everything through the daemon's shapes.",
+   "regions": [
+    "R-1"
+   ],
+   "directives": [
+    {
+     "id": "DIR-1",
+     "text": "Faces display only what the producer reports and keep no copies of their own.",
+     "cite": "build#7",
+     "region": "R-1"
+    },
+    {
+     "id": "DIR-2",
+     "text": "Never restart a running face without asking. Install the new build, report it, and let the reload wait.",
+     "cite": "build#8"
+    }
+   ],
+   "constraints": [
+    {
+     "id": "CON-1",
+     "text": "Under 16 ms a frame at p99, and an empty wake costs nothing.",
+     "cite": "build#7"
+    }
+   ],
+   "objectives": [
+    {
+     "serial": 1,
+     "title": "Every tab reads through the mirror, with no side path",
+     "serves": "DIR-1"
+    }
+   ],
+   "milestones": [
+    {
+     "serial": 1,
+     "handle": "Status words come only from the daemon",
+     "objective": 1,
+     "tasks": [
+      1,
+      2
+     ],
+     "since": "2026-10-24",
+     "from": "build#14",
+     "region": "R-1"
+    },
+    {
+     "serial": 2,
+     "handle": "No busy loop when nothing is new",
+     "objective": 1,
+     "tasks": [
+      3,
+      4
+     ],
+     "depends_on": [
+      "M-1"
+     ],
+     "since": "2026-10-27"
+    }
+   ],
+   "tasks": [
+    {
+     "serial": 1,
+     "title": "Subscribe status for every listed thread",
+     "state": "done",
+     "report": "Status is subscribed for every listed thread; 'absent' is gone.",
+     "since": "2026-10-24"
+    },
+    {
+     "serial": 2,
+     "title": "Render the daemon's status string verbatim",
+     "state": "done",
+     "depends_on": [
+      1
+     ],
+     "since": "2026-10-25"
+    },
+    {
+     "serial": 3,
+     "title": "Read the mirror clone-free on every wake",
+     "state": "done",
+     "since": "2026-10-27",
+     "report": "An empty wake measured well under its 2 ms budget."
+    },
+    {
+     "serial": 4,
+     "title": "Move layout off the render thread",
+     "state": "active",
+     "depends_on": [
+      3
+     ],
+     "doing": "wrapping new blocks in a worker",
+     "account": "pool-a",
+     "elapsed": "22m",
+     "since": "2026-10-30"
+    }
+   ],
+   "questions": [],
+   "human_actions": [
+    {
+     "serial": 1,
+     "ask": "Reload your face when it suits you",
+     "status": "open",
+     "filed": "2026-10-30",
+     "body": "A new face build is installed beside the running one. Nothing was restarted.\n\nReload your face when it suits you; the new build is picked up on the next launch.\n\n**Deliverable:** the face reloaded, when you chose.\n",
+     "raised_by": "T-4"
+    }
+   ],
+   "ripples": [
+    {
+     "kind": "dump",
+     "line": "2 fragments into The face",
+     "when": "-1d",
+     "state": "done",
+     "cite": "build#7"
+    },
+    {
+     "kind": "curation",
+     "line": "folded 3 incidents into the soup",
+     "when": "-20h",
+     "state": "done"
+    }
+   ],
+   "children": [
+    {
+     "id": "X-2",
+     "name": "Cauldron tab",
+     "description": "Clusters, the bucket, the surface and the first-run states of a fresh cauldron.",
+     "regions": [
+      "R-1"
+     ],
+     "directives": [
+      {
+       "id": "DIR-3",
+       "text": "One bucket per cauldron. Dump is the verb, and the face never writes the soup itself.",
+       "cite": "build#6"
+      }
+     ],
+     "constraints": [
+      {
+       "id": "CON-2",
+       "text": "No explanatory sentences on screen. An empty state is an action, not a paragraph.",
+       "cite": "build#2"
+      }
+     ],
+     "tasks": [
+      {
+       "serial": 5,
+       "title": "First-cluster state: the + as the one action",
+       "state": "ready",
+       "since": "2026-10-30"
+      },
+      {
+       "serial": 6,
+       "title": "First-environment state: create your first cauldron",
+       "state": "blocked",
+       "blocked_by": [
+        "Q-1"
+       ],
+       "depends_on": [
+        5
+       ]
+      }
+     ],
+     "questions": [
+      {
+       "serial": 1,
+       "value": 88,
+       "blocking": true,
+       "question": "What should a fresh environment's Cauldron tab show before any ripple has run?",
+       "why": "A new cauldron has no clusters, no dumps and no ripples yet. The tab still has to say what to do next, without a paragraph explaining it.",
+       "options": [
+        "Empty state. The + on Clusters is the one action, and the bucket still takes a dump.",
+        "Hide the tab. A fresh cauldron shows only Threads and Status until something exists.",
+        "Open the curated cauldron. A first run lands in the demo instead of an empty one."
+       ],
+       "recommendation": "Empty state. It keeps the tab set identical everywhere and it is honest about what is there.",
+       "gates": "T-6",
+       "cite": "build#3"
+      }
+     ],
+     "closed_questions": [
+      {
+       "serial": 8,
+       "question": "Is the bucket one per cauldron or one per cluster?",
+       "status": "complete",
+       "answer": "One per cauldron. Clusters are for discovery only.",
+       "resolved_by": "DIR-3",
+       "date": "2026-10-26"
+      }
+     ],
+     "ripples": [
+      {
+       "kind": "dump",
+       "line": "1 fragment into Cauldron tab",
+       "when": "-2d",
+       "state": "done",
+       "cite": "build#6"
+      }
+     ]
+    },
+    {
+     "id": "X-3",
+     "name": "Ledger",
+     "description": "Status, Ledger: every dump that went in, its phases, and the ripples it ran, drawn as rails that fork and join.",
+     "regions": [
+      "R-1",
+      "R-3"
+     ],
+     "directives": [
+      {
+       "id": "DIR-4",
+       "text": "The ledger is cauldron-level, first under Status, and drawn like the Tasks rails.",
+       "cite": "build#10",
+       "region": "R-3"
+      }
+     ],
+     "objectives": [
+      {
+       "serial": 2,
+       "title": "A dump's whole execution is readable at a glance",
+       "serves": "DIR-4"
+      }
+     ],
+     "milestones": [
+      {
+       "serial": 3,
+       "handle": "Ledger v1 out early for style feedback",
+       "objective": 2,
+       "tasks": [
+        7,
+        8,
+        9
+       ],
+       "since": "2026-10-30",
+       "from": "build#10"
+      }
+     ],
+     "tasks": [
+      {
+       "serial": 7,
+       "title": "Dump bands, newest first",
+       "state": "done",
+       "since": "2026-10-29"
+      },
+      {
+       "serial": 8,
+       "title": "Draw ripples on fork-and-join rails",
+       "state": "active",
+       "depends_on": [
+        7
+       ],
+       "doing": "reusing the Tasks rail renderer",
+       "elapsed": "41m",
+       "account": "pool-b"
+      },
+      {
+       "serial": 9,
+       "title": "Thread folds as their own rows",
+       "state": "blocked",
+       "depends_on": [
+        7
+       ],
+       "blocked_by": [
+        "Q-2"
+       ]
+      }
+     ],
+     "questions": [
+      {
+       "serial": 2,
+       "value": 74,
+       "blocking": false,
+       "question": "Should a thread fold sit inline with the dumps, or in a band of its own?",
+       "why": "A fold is what a sidecar takes out of a Threads conversation and puts into the soup. It runs ripples like a dump does, but you did not dump it.",
+       "options": [
+        "Inline. A fold is a row in time order, marked as a fold.",
+        "Own band. Folds sit under the dumps, so the dump history stays yours alone."
+       ],
+       "recommendation": "Inline. The ledger is the history of what ran, and a fold ran.",
+       "gates": "T-9",
+       "cite": "build#10",
+       "artifacts": [
+        "ART-1"
+       ]
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "id": "X-4",
+   "name": "Soup",
+   "description": "The environment's knowledge graph and the door ripples write through, under a tranche lock.",
+   "regions": [
+    "R-2"
+   ],
+   "directives": [
+    {
+     "id": "DIR-5",
+     "text": "Only ripples write the soup.",
+     "cite": "build#9",
+     "region": "R-2"
+    }
+   ],
+   "constraints": [
+    {
+     "id": "CON-3",
+     "text": "No import of an existing pool into a cauldron; a dedicated cauldron populates its own indices.",
+     "cite": "build#3"
+    }
+   ],
+   "objectives": [
+    {
+     "serial": 3,
+     "title": "Ripples can write the soup under a tranche lock",
+     "serves": "DIR-5"
+    }
+   ],
+   "milestones": [
+    {
+     "serial": 4,
+     "handle": "A tranche lands atomically, or not at all",
+     "objective": 3,
+     "tasks": [
+      10,
+      11,
+      12
+     ],
+     "since": "2026-10-20",
+     "region": "R-2"
+    }
+   ],
+   "tasks": [
+    {
+     "serial": 10,
+     "title": "Record a tranche: begin, heartbeat, roll back",
+     "state": "done",
+     "report": "The tranche record merged; recovery skips tranche rows.",
+     "since": "2026-10-27"
+    },
+    {
+     "serial": 11,
+     "title": "Lock mode whole",
+     "state": "ready",
+     "depends_on": [
+      10
+     ]
+    },
+    {
+     "serial": 12,
+     "title": "The lander lands a tranche's writes",
+     "state": "ready",
+     "depends_on": [
+      11
+     ]
+    }
+   ],
+   "questions": [],
+   "closed_questions": [
+    {
+     "serial": 3,
+     "question": "Which soup carries the curated demo data?",
+     "status": "assumed",
+     "answer": "A minimal soup crate on the release branch, read through the face's own seed path; replaced by whichever soup wins. Veto it to change it.",
+     "resolved_by": "DEC-3 · built as assumed",
+     "date": "2026-10-30"
+    }
+   ],
+   "ripples": [
+    {
+     "kind": "dream",
+     "line": "merged two overlapping regions",
+     "when": "-3d",
+     "state": "done"
+    }
+   ]
+  },
+  {
+   "id": "X-5",
+   "name": "Ripples",
+   "description": "Type one, type two and type three runs: how a dump becomes queued work.",
+   "regions": [
+    "R-3"
+   ],
+   "directives": [
+    {
+     "id": "DIR-6",
+     "text": "The dump ripple is fast and never does the work; it turns a dump into queued tasks.",
+     "cite": "build#9",
+     "region": "R-3"
+    }
+   ],
+   "objectives": [
+    {
+     "serial": 4,
+     "title": "A dump becomes queued work in under a second",
+     "serves": "DIR-6"
+    }
+   ],
+   "milestones": [
+    {
+     "serial": 5,
+     "handle": "Dump in, tasks out",
+     "objective": 4,
+     "tasks": [
+      13,
+      14,
+      15
+     ],
+     "since": "2026-10-22"
+    }
+   ],
+   "tasks": [
+    {
+     "serial": 13,
+     "title": "Split a dump by message and span, never quoting it",
+     "state": "done",
+     "since": "2026-10-22"
+    },
+    {
+     "serial": 14,
+     "title": "Route each fragment to its clusters with one type-one call",
+     "state": "active",
+     "depends_on": [
+      13
+     ],
+     "doing": "batching the yes/no asks",
+     "elapsed": "1h 05m",
+     "account": "pool-a"
+    },
+    {
+     "serial": 15,
+     "title": "Write through the soup's door",
+     "state": "ready",
+     "depends_on": [
+      14
+     ],
+     "waits_on": [
+      "T-11"
+     ]
+    }
+   ],
+   "questions": [],
+   "closed_questions": [
+    {
+     "serial": 9,
+     "question": "Is the aggregate ripple called a splash or a type three?",
+     "status": "complete",
+     "answer": "Type three. Splash is retired on screen.",
+     "resolved_by": "cleanup task",
+     "date": "2026-10-30"
+    }
+   ]
+  },
+  {
+   "id": "X-6",
+   "name": "Threads daemon",
+   "description": "The daemon that runs agents, keeps their event logs and shares one account pool.",
+   "regions": [
+    "R-4"
+   ],
+   "directives": [
+    {
+     "id": "DIR-7",
+     "text": "A thread's status is active, idle or error, and nothing else.",
+     "cite": "build#14",
+     "region": "R-4"
+    }
+   ],
+   "constraints": [
+    {
+     "id": "CON-4",
+     "text": "Never query the live store from a test or a tool.",
+     "cite": "build#7"
+    }
+   ],
+   "objectives": [
+    {
+     "serial": 5,
+     "title": "Status reads the daemon's own words",
+     "serves": "DIR-7"
+    }
+   ],
+   "milestones": [
+    {
+     "serial": 6,
+     "handle": "Every change travels as the change",
+     "objective": 5,
+     "tasks": [
+      16,
+      17
+     ],
+     "since": "2026-10-26",
+     "region": "R-4"
+    }
+   ],
+   "tasks": [
+    {
+     "serial": 16,
+     "title": "Backpressure that coalesces and never drops",
+     "state": "done",
+     "since": "2026-10-26"
+    },
+    {
+     "serial": 17,
+     "title": "End the log wedge: one item per frame",
+     "state": "done",
+     "depends_on": [
+      16
+     ],
+     "report": "A row now carries ids; bodies hydrate by id, concurrently."
+    }
+   ],
+   "questions": [
+    {
+     "serial": 4,
+     "value": 70,
+     "blocking": false,
+     "question": "Should one account pool serve every cauldron on the machine?",
+     "why": "Today each environment runs its own threads daemon, so each would log in its own accounts. Builds and caches are shared; data is per environment.",
+     "options": [
+      "Shared pool. Accounts are machine resources, logged in once and switched on per cauldron.",
+      "Pool per environment. Each cauldron logs in its own accounts, as the code does today."
+     ],
+     "recommendation": "Shared pool. One login, toggled per cauldron.",
+     "cite": "build#3"
+    }
+   ],
+   "closed_questions": [
+    {
+     "serial": 5,
+     "question": "Does the face keep finished messages in memory?",
+     "status": "complete",
+     "answer": "Yes, in memory only, under a cap. A sealed message can never diverge.",
+     "resolved_by": "ruling on the mirror",
+     "date": "2026-10-29"
+    }
+   ]
+  },
+  {
+   "id": "X-7",
+   "name": "Release",
+   "description": "The first public release: the install path, the public tree and the teaser video.",
+   "regions": [
+    "R-5"
+   ],
+   "directives": [
+    {
+     "id": "DIR-8",
+     "text": "A rough first release is acceptable; finishing it is what counts.",
+     "cite": "build#11",
+     "region": "R-5"
+    },
+    {
+     "id": "DIR-9",
+     "text": "Nothing goes public without the final go on its contents.",
+     "cite": "build#11"
+    }
+   ],
+   "constraints": [
+    {
+     "id": "CON-5",
+     "text": "macOS only for the first release.",
+     "cite": "build#13"
+    }
+   ],
+   "objectives": [
+    {
+     "serial": 6,
+     "title": "A stranger installs cauldron and watches the teaser",
+     "serves": "DIR-8"
+    }
+   ],
+   "milestones": [
+    {
+     "serial": 7,
+     "handle": "Teaser recorded",
+     "objective": 6,
+     "tasks": [
+      18
+     ],
+     "since": "2026-10-30"
+    }
+   ],
+   "tasks": [
+    {
+     "serial": 18,
+     "title": "Record the teaser against the curated cauldron",
+     "state": "ready",
+     "waits_on": [
+      "T-21",
+      "T-24"
+     ]
+    }
+   ],
+   "questions": [
+    {
+     "serial": 7,
+     "value": 60,
+     "blocking": false,
+     "question": "Which environment does the teaser open in first?",
+     "why": "The video starts by naming a new environment, then switches to the curated one that shows cauldron's own build.",
+     "options": [
+      "A fresh, empty one, named on camera. Then switch to cauldron-build.",
+      "cauldron-build from the first frame."
+     ],
+     "recommendation": "A fresh, empty one, named on camera. It shows the first run honestly before the full picture.",
+     "artifacts": [
+      "ART-3"
+     ]
+    }
+   ],
+   "closed_questions": [
+    {
+     "serial": 10,
+     "question": "Is the curated environment called demo or cauldron-build?",
+     "status": "assumed",
+     "answer": "cauldron-build; demo names the data set. Veto it to change it.",
+     "resolved_by": "release map",
+     "date": "2026-10-30"
+    }
+   ],
+   "links": [
+    "Q-4"
+   ],
+   "children": [
+    {
+     "id": "X-8",
+     "name": "Install path",
+     "description": "A stranger's Mac: no personal paths, an ad-hoc signer by default, one install script.",
+     "regions": [
+      "R-5"
+     ],
+     "constraints": [
+      {
+       "id": "CON-6",
+       "text": "No hard-coded home paths and no personal signing identity anywhere in the install path.",
+       "cite": "build#13"
+      }
+     ],
+     "objectives": [
+      {
+       "serial": 7,
+       "title": "Install works on a fresh macOS user",
+       "serves": "DIR-8"
+      }
+     ],
+     "milestones": [
+      {
+       "serial": 8,
+       "handle": "Fresh-user install proof",
+       "objective": 7,
+       "tasks": [
+        19,
+        20,
+        21
+       ],
+       "since": "2026-10-30"
+      }
+     ],
+     "tasks": [
+      {
+       "serial": 19,
+       "title": "Strip home paths from the install scripts",
+       "state": "done",
+       "since": "2026-10-30"
+      },
+      {
+       "serial": 20,
+       "title": "Ad-hoc signing by default",
+       "state": "active",
+       "depends_on": [
+        19
+       ],
+       "doing": "re-signing the bundle",
+       "elapsed": "12m",
+       "account": "pool-b"
+      },
+      {
+       "serial": 21,
+       "title": "Install as a user that has never seen cauldron",
+       "state": "blocked",
+       "depends_on": [
+        20
+       ],
+       "blocked_by": [
+        "HA-2"
+       ]
+      }
+     ],
+     "human_actions": [
+      {
+       "serial": 2,
+       "ask": "Make a fresh macOS user for the install proof",
+       "status": "open",
+       "filed": "2026-10-30",
+       "body": "The install proof has to run as a user that has never seen cauldron.\n\n## Step 1 — create the user\n\nSystem Settings, Users & Groups, add a standard user.\n\n**Deliverable:** a fresh standard account exists.\n\n## Step 2 — log in once\n\nLog in as that user once, so its home folder is made, then log out.\n\n**Deliverable:** the new home folder exists.\n\n## Step 3 — give its short name\n\n```field\nname: PROOF_USER\nlabel: The new account's short name\nsecret: false\nroute: node\nnote: written back to this action's node, so the proof task can read it\n```\n",
+       "raised_by": "T-21",
+       "blocks": [
+        "T-21"
+       ],
+       "region": "R-5"
+      }
+     ]
+    },
+    {
+     "id": "X-9",
+     "name": "Public repo",
+     "description": "The public tree: scrubbed, licensed, published as one clean commit.",
+     "regions": [
+      "R-5"
+     ],
+     "directives": [
+      {
+       "id": "DIR-10",
+       "text": "The public repository is one clean commit.",
+       "cite": "build#11"
+      }
+     ],
+     "constraints": [
+      {
+       "id": "CON-7",
+       "text": "No secrets, personal names or private paths in any published file.",
+       "cite": "build#13"
+      }
+     ],
+     "objectives": [
+      {
+       "serial": 8,
+       "title": "The public tree is scrubbed and licensed",
+       "serves": "DIR-10"
+      }
+     ],
+     "milestones": [
+      {
+       "serial": 9,
+       "handle": "Scrubbed, licensed, published",
+       "objective": 8,
+       "tasks": [
+        22,
+        23,
+        24
+       ],
+       "since": "2026-10-30"
+      }
+     ],
+     "tasks": [
+      {
+       "serial": 22,
+       "title": "Scan for secrets and personal data",
+       "state": "done",
+       "report": "A scrub list, no edits."
+      },
+      {
+       "serial": 23,
+       "title": "Apply the scrub list",
+       "state": "ready",
+       "depends_on": [
+        22
+       ]
+      },
+      {
+       "serial": 24,
+       "title": "Publish the single commit",
+       "state": "blocked",
+       "depends_on": [
+        23
+       ],
+       "blocked_by": [
+        "HA-3"
+       ]
+      }
+     ],
+     "questions": [
+      {
+       "serial": 6,
+       "value": 66,
+       "blocking": false,
+       "question": "Should the first release carry the ripple runtime as code that cannot run yet?",
+       "why": "The runtime that executes a dump exists on its own branch, but nothing can land a tranche's writes yet. In the tree it would be code no one can run.",
+       "options": [
+        "Ship without it. The ledger shows curated runs in the curated cauldron, and the runtime merges next week.",
+        "Ship it dormant. The code is in the tree, switched off."
+       ],
+       "recommendation": "Ship without it. The first release stays small and every part of it runs.",
+       "cite": "build#11",
+       "artifacts": [
+        "ART-2"
+       ]
+      }
+     ],
+     "human_actions": [
+      {
+       "serial": 3,
+       "ask": "Hand over the release secrets",
+       "status": "open",
+       "filed": "2026-10-30",
+       "body": "The public release needs two secrets that only you hold. Nothing you type here is shown again or written into this ticket.\n\n## Step 1 — create a release token\n\nMake a fine-grained token that can push to the new public repository and nothing else.\n\n```open\nurl: https://github.com/settings/personal-access-tokens/new\nlabel: Open the token page\n```\n\n**Deliverable:** a token scoped to the one repository.\n\n## Step 2 — paste the release token\n\n```field\nname: RELEASE_TOKEN\nlabel: Release token\nroute: env\nnote: written to this cauldron's own secrets env file, mode 0600; never into a file a repo tracks\n```\n\n## Step 3 — paste the notarization password\n\n```field\nname: NOTARY_APP_PASSWORD\nlabel: App-specific password for notarization\nroute: env:NOTARY_PASSWORD\nnote: the same env file, under the name NOTARY_PASSWORD\n```\n\n## Step 4 — confirm the publish\n\nRead the final file list once more, then mark this done. The publish ripple waits on it.\n\n**Deliverable:** your go on the final contents.\n",
+       "raised_by": "T-24",
+       "blocks": [
+        "T-24"
+       ],
+       "cite": "build#12",
+       "region": "R-5"
+      },
+      {
+       "serial": 4,
+       "ask": "Choose the license",
+       "status": "resolved",
+       "filed": "2026-10-29",
+       "body": "Pick the license the public tree ships under.\n\n**Deliverable:** a license chosen.\n",
+       "closed": "2026-10-30"
+      }
+     ]
+    }
+   ]
+  }
+ ],
+ "corpus": {
+  "schema_version": 5,
+  "regions": [
+   {
+    "id": "R-1",
+    "handle": "THE FACE - the terminal interface: tabs, clusters, the bucket and how it reads the daemon.",
+    "boundary": "Inside: what the face draws and how it reads it. Outside: what produces the data (the soup, the ripples, the threads daemon)."
+   },
+   {
+    "id": "R-2",
+    "handle": "THE SOUP - the typed, versioned knowledge graph of one environment, and the door ripples write through.",
+    "boundary": "Inside: nodes, regions, tranches and the write door. Outside: which ripple decides a write (R-3)."
+   },
+   {
+    "id": "R-3",
+    "handle": "RIPPLES - the runs that turn a dump into work: type one, type two and type three.",
+    "boundary": "Inside: ripple kinds, the dump ripple, routing and the ledger of what ran. Outside: the soup's storage (R-2)."
+   },
+   {
+    "id": "R-4",
+    "handle": "THREADS - the daemon that runs agents and the account pool they share.",
+    "boundary": "Inside: thread status, the event log, the pool. Outside: how a face lays a thread out (R-1)."
+   },
+   {
+    "id": "R-5",
+    "handle": "RELEASE - what ships: the install path, the public tree, the teaser.",
+    "boundary": "Inside: packaging, scrubbing, licensing, the video. Outside: the features themselves."
+   }
+  ],
+  "nodes": [
+   {
+    "id": "DEC-1",
+    "type": "decision",
+    "state": "decided",
+    "handle": "Globs are clusters: the tree, the tab and every word on screen say cluster.",
+    "body": "Folded from a dump that renamed the header; every page followed.",
+    "in_region": [
+     "R-1"
+    ],
+    "cite": "build#4"
+   },
+   {
+    "id": "DEC-2",
+    "type": "decision",
+    "state": "decided",
+    "handle": "The bucket's legend says surface; the area you type in is the bucket.",
+    "body": "Folded from a dump; the old legend 'soup' is gone from the face.",
+    "in_region": [
+     "R-1"
+    ],
+    "cite": "build#6"
+   },
+   {
+    "id": "DEC-3",
+    "type": "decision",
+    "state": "decided",
+    "handle": "The demo data lives in the soup crate, never in UI code.",
+    "body": "The curated environment loads it through the same seed path as any hand-curated cauldron.",
+    "in_region": [
+     "R-2",
+     "R-5"
+    ],
+    "cite": "build#11"
+   },
+   {
+    "id": "INC-1",
+    "type": "incident",
+    "state": "closed",
+    "handle": "The log wedge: one frame carried a whole window and stalled every face.",
+    "body": "A shape stored a list of rows in one cell. Fixed by sending one item per frame and hydrating by id.",
+    "in_region": [
+     "R-4"
+    ],
+    "cite": "build#7"
+   },
+   {
+    "id": "INC-2",
+    "type": "incident",
+    "state": "closed",
+    "handle": "The idle face used most of a core doing nothing.",
+    "body": "Every wake deep-copied every open window to find zero new rows. Fixed by a clone-free read; an empty wake now costs nothing.",
+    "in_region": [
+     "R-1"
+    ],
+    "cite": "build#7"
+   },
+   {
+    "id": "INC-3",
+    "type": "incident",
+    "state": "closed",
+    "handle": "Threads read 'absent' while the daemon had them.",
+    "body": "The face only subscribed status for recent threads and treated 'never asked' as 'does not exist'. Status is now subscribed for every listed thread.",
+    "in_region": [
+     "R-4"
+    ],
+    "cite": "build#14"
+   }
+  ]
+ },
+ "messages": {
+  "build#1": {
+   "date": "2026-09-27",
+   "text": "Design note: work goes to the cauldron as a whole, not to individual agents; ripples carry it on from there."
+  },
+  "build#2": {
+   "date": "2026-10-02",
+   "text": "Design note: a person's attention is the scarcest resource in the system, so the face puts questions in front of them and keeps logs out of the way."
+  },
+  "build#3": {
+   "date": "2026-10-15",
+   "text": "Design note: each environment holds exactly one project, and separate cauldrons keep their data apart."
+  },
+  "build#4": {
+   "date": "2026-10-19",
+   "text": "Design note: a new cluster is described in plain words, and a single type-one run populates it."
+  },
+  "build#5": {
+   "date": "2026-10-25",
+   "text": "Design note: ripples set milestones and objectives; directives and constraints come from the person who owns the cauldron."
+  },
+  "build#6": {
+   "date": "2026-10-26",
+   "text": "Design note: each environment has one bucket and one soup. Input arrives as a dump, and a ripple handles it."
+  },
+  "build#7": {
+   "date": "2026-10-28",
+   "text": "Design note: faces keep no copies of data; the producer stays authoritative so the system can span several devices."
+  },
+  "build#8": {
+   "date": "2026-10-28",
+   "text": "Release rule: a new face build is installed and announced, never forced; a running face reloads only when its user decides."
+  },
+  "build#9": {
+   "date": "2026-10-29",
+   "text": "Design note: the soup is written only by ripples. The dump ripple stays fast and hands the real work off as queued tasks."
+  },
+  "build#10": {
+   "date": "2026-10-30",
+   "text": "Design note: the ledger sits at cauldron level, at the top of Status, drawn like the Tasks rails, with branches splitting off and rejoining."
+  },
+  "build#11": {
+   "date": "2026-10-30",
+   "text": "Release note: a rough first release is acceptable; finishing it matters more than polishing it."
+  },
+  "build#12": {
+   "date": "2026-10-30",
+   "text": "Design note: a secret action is a human action whose input is masked; an adapter delivers the value to a graph node, a secret store or an env file."
+  },
+  "build#13": {
+   "date": "2026-10-30",
+   "text": "Release rule: the first release targets macOS only, and the install path carries no personal details."
+  },
+  "build#14": {
+   "date": "2026-10-30",
+   "text": "Design note: every thread shows exactly one of three states (active, idle, error), and always shows one."
+  }
+ }
+}

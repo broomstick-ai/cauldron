@@ -1,0 +1,551 @@
+#!/bin/bash
+# ════════════════════════════════════════════════════════════════════════════
+#  prove-declaration-snapshot — A BUILD DIRECTORY CARRIES THE DECLARATION IT
+#  WAS BUILT UNDER, and a pinned version launches under THAT, never under the
+#  shipped file.
+# ════════════════════════════════════════════════════════════════════════════
+#
+# THE FINDING (R3.S2.0b, measured 2026-10-10 on the tts cut-over): a
+# declaration (`services/<svc>.toml`) is per ROOT and a build is per VERSION,
+# and nothing tied them together. `decl::load` read the root override then the
+# shipped file with no version check; the daemon re-read it at every launch,
+# restart and rollback; a build dir held only `build.json` and the binary. So
+# when a migrated service's new declaration landed, the PINNED OLD build
+# relaunched under the new declaration and died — and `auto_rollback` re-pinned
+# the previous good label and launched it under the SAME new declaration,
+# turning one dead daemon into two.
+#
+# WHAT IT PROVES, AND EVERY CLAIM HAS A FORCED RED.
+#
+#   1. `cauldron build` SNAPSHOTS the declaration it resolved into the build
+#      dir as `declaration.toml`, byte for byte, with its sha256 in build.json.
+#
+#   F1 THE HEADLINE. Service X built under D1 (hosted artifact form); the
+#      shipped file changes to D2 (registering cargo form); the D1 build is
+#      pinned and LAUNCHES UNDER D1 and comes up. Opposed: the D2 build,
+#      pinned, launches under D2. Forced red: with the launch reading the
+#      shipped file (the pre-step behaviour) the D1 build dies.
+#
+#   F2 ROLLBACK. D2 shipped, the D2 build fails to start (exit 1);
+#      `auto_rollback` re-pins the D1 build and it comes up under D1. Forced
+#      red the same way: it dies, and the service PARKS.
+#
+#   F3 THE HASH IS CHECKED AT LAUNCH. A changed `declaration.toml` is refused
+#      with both hashes named, never launched under. Forced red: with the
+#      check removed the tampered file launches.
+#
+#   F4 BACKFILL. The verb refuses to overwrite an existing snapshot without
+#      `--force`; `status` says `shipped (no snapshot)` for a legacy dir; a
+#      backfilled dir launches under its snapshot; deleting the file is the
+#      documented reversal. Forced reds: the refusal and the phrase removed.
+#
+#   F5 `pin` WARNS when the label's snapshot differs from the shipped file —
+#      and does NOT when they are equal; one changed byte flips it.
+#
+#   6. THE POLL'S RE-PIN launches the new pin under the new pin's snapshot.
+#
+# EVERYTHING BELOW RUNS IN A SCRATCH CAULDRON_HOME. Nothing reads or writes
+# ~/.cauldron, nothing signals a live daemon, nothing touches a launchd job.
+# What spawns or dials, with its address: the fake hosted daemon on
+# 127.0.0.1:$PORT (a free port this script asks the kernel for); seam-probe
+# and every `cauldron daemon` on 127.0.0.1:0. Never 3651/3652/3653.
+#
+# Exit codes are captured DIRECTLY (`set -o pipefail`, never through a tail).
+
+set -Eeuo pipefail   # -E: the ERR trap fires inside functions too
+# REL-4.S7i: bash 3.2 (this machine's /bin/bash) exits 0 from a `set -u`
+# abort under `set -e` when an EXIT trap is set. Every deliberate `exit`
+# marks itself; the EXIT trap ends in __abort_guard, which turns an UNMARKED
+# exit whose status reads 0 into 2.
+__deliberate=
+exit() { local s=$?; __deliberate=1; builtin exit "${1:-$s}"; }
+__abort_guard() {
+  if [ -z "$__deliberate" ] && [ "${__st:-0}" -eq 0 ]; then
+    echo "$(basename "$0"): ABORTED (set -e/-u abort; not a pass)" >&2; builtin exit 2
+  fi
+}
+
+# The trap is DISARMED (`off`) around the commands whose non-zero exit IS the
+# assertion, and re-armed (`on`) after -- a bare `set +e` would still fire it.
+ERRTRAP='rc=$?; printf "\n\033[31mABORTED\033[0m at line %s: %s (exit %s)\n  -> %d passed, %d failed BEFORE the abort; this run proves NOTHING past that line.\n" "$LINENO" "$BASH_COMMAND" "$rc" "$PASS" "$FAIL" >&2'
+trap "$ERRTRAP" ERR
+off() { trap - ERR; set +e; }
+on()  { set -e; trap "$ERRTRAP" ERR; }
+
+REPO="$(cd "$(dirname "$0")/.." && pwd)"
+export CARGO_TARGET_DIR="${CARGO_TARGET_DIR:-$REPO/.target}"
+export CARGO_PROFILE_TEST_DEBUG=0
+CAULDRON="$CARGO_TARGET_DIR/debug/cauldron"
+ROOT="${PROOF_ROOT:-/tmp/cauldron-declsnap-proof-$$}"
+
+PASS=0; FAIL=0
+ok()   { PASS=$((PASS+1)); printf '  \033[32mPASS\033[0m %s\n' "$1"; }
+bad()  { FAIL=$((FAIL+1)); printf '  \033[31mFAIL\033[0m %s\n' "$1"; }
+chk()  { if [[ "$2" == *"$3"* ]]; then ok "$1"; else bad "$1 -- wanted \"$3\" in: ${2:0:600}"; fi; }
+nchk() { if [[ "$2" != *"$3"* ]]; then ok "$1"; else bad "$1 -- did NOT want \"$3\" in: ${2:0:600}"; fi; }
+eqk()  { if [[ "$2" == "$3" ]]; then ok "$1"; else bad "$1 -- wanted \"$3\" got \"$2\""; fi; }
+sec()  { printf '\n\033[1m== %s\033[0m\n' "$1"; }
+
+# ── THE DISK FLOOR, before every cargo build this script performs ──────────
+floor() {
+  local free; free="$(df -g ~ | tail -1 | awk '{print $4}')"
+  if [[ "$free" -lt 4 ]]; then echo "FATAL: $free GiB free is below the 4 GiB floor; not building."; exit 1; fi
+}
+rebuild() { floor; ( cd "$REPO" && cargo build --workspace >/dev/null 2>&1 ); }
+
+# ── THE POSITIVE SENTINEL ──────────────────────────────────────────────────
+sec "0. SENTINEL -- this script can fail, and the binary is real"
+if [[ ! -x "$CAULDRON" ]]; then echo "  building..."; rebuild; fi
+[[ -x "$CAULDRON" ]] || { echo "FATAL: no binary at $CAULDRON"; exit 1; }
+SENT_BEFORE=$FAIL
+bad "SENTINEL: this line is a deliberate failure, to prove failures are counted"
+if [[ $FAIL -eq $((SENT_BEFORE+1)) ]]; then
+  FAIL=$((FAIL-1)); PASS=$((PASS+1))
+  printf '  \033[32mPASS\033[0m SENTINEL: the deliberate failure was counted, then retracted\n'
+else
+  echo "FATAL: the harness did not count a failure. Every green below is meaningless."; exit 1
+fi
+chk "the binary under test runs and is cauldron" "$("$CAULDRON" --help 2>&1 | head -1)" "cauldron"
+chk "and it knows the backfill verb" "$("$CAULDRON" --help 2>&1)" "--snapshot-declaration"
+
+mkdir -p "$ROOT"
+MAIN_RS="$REPO/cli/src/main.rs"; DECL_RS="$REPO/libs/env/src/decl.rs"
+cleanup() {
+  for p in $(cat "$ROOT"/pids 2>/dev/null || true); do kill -9 "$p" 2>/dev/null || true; done
+  # A FORCED RED THAT ABORTS MUST NOT LEAVE THE TREE RED. The first run of
+  # this script died inside section 3b before its restore line, the cleanup
+  # deleted the backups, and the next run proved the patched binary. So the
+  # sources are restored HERE, on every exit, and the binary is rebuilt from
+  # them if they were touched.
+  local touched=0
+  for f in main.rs decl.rs; do
+    if [[ -f "$ROOT/$f.bak" ]]; then
+      case $f in main.rs) t="$MAIN_RS";; *) t="$DECL_RS";; esac
+      if ! cmp -s "$ROOT/$f.bak" "$t"; then cp "$ROOT/$f.bak" "$t"; touched=1; fi
+    fi
+  done
+  if [[ $touched -eq 1 ]]; then
+    echo "cleanup: a forced-red patch was still in the tree; sources restored, rebuilding the binary" >&2
+    ( cd "$REPO" && cargo build --workspace >/dev/null 2>&1 ) || echo "cleanup: REBUILD FAILED -- run cargo build --workspace" >&2
+  fi
+  rm -rf "$ROOT"
+}
+trap '__st=$?; cleanup; __abort_guard' EXIT
+: > "$ROOT/pids"
+
+cau() { CAULDRON_HOME="$ROOT/.cauldron" CAULDRON_ENV="$1" "$CAULDRON" "${@:2}" 2>&1; }
+# stdout only, for `--json`: a cargo build's progress goes to stderr and must
+# not land inside the JSON being parsed.
+cauq() { CAULDRON_HOME="$ROOT/.cauldron" CAULDRON_ENV="$1" "$CAULDRON" "${@:2}" 2>/dev/null; }
+envdir() { echo "$ROOT/.cauldron/data/$1"; }
+mkenv() {  # $1 env, $2 auto_restart, $3 auto_rollback, rest: extra lines
+  local d; d="$(envdir "$1")"; mkdir -p "$d"
+  { echo "[supervisor]"; echo "auto_restart = $2"; echo "auto_rollback = $3";
+    echo "poll_secs = 1"; echo "down_after = 1"; echo "max_start_failures = 2";
+    local l; for l in "${@:4}"; do echo "$l"; done; } > "$d/env.toml"
+}
+pidof_row() { python3 -c "import json;print(json.load(open('$(envdir "$1")/seams.json'))['seams']['$2']['pid'])"; }
+rowfield() { python3 -c "import json;print(json.load(open('$(envdir "$1")/seams.json'))['seams']['$2']['$3'])"; }
+sha() { shasum -a 256 "$1" | awk '{print $1}'; }
+SVC="$ROOT/.cauldron/services"; mkdir -p "$SVC"
+BUILDS="$ROOT/.cauldron/data/shared/builds/snap"
+DECL="$SVC/snap.toml"
+
+# ── THE TWO DECLARATIONS OF ONE SERVICE, `snap` ───────────────────────────
+#
+# D1: the HOSTED ARTIFACT form — the shape of the pre-rewrite tts, with the
+#     port and a home in `[env]`, a `[launch] addr`, `probe = "connect"`. Its
+#     image is a python fake daemon that binds `$FAKE_PORT` and writes
+#     `$FAKE_HOME` into a `booted` file, and that dies at once without those
+#     variables — which is exactly what the real tts did when launched under
+#     the registering declaration with no `TTS_HOME`.
+# D2: the REGISTERING CARGO form — the shape of the rewritten tts: no
+#     `[launch]`, `probe = "seam"`, the kernel picks the port.
+# Both name the binary `seam-probe`, so a D1 build launched under D2 EXECUTES
+# (and dies) rather than being refused for a missing file: the red has to be
+# the measured failure, not a different one.
+PORT=$(python3 -c "import socket;s=socket.socket();s.bind(('127.0.0.1',0));print(s.getsockname()[1]);s.close()")
+mkdir -p "$ROOT/fake"
+cat > "$ROOT/fake/seam-probe" <<'FD'
+#!/usr/bin/env python3
+import os, socket, sys, time
+# It STATES ITS COMMIT, as threads does, so `cauldron build` labels it by commit
+# and a registering launch of it gets as far as the fork -- and the death.
+if len(sys.argv) > 1 and sys.argv[1] == "--build-stamp":
+    print("commit=deadbeefcafe00000000000000000000000000 provenance=pin dirty=0"); sys.exit(0)
+port = int(os.environ["FAKE_PORT"])          # KeyError -> exit 1 under the wrong declaration
+home = os.environ["FAKE_HOME"]
+s = socket.socket(); s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+s.bind(("127.0.0.1", port)); s.listen(8)
+open(os.path.join(os.environ["CAULDRON_SERVICE_DATA_DIR"], "booted"), "a").write(f"{os.getpid()} {home}\n")
+while True: time.sleep(1)
+FD
+chmod +x "$ROOT/fake/seam-probe"
+D1="# D1: the hosted artifact form (pre-rewrite tts shape)
+name = \"snap\"
+registers = false
+probe = \"connect\"
+stop_signal = \"TERM\"
+start_timeout_ms = 10000
+[launch]
+addr = \"127.0.0.1:$PORT\"
+[build]
+artifact = \"$ROOT/fake/seam-probe\"
+bin = \"seam-probe\"
+stamp_args = [\"--build-stamp\"]
+[env]
+FAKE_PORT = \"$PORT\"
+FAKE_HOME = \"\${CAULDRON_SERVICE_DATA_DIR}/store\"
+"
+D2="# D2: the registering cargo form (rewritten tts shape)
+name = \"snap\"
+probe = \"seam\"
+start_timeout_ms = 5000
+[build]
+package = \"seam-probe\"
+bin = \"seam-probe\"
+profile = \"dev\"
+target_dir = \"$CARGO_TARGET_DIR\"
+"
+ship() { printf '%s' "$1" > "$DECL"; }
+
+# ══════════════════════════════════════════════════════════════════════════
+sec "1. BUILD SNAPSHOTS THE DECLARATION IT RESOLVED, byte for byte, hashed"
+# ══════════════════════════════════════════════════════════════════════════
+mkenv e1 false false
+ship "$D1"
+L1="$(cauq e1 build --json snap | python3 -c 'import json,sys;print(json.load(sys.stdin)[0]["label"])')"
+eqk "the D1 build is the artifact version, labelled by the commit the image states" "$L1" "deadbeefcafe-dev"
+if cmp -s "$BUILDS/$L1/declaration.toml" "$DECL"; then ok "builds/snap/$L1/declaration.toml is the resolved file, BYTE FOR BYTE"; else bad "the snapshot differs from the file it was taken from"; fi
+REC_SHA="$(python3 -c "import json;print(json.load(open('$BUILDS/$L1/build.json'))['declaration_sha256'])")"
+eqk "build.json records the snapshot's sha256" "$REC_SHA" "$(sha "$DECL")"
+chk "and the path it was taken from (the root override, which shadows shipped)" \
+    "$(python3 -c "import json;print(json.load(open('$BUILDS/$L1/build.json'))['declaration_source'])")" "$DECL"
+D1_SHA="$REC_SHA"
+
+ship "$D2"
+L2="$(cauq e1 build --allow-dirty --json snap | python3 -c 'import json,sys;print(json.load(sys.stdin)[0]["label"])')"
+if [[ "$L2" != "$L1" ]]; then ok "the D2 build is a different version ($L2)"; else bad "D2 produced the same label as D1"; fi
+if cmp -s "$BUILDS/$L2/declaration.toml" "$DECL"; then ok "and carries D2, byte for byte"; else bad "L2's snapshot is not D2"; fi
+if ! cmp -s "$BUILDS/$L1/declaration.toml" "$BUILDS/$L2/declaration.toml"; then ok "the two build dirs carry two different declarations of one service"; else bad "the snapshots are the same"; fi
+D2_SHA="$(sha "$DECL")"
+cp "$BUILDS/$L2/seam-probe" "$ROOT/real-seam-probe"   # kept: section 3 breaks the installed one
+
+# ══════════════════════════════════════════════════════════════════════════
+sec "2. F1 THE HEADLINE -- shipped is D2; the D1 build, pinned, launches under D1"
+# ══════════════════════════════════════════════════════════════════════════
+# The shipped file is D2 now. Pin the D1 build.
+P="$(cau e1 pin snap "$L1")"
+chk "F5: pin WARNS that the snapshot differs from the shipped file" "$P" "WARNING: version $L1's declaration snapshot"
+chk "    naming the snapshot's hash" "$P" "${D1_SHA:0:12}"
+chk "    and the shipped file's hash" "$P" "${D2_SHA:0:12}"
+chk "    and calling it what it is" "$P" "That is a cut-over"
+S="$(cau e1 start snap)"
+chk "the D1 build STARTED although the shipped file is D2" "$S" "started snap"
+chk "and says which declaration it is under" "$S" "declaration: snapshot in build $L1"
+eqk "the row is a HOSTED row (registered = false): D1's contract, not D2's" "$(rowfield e1 snap registered)" "False"
+eqk "at D1's declared address" "$(rowfield e1 snap addr)" "127.0.0.1:$PORT"
+chk "and D1's [env] reached the child" "$(cat "$(envdir e1)/snap/booted")" "$(envdir e1)/snap/store"
+pidof_row e1 snap >> "$ROOT/pids"
+ST="$(cau e1 status snap)"
+chk "status names the declaration the RUNNING version is under" "$ST" "snap: declaration: snapshot ($L1, sha256 ${D1_SHA:0:12}"
+EV="$(cau e1 envs)"
+chk "envs has a DECLARATION column" "$EV" "DECLARATION"
+chk "and says snapshot for the running row" "$(echo "$EV" | grep '^e1 ' | grep 'snap')" "snapshot"
+cau e1 stop snap >/dev/null
+echo "     -> the old tts, pinned, would have been launched as a registering"
+echo "        service with no TTS_HOME and killed at start_timeout_ms. It was not."
+
+sec "2b. OPPOSED -- the D2 build, pinned, launches under D2"
+P="$(cau e1 pin snap "$L2")"
+nchk "F5: no WARNING when the snapshot EQUALS the shipped file" "$P" "WARNING"
+chk "    it says so instead" "$P" "declaration snapshot matches the shipped file"
+S="$(cau e1 start snap)"
+chk "the D2 build started" "$S" "started snap"
+chk "under D2's snapshot" "$S" "declaration: snapshot in build $L2"
+eqk "as a REGISTERING service (registered = true)" "$(rowfield e1 snap registered)" "True"
+if [[ "$(rowfield e1 snap addr)" != "127.0.0.1:$PORT" ]]; then ok "on a kernel-chosen port, not D1's"; else bad "D2 bound D1's port"; fi
+pidof_row e1 snap >> "$ROOT/pids"
+cau e1 stop snap >/dev/null
+
+sec "2c. F5 -- one changed byte in the shipped file flips the warning"
+printf '\n' >> "$DECL"
+P="$(cau e1 pin snap "$L2")"
+chk "one appended byte: pin WARNS" "$P" "WARNING: version $L2's declaration snapshot"
+ship "$D2"
+P="$(cau e1 pin snap "$L2")"
+nchk "restored: it does not" "$P" "WARNING"
+
+# ══════════════════════════════════════════════════════════════════════════
+sec "3. F2 ROLLBACK -- the D2 build fails; auto_rollback re-pins D1; it comes up UNDER D1"
+# ══════════════════════════════════════════════════════════════════════════
+setup_rb() {  # $1 env: D1 proven good (with D1 shipped), THEN D2 ships, the broken D2 build is pinned, the good one killed
+  ship "$D1"
+  # R9.F1 (after R9.C4, gap C-4): `start` records good only once up
+  # `stable_after_secs`, which at `start` is true only when it is 0. D1 is
+  # killed before the daemon starts, so no holder ever sees it stay up.
+  mkenv "$1" true true "stable_after_secs = 0"
+  cau "$1" pin snap "$L1" >/dev/null
+  cau "$1" start snap >/dev/null
+  pidof_row "$1" snap >> "$ROOT/pids"
+  # On the GOOD LIST: `pin` already wrote `version = "$L1"`, so a whole-file
+  # match could not fail (R9.C4 inspect finding 1).
+  chk "[$1] D1 is proven good by having started here" "$(cat "$(envdir "$1")/env.toml")" "good = [\"$L1\""
+  ship "$D2"
+  printf '#!/bin/sh\nexit 1\n' > "$BUILDS/$L2/seam-probe"
+  cau "$1" pin snap "$L2" >/dev/null
+  kill -9 "$(pidof_row "$1" snap)" 2>/dev/null || true; sleep 0.4
+}
+# R9.F1: release e1's claim on D1's declared port first. Since R6.S3, `pin`
+# REFUSES a hosted port another environment's pin already claims, and e1
+# pinned `snap` in sections 1-2: measured, `cau rb pin snap $L1` was refused
+# ("COLLIDES with `snap` in environment `e1`"), the D2 build stayed pinned,
+# and section 3 failed with nothing proven good to roll back to.
+cau e1 env remove e1 --stop --yes >/dev/null
+setup_rb rb
+RB_LOG="$ROOT/rb.log"
+CAULDRON_HOME="$ROOT/.cauldron" CAULDRON_ENV=rb "$CAULDRON" daemon >"$RB_LOG" 2>&1 &
+RBD=$!; echo "$RBD" >> "$ROOT/pids"
+for _ in $(seq 1 300); do grep -q 'came up at' "$RB_LOG" 2>/dev/null && break; sleep 0.1; done
+RB="$(cat "$RB_LOG")"
+chk "the D2 build fails to start" "$RB" "exited with exit status: 1 before writing its seam"
+chk "AUTO-ROLLBACK fires" "$RB" "AUTO-ROLLBACK"
+chk "env.toml is re-pinned to the D1 build" "$(cat "$(envdir rb)/env.toml")" "version = \"$L1\""
+chk "and the D1 build comes up UNDER D1's SNAPSHOT, with D2 shipped" "$RB" "came up at 127.0.0.1:$PORT (pid"
+chk "    saying so" "$RB" "declaration: snapshot in build $L1"
+eqk "the row is D1's: hosted" "$(rowfield rb snap registered)" "False"
+pidof_row rb snap >> "$ROOT/pids"
+kill -9 "$RBD" 2>/dev/null || true; wait "$RBD" 2>/dev/null || true
+cau rb stop snap >/dev/null   # the hosted child holds $PORT until it is stopped
+echo "     -> before this step the rollback restored the binary WITHOUT its"
+echo "        contract and turned one dead daemon into two."
+
+# ══════════════════════════════════════════════════════════════════════════
+sec "3b. FORCED RED A -- the launch reads the SHIPPED file (the pre-step behaviour)"
+# ══════════════════════════════════════════════════════════════════════════
+cp "$MAIN_RS" "$ROOT/main.rs.bak"; cp "$DECL_RS" "$ROOT/decl.rs.bak"
+python3 - "$MAIN_RS" <<'PY'
+import sys,pathlib
+p=pathlib.Path(sys.argv[1]); s=p.read_text()
+old="    let dir = env.build_dir(service, label);\n    match decl::snapshot(&dir, rec, service)? {"
+new="    let dir = env.build_dir(service, \"forced-red-no-such-build\");\n    match decl::snapshot(&dir, rec, service)? {"
+assert s.count(old)==1, "patch site not found exactly once"
+p.write_text(s.replace(old,new))
+PY
+rebuild
+ok "rebuilt with every launch looking for its snapshot where none is (so: the shipped file)"
+# F1 red: the D1 build under D2.
+mkenv red1 false false
+cau red1 pin snap "$L1" >/dev/null
+off
+S="$(cau red1 start snap)"; S_RC=$?
+on
+if [[ $S_RC -ne 0 ]]; then ok "RED CONFIRMED F1: the D1 build, pinned, DIES under the shipped D2 (exit $S_RC)"; else bad "F1 did not go red: the D1 build came up under D2"; fi
+chk "    it was launched as a registering service and exited before its seam" "$S" "before writing its seam"
+chk "    under the shipped file, which the launch SAID" "$S" "shipped (no snapshot)"
+# F2 red: the rollback restores the binary without its contract.
+cau rb env remove rb --stop --yes >/dev/null   # R9.F1: rb's claim on $PORT, as e1's above
+setup_rb red2
+RED2_LOG="$ROOT/red2.log"
+CAULDRON_HOME="$ROOT/.cauldron" CAULDRON_ENV=red2 "$CAULDRON" daemon >"$RED2_LOG" 2>&1 &
+RD2=$!; echo "$RD2" >> "$ROOT/pids"
+for _ in $(seq 1 300); do grep -q 'PARKED' "$RED2_LOG" 2>/dev/null && break; sleep 0.1; done
+R2="$(cat "$RED2_LOG")"
+chk "RED CONFIRMED F2: AUTO-ROLLBACK re-pins D1" "$R2" "AUTO-ROLLBACK"
+nchk "    and the D1 build never comes up under D2" "$R2" "came up at"
+chk "    -- one dead daemon became two, and the service PARKED" "$R2" "PARKED"
+kill -9 "$RD2" 2>/dev/null || true; wait "$RD2" 2>/dev/null || true
+cp "$ROOT/main.rs.bak" "$MAIN_RS"
+rebuild
+if cmp -s "$ROOT/main.rs.bak" "$MAIN_RS"; then ok "main.rs is restored and rebuilt"; else bad "main.rs was not restored"; fi
+
+# ══════════════════════════════════════════════════════════════════════════
+sec "4. F3 -- the snapshot's hash is checked at launch; garbage is REFUSED"
+# ══════════════════════════════════════════════════════════════════════════
+cp "$ROOT/real-seam-probe" "$BUILDS/$L2/seam-probe"   # L2 runs again
+mkenv e4 false false
+cau e4 pin snap "$L1" >/dev/null
+printf '# tampered after the build\n' >> "$BUILDS/$L1/declaration.toml"
+TAMP_SHA="$(sha "$BUILDS/$L1/declaration.toml")"
+off
+S="$(cau e4 start snap)"; S_RC=$?
+on
+if [[ $S_RC -ne 0 ]]; then ok "a tampered declaration.toml is REFUSED at launch (exit $S_RC)"; else bad "the tampered snapshot launched"; fi
+chk "naming the hash of the bytes found" "$S" "has sha256 $TAMP_SHA"
+chk "and the hash the record names" "$S" "records sha256 $D1_SHA"
+chk "and it is a refusal, not a fallback" "$S" "REFUSED"
+if [[ ! -f "$(envdir e4)/seams.json" ]] || ! python3 -c "import json,sys;sys.exit(0 if 'snap' in json.load(open('$(envdir e4)/seams.json'))['seams'] else 1)"; then ok "nothing was launched under garbage"; else bad "a row exists for a refused launch"; fi
+off
+P="$(cau e4 pin snap "$L1")"; P_RC=$?
+on
+if [[ $P_RC -ne 0 ]]; then ok "and pin REFUSES the label, so the refusal is not deferred to the next start"; else bad "pin accepted an unlaunchable label"; fi
+chk "status says the snapshot is UNUSABLE rather than dying" "$(cau e4 status snap)" "snapshot UNUSABLE"
+# A daemon meets the same refusal and does NOT count it as a start failure:
+# it is reported every pass, like a declaration that will not parse.
+mkenv e4d true true
+cau e4d pin snap "$L2" >/dev/null   # L2 (clean) just to make the pin legal...
+python3 - "$(envdir e4d)/env.toml" "$L1" <<'PY'
+import sys,re,pathlib
+p=pathlib.Path(sys.argv[1]); s=p.read_text()
+p.write_text(re.sub(r'version = "[^"]*"', f'version = "{sys.argv[2]}"', s, count=1))
+PY
+E4D_LOG="$ROOT/e4d.log"
+CAULDRON_HOME="$ROOT/.cauldron" CAULDRON_ENV=e4d "$CAULDRON" daemon >"$E4D_LOG" 2>&1 &
+E4D=$!; echo "$E4D" >> "$ROOT/pids"
+for _ in $(seq 1 100); do grep -q 'no usable declaration' "$E4D_LOG" 2>/dev/null && break; sleep 0.1; done
+sleep 2.5
+E4="$(cat "$E4D_LOG")"
+chk "the daemon reports the tampered snapshot by name" "$E4" "has no usable declaration for that build"
+chk "    with the hash" "$E4" "$TAMP_SHA"
+nchk "    and does not count it toward a rollback" "$E4" "AUTO-ROLLBACK"
+nchk "    nor park" "$E4" "PARKED"
+kill -9 "$E4D" 2>/dev/null || true; wait "$E4D" 2>/dev/null || true
+# Restore the snapshot for everything below.
+printf '%s' "$D1" > "$BUILDS/$L1/declaration.toml"
+eqk "the snapshot is restored to its recorded bytes" "$(sha "$BUILDS/$L1/declaration.toml")" "$D1_SHA"
+
+# ══════════════════════════════════════════════════════════════════════════
+sec "5. F4 BACKFILL -- a legacy dir falls back to shipped and SAYS so; backfill is deliberate"
+# ══════════════════════════════════════════════════════════════════════════
+# A build dir exactly as prod's four are: build.json + binary, no snapshot,
+# no hash. Its binary is the fake daemon, so D1 is the declaration it needs.
+LEG="legacy-0000000000-dev"
+mkdir -p "$BUILDS/$LEG"
+cp "$ROOT/fake/seam-probe" "$BUILDS/$LEG/seam-probe"
+python3 - "$BUILDS/$LEG/build.json" "$LEG" <<'PY'
+import json,sys,time
+json.dump({"service":"snap","label":sys.argv[2],"bin":"seam-probe","package":"",
+  "profile":"dev","workspace":"/elsewhere","built_at":int(time.time())-100,
+  "commit":"0000000000000000000000000000000000000000","dirty":False,
+  "content":"deadbeefdeadbeef","source_commit":None}, open(sys.argv[1],"w"))
+PY
+ship "$D1"
+mkenv e5 false false
+P="$(cau e5 pin snap "$LEG")"
+chk "pin WARNS that the label carries no snapshot" "$P" "carries NO declaration snapshot"
+chk "    and names the backfill verb" "$P" "cauldron build --snapshot-declaration snap $LEG"
+ST="$(cau e5 status snap)"
+chk "status says: shipped (no snapshot)" "$ST" "snap: declaration: shipped (no snapshot)"
+chk "    and that it predates snapshots" "$ST" "predates declaration snapshots"
+S="$(cau e5 start snap)"
+chk "the legacy build starts under the shipped file" "$S" "started snap"
+chk "    and SAYS it is the shipped file" "$S" "declaration: shipped (no snapshot)"
+chk "envs says so too" "$(cau e5 envs | grep '^e5 ' | grep snap)" "shipped (no snapshot)"
+pidof_row e5 snap >> "$ROOT/pids"
+cau e5 stop snap >/dev/null
+# NEVER SILENTLY: the launch above wrote no snapshot.
+if [[ ! -f "$BUILDS/$LEG/declaration.toml" ]]; then ok "the launch did NOT backfill: no declaration.toml appeared"; else bad "a launch wrote a snapshot by itself"; fi
+# THE VERB.
+B="$(cau e5 build --snapshot-declaration snap "$LEG")"
+chk "the backfill verb writes the snapshot from the CURRENT file" "$B" "snapshotted $DECL into $BUILDS/$LEG/declaration.toml"
+chk "    with its hash" "$B" "sha256 $(sha "$DECL")"
+chk "    and names the reversal" "$B" "To reverse: delete"
+if cmp -s "$BUILDS/$LEG/declaration.toml" "$DECL"; then ok "the backfilled snapshot is today's file, byte for byte"; else bad "the backfill differs from the file"; fi
+eqk "and build.json now records it" "$(python3 -c "import json;print(json.load(open('$BUILDS/$LEG/build.json'))['declaration_sha256'])")" "$(sha "$DECL")"
+chk "status now says snapshot" "$(cau e5 status snap)" "snap: declaration: snapshot ($LEG"
+off
+B2="$(cau e5 build --snapshot-declaration snap "$LEG")"; B2_RC=$?
+on
+if [[ $B2_RC -ne 0 ]]; then ok "a second backfill is REFUSED (exit $B2_RC): the snapshot is a contract"; else bad "the backfill overwrote silently"; fi
+chk "    and says what would overwrite it" "$B2" "Pass \`--force\` to replace it deliberately"
+B3="$(cau e5 build --snapshot-declaration snap "$LEG" --force)"
+chk "with --force it replaces, and says so" "$B3" "REPLACING the snapshot that was there"
+off
+B4="$(cau e5 build --snapshot-declaration snap "no-such-label")"; B4_RC=$?
+on
+if [[ $B4_RC -ne 0 ]]; then ok "a label that is not built is refused: nothing to backfill"; else bad "backfilled a non-existent build"; fi
+chk "    by name" "$B4" "is not built in this root"
+# THE REVERSAL: one line.
+rm "$BUILDS/$LEG/declaration.toml"
+ST="$(cau e5 status snap)"
+chk "deleting the file is the reversal: shipped (no snapshot) again" "$ST" "shipped (no snapshot)"
+chk "    and status says the record still names a hash for a file that is GONE" "$ST" "is GONE from"
+S="$(cau e5 start snap)"
+chk "and the launch falls back to shipped, saying the file is gone" "$S" "declaration.toml (sha256 $(sha "$DECL" | cut -c1-12)) is GONE"
+pidof_row e5 snap >> "$ROOT/pids"
+cau e5 stop snap >/dev/null
+# Back to a record that names no snapshot at all, as prod's four are, so the
+# forced red below meets the `predates` phrase and not the `GONE` one.
+python3 - "$BUILDS/$LEG/build.json" "$LEG" <<'PY2'
+import json,sys,time
+json.dump({"service":"snap","label":sys.argv[2],"bin":"seam-probe","package":"",
+  "profile":"dev","workspace":"/elsewhere","built_at":int(time.time())-100,
+  "commit":"0000000000000000000000000000000000000000","dirty":False,
+  "content":"deadbeefdeadbeef","source_commit":None}, open(sys.argv[1],"w"))
+PY2
+
+# ══════════════════════════════════════════════════════════════════════════
+sec "5b. FORCED RED B -- the hash check, the phrase, and the --force refusal, removed"
+# ══════════════════════════════════════════════════════════════════════════
+python3 - "$MAIN_RS" "$DECL_RS" <<'PY'
+import sys,pathlib
+m=pathlib.Path(sys.argv[1]); s=m.read_text()
+for old,new in [
+  ('"shipped (no snapshot) — version {label} predates declaration snapshots', '"SHIPPED-PHRASE-REMOVED — version {label} predates declaration snapshots'),
+  ('    if existing.exists() && !o.force {', '    if existing.exists() && !o.force && false {'),
+]:
+    assert s.count(old)==1, f"patch site not found exactly once: {old[:40]}"
+    s=s.replace(old,new)
+m.write_text(s)
+d=pathlib.Path(sys.argv[2]); t=d.read_text()
+old='    if actual != rec.declaration_sha256 {'
+assert t.count(old)==1
+d.write_text(t.replace(old,'    if false && actual != rec.declaration_sha256 {'))
+PY
+rebuild
+ok "rebuilt with the hash check, the phrase and the --force refusal removed"
+# F3 red: the tampered snapshot LAUNCHES.
+printf '# tampered after the build\n' >> "$BUILDS/$L1/declaration.toml"
+mkenv red3 false false
+cau red3 pin snap "$L1" >/dev/null 2>&1 || true
+off
+S="$(cau red3 start snap)"; S_RC=$?
+on
+if [[ $S_RC -eq 0 ]]; then ok "RED CONFIRMED F3: without the hash check the tampered snapshot LAUNCHES (exit 0)"; else bad "F3 did not go red: exit $S_RC: ${S:0:300}"; fi
+pidof_row red3 snap >> "$ROOT/pids" 2>/dev/null || true
+cau red3 stop snap >/dev/null 2>&1 || true
+printf '%s' "$D1" > "$BUILDS/$L1/declaration.toml"
+# F4 red (phrase): status no longer says it.
+mkenv red4 false false
+cau red4 pin snap "$LEG" >/dev/null 2>&1 || true
+nchk "RED CONFIRMED F4: with the phrase removed, status does not say \`shipped (no snapshot)\`" "$(cau red4 status snap)" "shipped (no snapshot)"
+# F4 red (--force): the backfill overwrites without being told to.
+cau red4 build --snapshot-declaration snap "$LEG" >/dev/null
+off
+B5="$(cau red4 build --snapshot-declaration snap "$LEG")"; B5_RC=$?
+on
+if [[ $B5_RC -eq 0 ]]; then ok "RED CONFIRMED F4: with the refusal removed, a second backfill OVERWRITES without --force (exit 0)"; else bad "F4 --force red did not go red: exit $B5_RC"; fi
+rm -f "$BUILDS/$LEG/declaration.toml"
+cp "$ROOT/main.rs.bak" "$MAIN_RS"; cp "$ROOT/decl.rs.bak" "$DECL_RS"
+rebuild
+if cmp -s "$ROOT/main.rs.bak" "$MAIN_RS" && cmp -s "$ROOT/decl.rs.bak" "$DECL_RS"; then ok "main.rs and decl.rs are restored and rebuilt"; else bad "a source file was not restored"; fi
+chk "and the restored binary refuses the tampered snapshot again" "$( printf '# x\n' >> "$BUILDS/$L1/declaration.toml"; cau red3 start snap || true; printf '%s' "$D1" > "$BUILDS/$L1/declaration.toml" )" "REFUSED"
+
+# ══════════════════════════════════════════════════════════════════════════
+sec "6. THE POLL'S RE-PIN launches the NEW pin under the NEW pin's snapshot"
+# ══════════════════════════════════════════════════════════════════════════
+# A daemon hosting the D1 build (hosted). The operator pins the D2 build; the
+# poll restarts onto it, and the restart is a registering launch under D2 --
+# while the file on disk is D1. Pin alone, then watch (CON-22).
+ship "$D1"
+mkenv rp true false
+cau rp pin snap "$L1" >/dev/null
+RP_LOG="$ROOT/rp.log"
+CAULDRON_HOME="$ROOT/.cauldron" CAULDRON_ENV=rp "$CAULDRON" daemon >"$RP_LOG" 2>&1 &
+RPD=$!; echo "$RPD" >> "$ROOT/pids"
+for _ in $(seq 1 300); do grep -q 'came up at' "$RP_LOG" 2>/dev/null && break; sleep 0.1; done
+chk "the daemon launched the D1 build under D1" "$(cat "$RP_LOG")" "declaration: snapshot in build $L1"
+pidof_row rp snap >> "$ROOT/pids"
+cau rp pin snap "$L2" >/dev/null 2>&1   # warns: snapshot differs from the shipped D1
+for _ in $(seq 1 300); do grep -q 'restarted `snap`' "$RP_LOG" 2>/dev/null && break; sleep 0.1; done
+RP="$(cat "$RP_LOG")"
+chk "the poll noticed the new pin" "$RP" "now pins $L2; restarting it onto the pin"
+chk "and the restart launched under the NEW pin's snapshot, D2" "$RP" "restarted \`snap\` at"
+chk "    saying so" "$RP" "declaration: snapshot in build $L2"
+eqk "the row is now a registering row" "$(rowfield rp snap registered)" "True"
+pidof_row rp snap >> "$ROOT/pids"
+kill -9 "$RPD" 2>/dev/null || true; wait "$RPD" 2>/dev/null || true
+
+printf '\n\033[1mRESULT: %d passed, %d failed\033[0m\n' "$PASS" "$FAIL"
+[[ $FAIL -eq 0 ]] || exit 1
+exit  # REL-4.S7i: a fall-through end is a deliberate exit (see __abort_guard)

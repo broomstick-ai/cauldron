@@ -1,0 +1,29 @@
+#!/usr/bin/env bash
+# A stand-in for `claude-accounts rotate --json`, reproducing the two channels
+# the real script uses: per-slot PROSE appended to the log named by
+# CLAUDE_ACCOUNTS_LOG (its own seam), and ONE structured JSON blob on stdout at
+# the end.
+set -uo pipefail
+DRY=0
+for a in "$@"; do case "$a" in --dry-run) DRY=1 ;; esac; done
+LOG="${CLAUDE_ACCOUNTS_LOG:?the daemon must point the log at a run-private file}"
+ts() { date -u +%Y-%m-%dT%H:%M:%SZ; }
+say() { printf '%s %s\n' "$(ts)" "$*" >> "$LOG"; }
+
+say "rotate: start (dry-run=$DRY)"
+say "ROLLED aa-owned — 12d -> 30d left"
+say "skip   zz-second — the machine default is your live login"
+say "MANUAL cc-third — no credential in this slot"
+say "rotate: done — 1 rolled, 1 skipped, 1 need a sign-in"
+
+cat <<JSON
+{
+  "at": "$(ts)",
+  "live_login": "aa-owned",
+  "slots": [
+    {"label": "aa-owned",  "outcome": "rotated",     "days_left": 30.0, "note": "refresh token rolled forward"},
+    {"label": "zz-second", "outcome": "skip",        "days_left": 20.0, "note": "the machine default"},
+    {"label": "cc-third",  "outcome": "needs-login", "days_left": null, "note": "no credential in this slot"}
+  ]
+}
+JSON

@@ -1,0 +1,84 @@
+# ═══════════════════════════════════════════════════════════════════════════
+#  tts — THE SERVICE THAT SPEAKS TO HIM. A cauldron service since R3.S3.
+# ═══════════════════════════════════════════════════════════════════════════
+#
+# Its code lives in this repository now (`services/tts/`, rewritten from
+# substrate `lib/tts` at trunk 5a17b66), and that changes what this file has
+# to say. The previous version of it was a long, careful record of a binary
+# cauldron HOSTED: a foreign image installed by copy (`artifact`), a row
+# written FOR the process (`registers = false`), a fixed `[launch] addr`, a
+# `TTS_HOME` pointed into the data dir, the binary's own self-update watcher
+# switched off. Every one of those existed because the binary did not link
+# cauldron's `env` crate. It does now:
+#
+#   * it reads `CAULDRON_SERVICE_DATA_DIR` and keeps its store at
+#     `<that>/store/` — exactly where prod's store already is — so there is
+#     no `TTS_HOME`;
+#   * it binds `$CAULDRON_BIND` for its seam and REGISTERS it, carrying the
+#     boot token, so `probe = "seam"` (the strong check) and no `[launch]`;
+#   * it serves the warnings shape (counted by call site), so it is no longer
+#     a gap in the aggregate;
+#   * it has no self-update watcher left to switch off.
+#
+# ══ BEFORE THIS FILE REACHES A CHECKOUT THAT PROD'S CAULDRON READS ══════════
+#
+# This declaration CANNOT RUN A PRE-REWRITE IMAGE. A declaration is per root,
+# not per version, so `prod`'s pin (an `artifact` build of the substrate
+# binary) would be started as a registering service with no `TTS_HOME`: it
+# would open a fresh store under `$HOME/.tts`, never write a seam, and be
+# killed at `start_timeout_ms`. The cutover is ONE act — prod's
+# `store/config.toml` gets `port = 3652`, the new build is pinned, this file
+# lands — and its rollback is this file reverted together with the old pin.
+# Until then prod must keep reading the artifact declaration (e.g. as a root
+# override in `~/.cauldron/services/tts.toml`).
+
+name        = "tts"
+description = "The text-to-speech daemon: a websocket cache-and-synthesis service, the one that speaks to him. Registers its own seam; stopped with SIGINT, drained, never hard-killed."
+kind        = "daemon"
+
+# The HELLO handshake against this start's boot token: `live`, not
+# `live:unverified`.
+probe = "seam"
+
+# SIGINT, still. The rewritten daemon stops cleanly on SIGINT and SIGTERM
+# alike (it drains in-flight syntheses first, up to 10 s); the substrate
+# binary handled SIGINT alone. INT is kept because it is right for both.
+stop_signal = "INT"
+
+# NEVER HARD-KILLED. The 2026-09-02 hard-kill ruling named the threads
+# module and did not extend to the service that speaks to him mid-sentence.
+escalate = false
+
+# The boot sweep walks the whole audio directory (2,473 renders in prod)
+# before the daemon registers.
+start_timeout_ms = 30000
+
+[build]
+# A CARGO SOURCE IN THIS REPOSITORY: no `workspace` key means the repository
+# this file sits in, so a worktree builds its own tree (see `tally.toml`).
+package = "tts"
+bin     = "tts"
+# RELEASE, per service (DEC-19). This is a long-lived daemon doing SQLite,
+# hashing and a sweep of a gigabyte directory on every boot; debug codegen is
+# 10-30x off on those paths, which is the measured cause of threads' 28 s boot
+# gap. The open question this note used to carry — release here meant
+# `debug-assertions` and `overflow-checks` OFF, where substrate's release kept
+# both on — was CLOSED in R3.S2.0: the workspace root now sets
+# `[profile.release] debug-assertions = overflow-checks = true, debug = 1`, for
+# every migrated crate at once, with the cost of each knob written there. tts
+# is on that rule and needs nothing of its own.
+profile = "release"
+
+# ═══ WHICH IDENTITY A PERMISSION PROMPT FROM THIS SERVICE NAMES ══════════════
+#
+# `inherit`: cauldron launches tts, so tts inherits cauldron's per-environment
+# TCC subject and a prompt names `ai.broomstick.cauldron[-<env>]` — a durable
+# identity — with no signature of tts's own. That is the claim, and it is
+# real. `identity` stays empty because nothing signs the cargo-built image
+# with an identifier of its own; writing `ai.broomstick.tts` here would be a
+# claim the artifact does not bear out. (`cauldron permissions` reads an
+# identity only off an `artifact` path, so for a cargo source it says "not
+# built here"; reading the installed build is R3.S4's.)
+[permissions]
+responsibility = "inherit"
+identity = ""

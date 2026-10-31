@@ -1,0 +1,29 @@
+[package]
+name = "aui-wire"
+version.workspace = true
+edition.workspace = true
+description = "The AUI proto-v2 mutation wire (9010) as a face links it: proto, MutationEnvelope, Model, and the typed Mutation enum. Moved from harness libs/aui-state; see PROVENANCE.md."
+
+[package.metadata.provenance]
+source_repo = "~/code/harness"
+source_paths = [
+    "libs/aui-state/src/model.rs",
+    "libs/aui-state/src/node.rs",
+    "libs/aui-state/src/proto.rs",
+    "libs/aui-state/src/spoken.rs",
+    # only lines 1-406 of this one (Mutation, its impl, MISC_PROJECT,
+    # normalize_project_name), so drift reported here may be in the rest of it
+    "libs/aui-state/src/server/mod.rs",
+]
+source_sha = "883204b42c440bae3e9eccd0fc2c00a482d6a79f"
+moved = "2026-10-14"
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+chrono = { workspace = true, features = ["serde"] }
+anyhow = { workspace = true }
+uuid = { workspace = true, features = ["v4", "serde"] }
+
+[lints.rust]
+unsafe_code = "forbid"

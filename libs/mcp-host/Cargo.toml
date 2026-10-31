@@ -1,0 +1,22 @@
+[package]
+name = "mcp-host"
+version.workspace = true
+edition.workspace = true
+description = "R5.S2 (DEC-34): the cauldron supervisor's MCP tool host — declared, version-controlled MCP tools, woken on demand, at most one tool process awake at a time."
+
+# No workspace-path dependency, deliberately: the supervisor (`cli`) links this
+# crate, and nothing here needs the `env` crate's environment machinery. The
+# wire this crate answers on the supervisor seam is spoken from `threads`
+# (`services/threads/src/mcp_route.rs`) WITHOUT linking this crate, because
+# `threads` depends on no workspace crate but the chassis.
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+anyhow = { workspace = true }
+toml = { workspace = true }
+
+[dev-dependencies]
+tempfile = "3"
+
+[lints.rust]
+unsafe_code = "forbid"

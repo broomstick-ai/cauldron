@@ -1,0 +1,71 @@
+#!/usr/bin/env bash
+# claude-login-browser <url> — the BROWSER hook for `add-account --login`.
+#
+# THE PROBLEM THIS SOLVES. The operator's complaint (msg #751) was that the
+# OAuth link "opens in one of several browsers and I can't tell which account
+# I'm registering". The consent page authorizes WHOEVER is signed into the
+# browser session it lands in, so an arbitrary default browser silently decides
+# which account gets registered.
+#
+# THE HOOK. CONFIRMED-CODE against Claude Code v2.1.220: the URL opener resolves
+# `settings.json`'s `browser` key, else the `BROWSER` env var, else `open`, and
+# spawns `<browser> <url>` with the URL as a SINGLE argv element. So BROWSER has
+# to be one executable, not a command string — which is why this wrapper exists.
+#
+# MODES (set by add-account; either works standalone):
+#   CLAUDE_LOGIN_CHROME_PROFILE="Profile 2"   → that named Chrome profile.
+#         Deterministic: keep one Chrome profile permanently signed into each
+#         Claude account and the ambiguity is gone for good.
+#   CLAUDE_LOGIN_PRIVATE=1                    → a fresh private window.
+#         No pre-existing cookie can decide for you; you sign in explicitly,
+#         and `--email` has pre-filled which account that should be.
+#   neither                                   → plain `open` (system default).
+#
+# Chrome profile directory names are NOT the display names. List them with:
+#   ls ~/Library/Application\ Support/Google/Chrome | grep -E '^(Default|Profile)'
+# and map them to people via each profile's Preferences file.
+set -euo pipefail
+
+[ $# -ge 1 ] || { echo "usage: claude-login-browser <url>" >&2; exit 2; }
+URL="$1"
+
+# Only ever hand an http(s) URL to a browser.
+case "$URL" in
+  http://*|https://*) ;;
+  *) echo "claude-login-browser: refusing non-http(s) URL" >&2; exit 2 ;;
+esac
+
+chrome_app() {
+  for app in \
+    "/Applications/Google Chrome.app" \
+    "$HOME/Applications/Google Chrome.app"
+  do
+    [ -d "$app" ] && { printf '%s' "$app"; return 0; }
+  done
+  return 1
+}
+
+if [ -n "${CLAUDE_LOGIN_CHROME_PROFILE:-}" ]; then
+  if app="$(chrome_app)"; then
+    exec open -na "$app" --args \
+      --profile-directory="$CLAUDE_LOGIN_CHROME_PROFILE" \
+      --new-window "$URL"
+  fi
+  echo "claude-login-browser: Chrome not found; falling back to the default browser." >&2
+  echo "  The page will open wherever your system default sends it — check which" >&2
+  echo "  account is signed in there before authorizing." >&2
+  exec open "$URL"
+fi
+
+if [ -n "${CLAUDE_LOGIN_PRIVATE:-}" ]; then
+  if app="$(chrome_app)"; then
+    exec open -na "$app" --args --incognito --new-window "$URL"
+  fi
+  # Safari has no CLI private-window flag; say so rather than pretend.
+  echo "claude-login-browser: Chrome not found, so no private window could be" >&2
+  echo "  forced. Opening the default browser — if it is already signed into the" >&2
+  echo "  wrong Claude account, cancel and re-run with --no-browser instead." >&2
+  exec open "$URL"
+fi
+
+exec open "$URL"

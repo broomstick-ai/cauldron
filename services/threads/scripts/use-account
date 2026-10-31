@@ -1,0 +1,33 @@
+#!/usr/bin/env bash
+# use-account <label> — thin wrapper over `threads accounts show`.
+#
+# IS-18 reconciliation: prints the restore command for a captured account.
+# Deliberately READ-ONLY — delegates to `threads accounts show`, which never
+# execs `claude`, never touches the keychain, never writes anywhere (see
+# `../src/main.rs::accounts_show` / `../src/accounts.rs`).
+#
+# THREADS_HOME pins the CLI to this repo's `lib/threads/` data dir, same as
+# add-account, so it reads the same `accounts.toml` registry / snapshot dirs.
+set -euo pipefail
+
+usage() {
+  echo "usage: use-account <label>" >&2
+  exit 2
+}
+
+[ $# -eq 1 ] || usage
+LABEL="$1"
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+THREADS_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
+# REPO_ROOT follows the PHYSICAL scripts dir (`cd -P`/`pwd -P`): under cauldron
+# this script is reached as <data-home>/scripts/<name>, where `scripts` is a
+# SYMLINKED DIR into services/threads/scripts and <data-home> is outside any repo.
+# The logical path put REPO_ROOT above the data home (H179: "not a git
+# repository" on every board sign-in). THREADS_DIR stays the invoking home on
+# purpose: it is the data dir (threads.db, accounts) the caller meant.
+REPO_ROOT="$(cd -P "$SCRIPT_DIR/../../.." && pwd -P)"
+
+export THREADS_HOME="$THREADS_DIR"
+exec cargo run --quiet --manifest-path "$REPO_ROOT/Cargo.toml" -p threads --bin threads \
+  -- accounts show "$LABEL"

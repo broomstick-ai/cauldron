@@ -1,0 +1,241 @@
+#!/usr/bin/env bash
+# prove-permissions — the permission identity model, forced red where it refuses.
+#
+# WHY THIS SCRIPT DOES NOT USE `cauldron build`
+# ---------------------------------------------
+# Every other proof in this directory installs a version through `cauldron
+# build`, which builds the workspace named in the service declaration. Both
+# buildable declarations name an ABSOLUTE path — `~/code/cauldron`
+# — so from a git worktree that builds and stamps the MAIN CHECKOUT instead of
+# the tree being proved, and aborts outright whenever the main checkout happens
+# to be dirty. This script therefore builds the CLI with cargo directly, from
+# the tree it is run in, and proves only things that need no installed version.
+#
+# WHAT IT NEVER DOES
+# ------------------
+# It creates no keychain item, signs nothing, grants nothing and provokes no
+# permission dialog. The only privileged-looking thing anywhere near it is
+# reading `tccd`'s own log entries, which any user may do. Every scratch file
+# lives under a temporary root and is deleted on exit.
+
+set -uo pipefail
+
+REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+PROOF_ROOT="$(mktemp -d "/tmp/cauldron-perm-proof-$$-XXXXXX")"
+PASS=0
+FAIL=0
+
+cleanup() { rm -rf "$PROOF_ROOT"; }
+trap cleanup EXIT
+
+ok()   { PASS=$((PASS+1)); printf '  PASS  %s\n' "$1"; }
+bad()  { FAIL=$((FAIL+1)); printf '  FAIL  %s\n' "$1"; }
+
+# `says <label> <expected substring> -- <cmd...>`: the command must FAIL and its
+# combined output must contain the substring. Both halves are asserted, because
+# a refusal that exits non-zero with the wrong reason is not the refusal under
+# test.
+says() {
+    local label="$1" want="$2"; shift 3
+    local out rc
+    out="$("$@" 2>&1)"; rc=$?
+    if [[ $rc -eq 0 ]]; then
+        bad "$label: the command SUCCEEDED; a refusal was required"
+    elif [[ "$out" != *"$want"* ]]; then
+        bad "$label: refused, but not with its own text. wanted [$want], got: ${out:0:220}"
+    else
+        ok "$label"
+    fi
+}
+
+echo "prove-permissions"
+echo "================="
+echo "repo       $REPO"
+echo "proof root $PROOF_ROOT"
+echo
+
+# ── Build the CLI from THIS tree ─────────────────────────────────────────────
+echo "0. the binary under test is built from this tree"
+echo "------------------------------------------------"
+export CARGO_TARGET_DIR="${CARGO_TARGET_DIR:-$PROOF_ROOT/target}"
+if ! (cd "$REPO" && cargo build -q -p cauldron 2>"$PROOF_ROOT/build.err"); then
+    bad "cargo build -p cauldron: $(tail -2 "$PROOF_ROOT/build.err")"
+    echo; echo "RESULT"; echo "------"; echo "$PASS passed, $FAIL failed"; exit 1
+fi
+CAULDRON="$CARGO_TARGET_DIR/debug/cauldron"
+[[ -x "$CAULDRON" ]] && ok "built $CAULDRON" || bad "no binary at $CAULDRON"
+
+# Every invocation is pinned to the proof root, so `~/.cauldron` is never read
+# and never written. `prod` is never named.
+c() { env CAULDRON_HOME="$PROOF_ROOT" CAULDRON_ENV=dev "$CAULDRON" "$@"; }
+mkdir -p "$PROOF_ROOT/data/dev" "$PROOF_ROOT/services"
+
+# ── 1. The argument guards ───────────────────────────────────────────────────
+echo
+echo "1. the window is an argument, so it is guarded"
+echo "----------------------------------------------"
+says "--hours 0 is refused as a window that contains nothing" \
+     "reads exactly like a machine with no problem" \
+     -- c permissions --hours 0
+says "--hours with no number is refused" \
+     "needs a number of hours" \
+     -- c permissions --hours
+says "--hours with a non-number is refused" \
+     "whole number of hours" \
+     -- c permissions --hours later
+says "an unknown argument is refused rather than ignored" \
+     "unknown argument" \
+     -- c permissions --grant-everything
+
+# ── 2. The declaration is refused while it is still a file ───────────────────
+echo
+echo "2. a permission declaration is refused at LOAD, before any verb acts"
+echo "--------------------------------------------------------------------"
+
+decl() { # decl <name> <permissions-body>
+    cat > "$PROOF_ROOT/services/$1.toml" <<TOML
+name = "$1"
+probe = "connect"
+[build]
+package = "$1"
+bin = "$1"
+[permissions]
+$2
+TOML
+    mkdir -p "$PROOF_ROOT/data/dev/$1"
+}
+
+decl badresp 'responsibility = "cauldron"'
+says "an unknown responsibility names both legal values" \
+     "is not a responsibility" \
+     -- c permissions --hours 1
+says "...and says which declaration and which section it was in" \
+     '`[permissions]` section of the declaration for `badresp`' \
+     -- c permissions --hours 1
+rm -f "$PROOF_ROOT/services/badresp.toml"
+
+decl badid 'identity = "tts-adeff24ca3de5dea"'
+says "cargo's content-hash identifier is refused by name" \
+     "cargo's own ad-hoc signing identifier" \
+     -- c permissions --hours 1
+says "...and the refusal quotes the hash it found" \
+     "adeff24ca3de5dea" \
+     -- c permissions --hours 1
+rm -f "$PROOF_ROOT/services/badid.toml"
+
+decl bareword 'identity = "cauldron"'
+says "a dotless identifier is refused as an incidental binary name" \
+     "indistinguishable from the incidental name" \
+     -- c permissions --hours 1
+rm -f "$PROOF_ROOT/services/bareword.toml"
+
+# ── 3. A contradicted claim is a DEFECT and exits 4 ──────────────────────────
+echo
+echo "3. a claim the artifact contradicts exits 4; a gap does not"
+echo "-----------------------------------------------------------"
+
+# /bin/sh is a platform binary: durably signed, and certainly not ours. A
+# declaration claiming our identifier for it is a claim the artifact
+# contradicts, which is the one verdict that is a defect.
+cat > "$PROOF_ROOT/services/liar.toml" <<TOML
+name = "liar"
+probe = "connect"
+[build]
+bin = "liar"
+artifact = "/bin/sh"
+[permissions]
+identity = "ai.broomstick.cauldron"
+TOML
+mkdir -p "$PROOF_ROOT/data/dev/liar"
+OUT="$(c permissions --hours 1 2>&1)"; RC=$?
+if [[ $RC -eq 4 ]]; then ok "a contradicted claim exits 4"; else bad "a contradicted claim exited $RC, wanted 4"; fi
+if [[ "$OUT" == *"DEFECT"* ]]; then ok "...and the row reads DEFECT"; else bad "no DEFECT row: ${OUT:0:200}"; fi
+if [[ "$OUT" == *"but the artifact carries"* ]]; then
+    ok "...naming what was claimed and what was found"
+else bad "the row does not name both sides"; fi
+rm -f "$PROOF_ROOT/services/liar.toml"
+
+# FORCED RED THE OTHER WAY: the same binary with NO claim must not be a defect,
+# or `is_defect` is just "has a binary".
+cat > "$PROOF_ROOT/services/honest.toml" <<TOML
+name = "honest"
+probe = "connect"
+[build]
+bin = "honest"
+artifact = "/bin/sh"
+[permissions]
+identity = ""
+TOML
+mkdir -p "$PROOF_ROOT/data/dev/honest"
+OUT="$(c permissions --hours 1 2>&1)"; RC=$?
+if [[ $RC -eq 0 ]]; then ok "forced red: the SAME artifact with no claim exits 0, so 4 means the claim"
+else bad "no claim still exited $RC, so the exit code is not about the claim"; fi
+if [[ "$OUT" == *"unclaimed"* ]]; then
+    ok "...and is reported as unclaimed rather than silently passing"
+else bad "an unclaimed durable identity was not reported: ${OUT:0:200}"; fi
+rm -f "$PROOF_ROOT/services/honest.toml"
+
+# ── 4. The report itself ─────────────────────────────────────────────────────
+echo
+echo "4. the report answers both halves of the ask"
+echo "--------------------------------------------"
+OUT="$(c permissions --hours 1 2>&1)"; RC=$?
+if [[ $RC -eq 0 ]]; then ok "a clean run exits 0"; else bad "a clean run exited $RC"; fi
+for want in \
+    "IDENTITY" \
+    "WHAT IS ACTUALLY ASKING" \
+    "DENIED BY HIM" \
+    "DURABILITY" \
+    "prompt names (subject)" \
+    "process that wanted it"
+do
+    if [[ "$OUT" == *"$want"* ]]; then ok "the report carries [$want]"
+    else bad "the report is missing [$want]"; fi
+done
+
+# The honesty clause: the report must say that nothing honours `inherit` yet.
+if [[ "$OUT" == *"NOTHING HONOURS THAT YET"* ]]; then
+    ok "the report says plainly that nothing honours inherit yet"
+else
+    bad "the report claims an identity is in force when it is not"
+fi
+
+# tts is the live gap and must be named as a gap, not as a violation.
+if [[ "$OUT" == *"gap"* ]]; then ok "a service with no identity is named a gap"
+else bad "no gap row, so the gap/defect distinction is untested here"; fi
+
+# ── 5. Nothing was granted, signed or written outside the proof root ─────────
+echo
+echo "5. it grants nothing and leaves nothing behind"
+echo "----------------------------------------------"
+if grep -rqE "tccutil|add-generic-password|security +import|add-trusted-cert|--sign " \
+        "$REPO/libs/env/src/identity.rs" "$REPO/libs/env/src/tccd.rs" \
+        "$REPO/cli/src/main.rs" 2>/dev/null; then
+    bad "a grant-shaped or signing command appears in the permission sources"
+else
+    ok "no grant-shaped or signing command appears in the permission sources"
+fi
+# POSITIVE SENTINEL for that scan: the pattern must be able to match at all.
+printf 'tccutil reset All\n' > "$PROOF_ROOT/sentinel.txt"
+if grep -qE "tccutil|add-generic-password" "$PROOF_ROOT/sentinel.txt"; then
+    ok "forced red: the same pattern DOES match a planted sentinel, so the scan can fail"
+else
+    bad "the scan pattern matches nothing at all — the check above proves nothing"
+fi
+
+if [[ -z "$(ls -A "$PROOF_ROOT/data/dev" 2>/dev/null | grep -v '^$' || true)" ]]; then
+    ok "the proof wrote no service data"
+else
+    ok "service data written only under the proof root -> $(ls "$PROOF_ROOT/data/dev" | tr '\n' ' ')"
+fi
+if [[ -e "$PROOF_ROOT/data/prod" ]]; then
+    bad "a prod data root was created"
+else
+    ok "no prod data root was created, and prod was never named"
+fi
+
+echo
+echo "RESULT"
+echo "------"
+echo "$PASS passed, $FAIL failed"
+[[ $FAIL -eq 0 ]]

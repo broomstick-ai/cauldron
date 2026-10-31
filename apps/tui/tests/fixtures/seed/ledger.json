@@ -1,0 +1,777 @@
+{
+ "_note": "FAKE DATA (8e4fca10 msg 403 Q9): what ran for each dump, for Status › Ledger (8e4fca10 msg 457). Keyed by the dump's seq; a dump the bucket's log holds takes its words and time from the log. `at` is relative to now; an execution's `after_ms` is from its dump. kind: type_one (①), type_two (②), shell (③, a splash). A type 3's steps name the children they ran by index.",
+ "dumps": [
+  {
+   "seq": 11,
+   "at": "-2h",
+   "ripples": [
+    {
+     "ripple": "dump",
+     "kind": "shell",
+     "state": "running",
+     "after_ms": 0,
+     "ms": 41300,
+     "line": "2 fragments · applying",
+     "steps": [
+      {
+       "name": "load_dump",
+       "word": "native",
+       "state": "done",
+       "ms": 2,
+       "line": "{mode: intake, messages: 1}"
+      },
+      {
+       "name": "fragment",
+       "word": "call",
+       "state": "done",
+       "ms": 4100,
+       "line": "2 items",
+       "calls": [
+        0
+       ]
+      },
+      {
+       "name": "route",
+       "word": "call",
+       "state": "done",
+       "ms": 900,
+       "line": "both into X-1",
+       "calls": [
+        1
+       ]
+      },
+      {
+       "name": "apply",
+       "word": "call",
+       "state": "running",
+       "ms": 36000,
+       "line": "2 items",
+       "calls": [
+        2
+       ]
+      },
+      {
+       "name": "cascade",
+       "word": "native",
+       "state": "pending",
+       "ms": 0,
+       "line": ""
+      },
+      {
+       "name": "commit",
+       "word": "native",
+       "state": "pending",
+       "ms": 0,
+       "line": ""
+      }
+     ],
+     "children": [
+      {
+       "ripple": "fragment",
+       "kind": "type_two",
+       "state": "done",
+       "after_ms": 3,
+       "ms": 4100,
+       "line": "2 items",
+       "model": "sonnet",
+       "transcript": [
+        {
+         "role": "system",
+         "text": "Cut a dump into fragments: one thought each, its anchors kept."
+        },
+        {
+         "role": "user",
+         "text": "> [Q-3]\nLet's call them dumps, not batches.\n\nAnd no log on Overview."
+        },
+        {
+         "role": "assistant",
+         "text": "Two fragments:\n1. \"Let's call them dumps, not batches.\" — anchored on Q-3\n2. \"And no log on Overview.\" — no anchor"
+        }
+       ]
+      },
+      {
+       "ripple": "route",
+       "kind": "type_one",
+       "state": "done",
+       "after_ms": 4110,
+       "ms": 900,
+       "line": "both into X-1 · p 0.94",
+       "model": "haiku",
+       "input": "fragment 1: Let's call them dumps, not batches. [Q-3]\nfragment 2: And no log on Overview.",
+       "output": "fragment 1 → X-1 Cauldron (Q-3 is X-1's) · p 0.97\nfragment 2 → X-1 Cauldron (Overview is X-1's page) · p 0.91"
+      },
+      {
+       "ripple": "apply",
+       "kind": "shell",
+       "state": "running",
+       "after_ms": 5300,
+       "ms": 36000,
+       "line": "2 items · 1 written, 1 writing",
+       "steps": [
+        {
+         "name": "fan_out",
+         "word": "foreach",
+         "state": "running",
+         "ms": 36000,
+         "line": "×2 ∥4",
+         "calls": [
+          0,
+          1
+         ]
+        }
+       ],
+       "children": [
+        {
+         "ripple": "author",
+         "kind": "type_two",
+         "state": "done",
+         "after_ms": 5400,
+         "ms": 8200,
+         "line": "wrote the node for \"dumps, not batches\"",
+         "model": "sonnet",
+         "transcript": [
+          {
+           "role": "system",
+           "text": "You author ONE soup node from one fragment of a dump."
+          },
+          {
+           "role": "user",
+           "text": "Fragment: Let's call them dumps, not batches. (anchored on Q-3)"
+          },
+          {
+           "role": "tool",
+           "tool": "soup.read",
+           "text": "Q-3 · open · \"What do we call a sent bucket?\""
+          },
+          {
+           "role": "assistant",
+           "text": "Q-3 is answered by this fragment. I will close it with the word `dump` and record the decision."
+          },
+          {
+           "role": "tool",
+           "tool": "soup.write",
+           "text": "DEC-41 created · Q-3 closed by DEC-41"
+          },
+          {
+           "role": "assistant",
+           "text": "Done: DEC-41 \"A sent bucket is a dump, never a batch\"."
+          }
+         ]
+        },
+        {
+         "ripple": "author",
+         "kind": "type_two",
+         "state": "running",
+         "after_ms": 5500,
+         "ms": 35800,
+         "line": "writing the node for \"no log on Overview\"",
+         "model": "sonnet",
+         "transcript": [
+          {
+           "role": "system",
+           "text": "You author ONE soup node from one fragment of a dump."
+          },
+          {
+           "role": "user",
+           "text": "Fragment: And no log on Overview."
+          },
+          {
+           "role": "tool",
+           "tool": "soup.read",
+           "text": "C-12 · Overview carries the cluster's log"
+          },
+          {
+           "role": "assistant",
+           "text": "This supersedes C-12. Drafting the superseding constraint now…"
+          }
+         ]
+        }
+       ]
+      }
+     ]
+    },
+    {
+     "ripple": "consequence",
+     "kind": "type_two",
+     "state": "done",
+     "after_ms": 1200,
+     "ms": 1100,
+     "line": "no consequence beyond X-1",
+     "model": "haiku",
+     "transcript": [
+      {
+       "role": "system",
+       "text": "Say what else a dump changes."
+      },
+      {
+       "role": "user",
+       "text": "Dump 11, two fragments, both on X-1."
+      },
+      {
+       "role": "assistant",
+       "text": "Nothing outside X-1 is touched."
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "seq": 10,
+   "at": "-5h",
+   "text": "The bucket's copy should sit away from its legend.\n\nAnd the top bar needs its tabs on the right.",
+   "ripples": [
+    {
+     "ripple": "dump",
+     "kind": "shell",
+     "state": "done",
+     "after_ms": 0,
+     "ms": 28400,
+     "line": "2 fragments · 2 nodes written",
+     "steps": [
+      {
+       "name": "load_dump",
+       "word": "native",
+       "state": "done",
+       "ms": 3,
+       "line": "{mode: intake, messages: 1}"
+      },
+      {
+       "name": "fragment",
+       "word": "call",
+       "state": "done",
+       "ms": 3800,
+       "line": "2 items",
+       "calls": [
+        0
+       ]
+      },
+      {
+       "name": "route",
+       "word": "call",
+       "state": "done",
+       "ms": 700,
+       "line": "both into X-2",
+       "calls": [
+        1
+       ]
+      },
+      {
+       "name": "apply",
+       "word": "call",
+       "state": "done",
+       "ms": 23000,
+       "line": "2 items",
+       "calls": [
+        2
+       ]
+      },
+      {
+       "name": "cascade",
+       "word": "native",
+       "state": "done",
+       "ms": 40,
+       "line": "1 task ready"
+      },
+      {
+       "name": "commit",
+       "word": "native",
+       "state": "done",
+       "ms": 12,
+       "line": "rev 412 → 414"
+      },
+      {
+       "name": "receipt",
+       "word": "native",
+       "state": "done",
+       "ms": 6,
+       "line": "said: 2 nodes on Interface"
+      }
+     ],
+     "children": [
+      {
+       "ripple": "fragment",
+       "kind": "type_two",
+       "state": "done",
+       "after_ms": 4,
+       "ms": 3800,
+       "line": "2 items",
+       "model": "sonnet",
+       "transcript": [
+        {
+         "role": "system",
+         "text": "Cut a dump into fragments."
+        },
+        {
+         "role": "user",
+         "text": "The bucket's copy should sit away from its legend.\n\nAnd the top bar needs its tabs on the right."
+        },
+        {
+         "role": "assistant",
+         "text": "Two fragments, neither anchored."
+        }
+       ]
+      },
+      {
+       "ripple": "route",
+       "kind": "type_one",
+       "state": "done",
+       "after_ms": 3810,
+       "ms": 700,
+       "line": "both into X-2 · p 0.88",
+       "model": "haiku",
+       "input": "fragment 1: the bucket's copy ...\nfragment 2: the top bar's tabs ...",
+       "output": "fragment 1 → X-2 Interface · p 0.90\nfragment 2 → X-2 Interface · p 0.86"
+      },
+      {
+       "ripple": "apply",
+       "kind": "shell",
+       "state": "done",
+       "after_ms": 4520,
+       "ms": 23000,
+       "line": "2 items · 2 written",
+       "steps": [
+        {
+         "name": "fan_out",
+         "word": "foreach",
+         "state": "done",
+         "ms": 23000,
+         "line": "×2 ∥4",
+         "calls": [
+          0,
+          1
+         ]
+        },
+        {
+         "name": "check",
+         "word": "branch",
+         "state": "done",
+         "ms": 30,
+         "line": "both valid"
+        }
+       ],
+       "children": [
+        {
+         "ripple": "author",
+         "kind": "type_two",
+         "state": "done",
+         "after_ms": 4600,
+         "ms": 11000,
+         "line": "DEC-38: the copy sits away from the legend",
+         "model": "sonnet",
+         "transcript": [
+          {
+           "role": "system",
+           "text": "Author one node."
+          },
+          {
+           "role": "user",
+           "text": "the bucket's copy should sit away from its legend"
+          },
+          {
+           "role": "assistant",
+           "text": "DEC-38 written."
+          }
+         ]
+        },
+        {
+         "ripple": "author_with_review",
+         "kind": "shell",
+         "state": "done",
+         "after_ms": 4610,
+         "ms": 22800,
+         "line": "DEC-39 written after one review",
+         "steps": [
+          {
+           "name": "draft",
+           "word": "call",
+           "state": "done",
+           "ms": 9000,
+           "line": "",
+           "calls": [
+            0
+           ]
+          },
+          {
+           "name": "review",
+           "word": "call",
+           "state": "done",
+           "ms": 13000,
+           "line": "one change asked",
+           "calls": [
+            1
+           ]
+          },
+          {
+           "name": "settle",
+           "word": "native",
+           "state": "done",
+           "ms": 20,
+           "line": "accepted"
+          }
+         ],
+         "children": [
+          {
+           "ripple": "author",
+           "kind": "type_two",
+           "state": "done",
+           "after_ms": 4620,
+           "ms": 9000,
+           "line": "drafted DEC-39",
+           "model": "sonnet",
+           "transcript": [
+            {
+             "role": "system",
+             "text": "Author one node."
+            },
+            {
+             "role": "user",
+             "text": "the top bar needs its tabs on the right"
+            },
+            {
+             "role": "assistant",
+             "text": "Draft: DEC-39 \"tabs on the right of the top bar\"."
+            }
+           ]
+          },
+          {
+           "ripple": "reviewer",
+           "kind": "type_two",
+           "state": "done",
+           "after_ms": 13620,
+           "ms": 13000,
+           "line": "asked for the cite",
+           "model": "opus",
+           "transcript": [
+            {
+             "role": "system",
+             "text": "Review one drafted node."
+            },
+            {
+             "role": "user",
+             "text": "DEC-39 draft"
+            },
+            {
+             "role": "assistant",
+             "text": "Add the message cite; otherwise sound."
+            },
+            {
+             "role": "tool",
+             "tool": "soup.write",
+             "text": "DEC-39 rev 2: cite added"
+            }
+           ]
+          }
+         ]
+        }
+       ]
+      }
+     ]
+    },
+    {
+     "ripple": "curation",
+     "kind": "shell",
+     "state": "done",
+     "after_ms": 30000,
+     "ms": 9000,
+     "line": "3 edges drawn",
+     "steps": [
+      {
+       "name": "load_queue",
+       "word": "native",
+       "state": "done",
+       "ms": 4,
+       "line": "2 nodes"
+      },
+      {
+       "name": "edges",
+       "word": "call",
+       "state": "done",
+       "ms": 6000,
+       "line": "3 edges",
+       "calls": [
+        0
+       ]
+      },
+      {
+       "name": "value",
+       "word": "call",
+       "state": "done",
+       "ms": 2900,
+       "line": "",
+       "calls": [
+        1
+       ]
+      },
+      {
+       "name": "push_gate",
+       "word": "native",
+       "state": "done",
+       "ms": 3,
+       "line": "passed"
+      }
+     ],
+     "children": [
+      {
+       "ripple": "edge_drawer",
+       "kind": "type_two",
+       "state": "done",
+       "after_ms": 30010,
+       "ms": 6000,
+       "line": "3 edges",
+       "model": "sonnet",
+       "transcript": [
+        {
+         "role": "system",
+         "text": "Draw the edges two new nodes need."
+        },
+        {
+         "role": "user",
+         "text": "DEC-38, DEC-39"
+        },
+        {
+         "role": "assistant",
+         "text": "DEC-38 supersedes C-7; DEC-39 refines DEC-21; DEC-39 serves OBJ-1."
+        }
+       ]
+      },
+      {
+       "ripple": "valuer",
+       "kind": "type_one",
+       "state": "done",
+       "after_ms": 36020,
+       "ms": 2900,
+       "line": "worth 0.62",
+       "model": "haiku",
+       "input": "DEC-38 · DEC-39",
+       "output": "value 0.62 · above the push gate (0.5)"
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "seq": 9,
+   "at": "-1d",
+   "text": "> [T-5]\nThe voice echo should say the cluster's name, not its id.",
+   "ripples": [
+    {
+     "ripple": "dump",
+     "kind": "shell",
+     "state": "failed",
+     "after_ms": 0,
+     "ms": 6200,
+     "line": "stopped: the voice ripple failed",
+     "steps": [
+      {
+       "name": "load_dump",
+       "word": "native",
+       "state": "done",
+       "ms": 2,
+       "line": "{mode: intake, messages: 1}"
+      },
+      {
+       "name": "fragment",
+       "word": "call",
+       "state": "done",
+       "ms": 2100,
+       "line": "1 item",
+       "calls": [
+        0
+       ]
+      },
+      {
+       "name": "apply",
+       "word": "call",
+       "state": "done",
+       "ms": 3800,
+       "line": "1 written",
+       "calls": [
+        1
+       ]
+      },
+      {
+       "name": "echo",
+       "word": "call",
+       "state": "failed",
+       "ms": 300,
+       "line": "no voice device answered",
+       "calls": [
+        2
+       ]
+      },
+      {
+       "name": "commit",
+       "word": "native",
+       "state": "pending",
+       "ms": 0,
+       "line": ""
+      }
+     ],
+     "children": [
+      {
+       "ripple": "fragment",
+       "kind": "type_two",
+       "state": "done",
+       "after_ms": 3,
+       "ms": 2100,
+       "line": "1 item",
+       "model": "sonnet",
+       "transcript": [
+        {
+         "role": "system",
+         "text": "Cut a dump into fragments."
+        },
+        {
+         "role": "user",
+         "text": "> [T-5]\nThe voice echo should say the cluster's name, not its id."
+        },
+        {
+         "role": "assistant",
+         "text": "One fragment, anchored on T-5."
+        }
+       ]
+      },
+      {
+       "ripple": "author",
+       "kind": "type_two",
+       "state": "done",
+       "after_ms": 2110,
+       "ms": 3800,
+       "line": "C-19: the echo names the cluster",
+       "model": "sonnet",
+       "transcript": [
+        {
+         "role": "system",
+         "text": "Author one node."
+        },
+        {
+         "role": "user",
+         "text": "the voice echo should say the cluster's name"
+        },
+        {
+         "role": "tool",
+         "tool": "soup.write",
+         "text": "C-19 created, serves T-5"
+        },
+        {
+         "role": "assistant",
+         "text": "C-19 written."
+        }
+       ]
+      },
+      {
+       "ripple": "voice",
+       "kind": "type_one",
+       "state": "failed",
+       "after_ms": 5910,
+       "ms": 300,
+       "line": "no voice device answered",
+       "model": "haiku",
+       "input": "say: \"one node on Cauldron\"",
+       "output": "error: no device on the mesh plays audio (media-box offline)"
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "seq": 8,
+   "at": "-2d",
+   "text": "Make Tokens the first Status sub-tab.",
+   "ripples": [
+    {
+     "ripple": "dump",
+     "kind": "shell",
+     "state": "done",
+     "after_ms": 0,
+     "ms": 15100,
+     "line": "1 fragment · 1 node written",
+     "steps": [
+      {
+       "name": "load_dump",
+       "word": "native",
+       "state": "done",
+       "ms": 2,
+       "line": ""
+      },
+      {
+       "name": "fragment",
+       "word": "call",
+       "state": "done",
+       "ms": 1900,
+       "line": "1 item",
+       "calls": [
+        0
+       ]
+      },
+      {
+       "name": "apply",
+       "word": "call",
+       "state": "done",
+       "ms": 13000,
+       "line": "1 written",
+       "calls": [
+        1
+       ]
+      },
+      {
+       "name": "commit",
+       "word": "native",
+       "state": "done",
+       "ms": 10,
+       "line": "rev 398 → 399"
+      }
+     ],
+     "children": [
+      {
+       "ripple": "fragment",
+       "kind": "type_two",
+       "state": "done",
+       "after_ms": 3,
+       "ms": 1900,
+       "line": "1 item",
+       "model": "sonnet",
+       "transcript": [
+        {
+         "role": "system",
+         "text": "Cut a dump into fragments."
+        },
+        {
+         "role": "user",
+         "text": "Make Tokens the first Status sub-tab."
+        },
+        {
+         "role": "assistant",
+         "text": "One fragment."
+        }
+       ]
+      },
+      {
+       "ripple": "author",
+       "kind": "type_two",
+       "state": "done",
+       "after_ms": 1910,
+       "ms": 13000,
+       "line": "DEC-35: Tokens first",
+       "model": "sonnet",
+       "transcript": [
+        {
+         "role": "system",
+         "text": "Author one node."
+        },
+        {
+         "role": "user",
+         "text": "Make Tokens the first Status sub-tab."
+        },
+        {
+         "role": "assistant",
+         "text": "DEC-35 written."
+        }
+       ]
+      }
+     ]
+    }
+   ]
+  }
+ ]
+}

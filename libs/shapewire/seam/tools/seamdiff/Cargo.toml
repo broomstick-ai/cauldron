@@ -1,0 +1,26 @@
+# **NOT A WORKSPACE MEMBER, DELIBERATELY** — same empty `[workspace]` table as
+# `seam/` and `seam/probe/`. The guard is not part of the daemon.
+#
+# **NO DEPENDENCIES AT ALL, AND THAT IS A REQUIREMENT RATHER THAN A FLOURISH.**
+# `src/engine.rs` is `include!`-ed verbatim by each face's own
+# `tests/seam_reference.rs` in the consumer repo. A face must be able to compile
+# its own drift guard without adding a dev-dependency to do it, because a guard
+# that costs a manifest edit is a guard somebody skips. That is why the JSON
+# reading at the bottom of the engine is hand-rolled.
+[workspace]
+
+[package]
+name = "seamdiff"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[lib]
+name = "seamdiff"
+path = "src/lib.rs"
+
+[[bin]]
+name = "seamdiff"
+path = "src/main.rs"
+
+[dependencies]

@@ -1,0 +1,2429 @@
+{
+ "_note": "The DEFAULT ripple policy every environment starts with when it carries no own seed policy (REL-3.S2): the catalog's definitions and fragments, with every run, bus event, count, variant and fire cleared. Not seed data: the policy is what the ripples ARE; what they did is the environment's own.",
+ "policy": {
+  "policy": {
+   "name": "curator",
+   "version": "v0",
+   "live_since": "10-15"
+  },
+  "ripple": [
+   {
+    "id": "dump",
+    "kind": "shell",
+    "group": "user_input",
+    "job": "processes ONE dump: fragments it into spans and groups, applies each group in parallel as its own transaction, and says what landed — it updates the soup and does no work of its own",
+    "trigger": [
+     {
+      "match": "dump.received",
+      "enabled": true,
+      "fields": [
+       "dump",
+       "cluster",
+       "notes"
+      ],
+      "where": "true",
+      "bind": [
+       {
+        "slot": "dump",
+        "source": "event",
+        "path": "seq",
+        "required": true
+       },
+       {
+        "slot": "cluster",
+        "source": "event",
+        "path": "cluster",
+        "required": true
+       },
+       {
+        "slot": "mode",
+        "source": "literal",
+        "path": "\"dump\""
+       }
+      ],
+      "gather": "none",
+      "on_newer": "run_both",
+      "max_at_once": 4,
+      "per": "cluster"
+     }
+    ],
+    "entry": {
+     "native": "load_dump",
+     "as": "load"
+    },
+    "body": [
+     {
+      "call": "fragment",
+      "input": {
+       "dump": "load.dump"
+      },
+      "as": "frag"
+     },
+     {
+      "native": "validate_fragment",
+      "input": {
+       "fragment": "frag",
+       "repairs": "2",
+       "fallback": "one_group_per_note"
+      },
+      "as": "groups"
+     },
+     {
+      "foreach": "groups",
+      "parallel": true,
+      "max_parallel": 4,
+      "as": "done",
+      "body": [
+       {
+        "call": "apply",
+        "input": {
+         "group": "item"
+        },
+        "as": "g"
+       }
+      ]
+     }
+    ],
+    "exit": {
+     "native": "receipt",
+     "input": {
+      "mode": "load.mode",
+      "groups": "done"
+     }
+    },
+    "reach": {
+     "clusters": "related"
+    }
+   },
+   {
+    "id": "fragment",
+    "kind": "type_two",
+    "shell": "dump",
+    "role": "intake.splitter",
+    "job": "cuts a dump into SPANS by character offsets and groups the spans that interlock; it never quotes, never classifies and never writes (his two load-bearing principles, msg 165)",
+    "turn": {
+     "max_turns": 1,
+     "ends_on": "FRAGMENT",
+     "repairs": 2
+    },
+    "prompt": {
+     "fragment": "fragment",
+     "version": 1,
+     "slots": [
+      {
+       "slot": "dump",
+       "source": "step",
+       "path": "input.dump",
+       "required": true
+      }
+     ],
+     "renderer": "curator_render",
+     "budget_chars": 60000
+    },
+    "action_set": [
+     {
+      "name": "FRAGMENT",
+      "terminal": true,
+      "exclusive": true,
+      "actions": [
+       {
+        "name": "span",
+        "effect": "emit",
+        "params": [
+         {
+          "name": "id",
+          "ty": "text:8"
+         },
+         {
+          "name": "note",
+          "ty": "int:1..999"
+         },
+         {
+          "name": "start",
+          "ty": "int:0..1000000"
+         },
+         {
+          "name": "end",
+          "ty": "int:0..1000000"
+         }
+        ]
+       },
+       {
+        "name": "group",
+        "effect": "emit",
+        "params": [
+         {
+          "name": "id",
+          "ty": "text:8"
+         },
+         {
+          "name": "spans",
+          "ty": "list"
+         },
+         {
+          "name": "context",
+          "ty": "list",
+          "optional": true
+         },
+         {
+          "name": "anchors",
+          "ty": "list",
+          "optional": true
+         }
+        ]
+       }
+      ]
+     }
+    ],
+    "reach": {
+     "clusters": "this"
+    }
+   },
+   {
+    "id": "apply",
+    "kind": "shell",
+    "shell": "dump",
+    "job": "ONE group of a dump: its spans, its read-only context spans, its anchors in full and the index of the cluster it writes to; it writes through ONE transaction and calls nothing that does work",
+    "entry": {
+     "call": "context_for",
+     "input": {
+      "unit": "input.unit"
+     },
+     "as": "c"
+    },
+    "body": [
+     {
+      "branch": "c.route",
+      "cases": {
+       "to_adjudicate": [
+        {
+         "call": "adjudicate",
+         "input": {
+          "unit": "c.unit",
+          "context": "c.context",
+          "matches": "c.match.emit"
+         },
+         "as": "adj"
+        },
+        {
+         "native": "record_line",
+         "input": {
+          "unit": "c.unit",
+          "adj": "adj"
+         }
+        }
+       ],
+       "to_typed": [
+        {
+         "call": "typed_unit",
+         "input": {
+          "unit": "c.unit"
+         },
+         "as": "t"
+        }
+       ]
+      }
+     }
+    ],
+    "exit": {
+     "native": "commit",
+     "input": {
+      "group": "input.group"
+     }
+    }
+   },
+   {
+    "id": "context_for",
+    "kind": "shell",
+    "shell": "dump",
+    "job": "finds what a unit touches: opens, selects, matches, and gates it",
+    "entry": {
+     "call": "open_context",
+     "input": {
+      "unit": "input.unit"
+     },
+     "as": "ctx"
+    },
+    "body": [
+     {
+      "call": "select_context",
+      "input": {
+       "unit": "input.unit",
+       "nodes": "ctx.nodes"
+      },
+      "as": "sc"
+     },
+     {
+      "native": "select",
+      "input": {
+       "sel": "sc"
+      },
+      "as": "sel"
+     },
+     {
+      "native": "match_candidates",
+      "input": {
+       "context": "sel.context"
+      },
+      "as": "mc"
+     },
+     {
+      "call": "match_existing",
+      "input": {
+       "candidates": "mc"
+      },
+      "as": "mt"
+     },
+     {
+      "call": "judgment_gate",
+      "input": {
+       "unit": "input.unit",
+       "matches": "mt.emit"
+      },
+      "as": "gate"
+     }
+    ],
+    "exit": {
+     "native": "pack",
+     "input": {
+      "route": "gate.emit.route.0.value"
+     }
+    }
+   },
+   {
+    "id": "open_context",
+    "kind": "shell",
+    "shell": "dump",
+    "job": "opens regions, then nodes, then edges, one tier at a time",
+    "entry": {
+     "native": "top_tier",
+     "input": {
+      "unit": "input.unit"
+     },
+     "as": "tt"
+    },
+    "body": [
+     {
+      "call": "open_region",
+      "input": {
+       "top_tier": "tt"
+      },
+      "as": "reg"
+     },
+     {
+      "native": "members_of_opened_regions",
+      "input": {
+       "opened": "reg.opened"
+      },
+      "as": "mem"
+     },
+     {
+      "call": "open_node",
+      "input": {
+       "candidates": "mem"
+      },
+      "as": "nod"
+     },
+     {
+      "native": "follow_candidates",
+      "input": {
+       "a": "reg.opened",
+       "b": "nod.opened"
+      },
+      "as": "fc"
+     },
+     {
+      "call": "follow_edge",
+      "input": {
+       "candidates": "fc"
+      },
+      "as": "fol"
+     }
+    ],
+    "exit": {
+     "native": "opened_nodes",
+     "input": {
+      "a": "reg.opened",
+      "b": "nod.opened",
+      "c": "fol.opened"
+     }
+    }
+   },
+   {
+    "id": "open_region",
+    "kind": "type_one",
+    "job": "should this region be open, given what is open already",
+    "role": "intake.router",
+    "walk": {
+     "over": "input.top_tier",
+     "mode": "batched",
+     "expand": "children_of_opened",
+     "until": "fixpoint",
+     "max_passes": 6
+    },
+    "questions": [
+     {
+      "key": "open",
+      "type": "yes_no",
+      "template_id": "curator.open_region.v0",
+      "instructions": "q_open_region",
+      "criteria": [
+       {
+        "answer": "true",
+        "text": "open it: it may bear on the unit"
+       },
+       {
+        "answer": "false",
+        "text": "leave it closed"
+       }
+      ]
+     }
+    ],
+    "map": [
+     {
+      "key": "open",
+      "answer": "true",
+      "min_p": 0.2,
+      "set": "LOOK",
+      "name": "open",
+      "args": {
+       "node_id": "$item.id"
+      }
+     }
+    ],
+    "prompt": {
+     "fragment": "q_open_region",
+     "version": 1,
+     "renderer": "curator_render",
+     "budget_chars": 24000
+    },
+    "action_set": [
+     {
+      "name": "LOOK",
+      "terminal": false,
+      "exclusive": false,
+      "actions": [
+       {
+        "name": "open",
+        "effect": "read",
+        "params": [
+         {
+          "name": "node_id",
+          "ty": "node_id"
+         }
+        ]
+       }
+      ]
+     }
+    ],
+    "shell": "open_context"
+   },
+   {
+    "id": "open_node",
+    "kind": "type_one",
+    "job": "read this node's body",
+    "role": "intake.router",
+    "walk": {
+     "over": "input.candidates",
+     "mode": "batched",
+     "expand": "",
+     "until": "once",
+     "max_passes": 1
+    },
+    "questions": [
+     {
+      "key": "open",
+      "type": "yes_no",
+      "template_id": "curator.open_node.v0",
+      "instructions": "q_open_node",
+      "criteria": [
+       {
+        "answer": "true",
+        "text": "read its body"
+       },
+       {
+        "answer": "false",
+        "text": "skip it"
+       }
+      ]
+     }
+    ],
+    "map": [
+     {
+      "key": "open",
+      "answer": "true",
+      "min_p": 0.2,
+      "set": "LOOK",
+      "name": "open",
+      "args": {
+       "node_id": "$item.id"
+      }
+     }
+    ],
+    "prompt": {
+     "fragment": "q_open_node",
+     "version": 1,
+     "renderer": "curator_render",
+     "budget_chars": 24000
+    },
+    "action_set": [
+     {
+      "name": "LOOK",
+      "terminal": false,
+      "exclusive": false,
+      "actions": [
+       {
+        "name": "open",
+        "effect": "read",
+        "params": [
+         {
+          "name": "node_id",
+          "ty": "node_id"
+         }
+        ]
+       }
+      ]
+     }
+    ],
+    "shell": "open_context"
+   },
+   {
+    "id": "follow_edge",
+    "kind": "type_one",
+    "job": "follow this edge and read what it reaches",
+    "role": "intake.router",
+    "walk": {
+     "over": "input.candidates",
+     "mode": "batched",
+     "expand": "",
+     "until": "once",
+     "max_passes": 1
+    },
+    "questions": [
+     {
+      "key": "follow",
+      "type": "yes_no",
+      "template_id": "curator.follow_edge.v0",
+      "instructions": "q_follow_edge",
+      "criteria": [
+       {
+        "answer": "true",
+        "text": "follow the edge and read the target"
+       },
+       {
+        "answer": "false",
+        "text": "do not follow"
+       }
+      ]
+     }
+    ],
+    "map": [
+     {
+      "key": "follow",
+      "answer": "true",
+      "min_p": 0.3,
+      "set": "LOOK",
+      "name": "open",
+      "args": {
+       "node_id": "$item.id"
+      }
+     }
+    ],
+    "prompt": {
+     "fragment": "q_follow_edge",
+     "version": 1,
+     "renderer": "curator_render",
+     "budget_chars": 24000
+    },
+    "action_set": [
+     {
+      "name": "LOOK",
+      "terminal": false,
+      "exclusive": false,
+      "actions": [
+       {
+        "name": "open",
+        "effect": "read",
+        "params": [
+         {
+          "name": "node_id",
+          "ty": "node_id"
+         }
+        ]
+       }
+      ]
+     }
+    ],
+    "shell": "open_context"
+   },
+   {
+    "id": "select_context",
+    "kind": "type_one",
+    "job": "how much of each opened node to keep: full · summary · handle · drop",
+    "role": "intake.router",
+    "walk": {
+     "over": "input.briefs",
+     "mode": "batched",
+     "expand": "",
+     "until": "once",
+     "max_passes": 1
+    },
+    "questions": [
+     {
+      "key": "depth",
+      "type": "score",
+      "template_id": "curator.select_context.v0",
+      "instructions": "q_select_context",
+      "criteria": [
+       {
+        "answer": "drop",
+        "text": "leave it out"
+       },
+       {
+        "answer": "handle",
+        "text": "its one line"
+       },
+       {
+        "answer": "summary",
+        "text": "its summary"
+       },
+       {
+        "answer": "full",
+        "text": "its whole body"
+       }
+      ]
+     }
+    ],
+    "map": [],
+    "prompt": {
+     "fragment": "q_select_context",
+     "version": 1,
+     "renderer": "curator_render",
+     "budget_chars": 30000
+    },
+    "action_set": [
+     {
+      "name": "ASK",
+      "terminal": false,
+      "exclusive": false,
+      "actions": [
+       {
+        "name": "asked",
+        "effect": "emit",
+        "params": []
+       }
+      ]
+     }
+    ],
+    "shell": "dump",
+    "default": {
+     "set": "ASK",
+     "name": "asked"
+    }
+   },
+   {
+    "id": "match_existing",
+    "kind": "type_one",
+    "job": "is the unit the same thing as this node",
+    "role": "intake.resolver",
+    "walk": {
+     "over": "input.candidates",
+     "mode": "batched",
+     "expand": "",
+     "until": "once",
+     "max_passes": 1
+    },
+    "questions": [
+     {
+      "key": "same",
+      "type": "yes_no",
+      "template_id": "curator.match_existing.v0",
+      "instructions": "q_match_existing",
+      "criteria": [
+       {
+        "answer": "true",
+        "text": "the unit restates this node"
+       },
+       {
+        "answer": "false",
+        "text": "the unit says something this node does not"
+       }
+      ]
+     }
+    ],
+    "map": [
+     {
+      "key": "same",
+      "answer": "true",
+      "min_p": 0.5,
+      "set": "MATCH",
+      "name": "same",
+      "args": {
+       "node_id": "$item.id"
+      }
+     }
+    ],
+    "prompt": {
+     "fragment": "q_match_existing",
+     "version": 1,
+     "renderer": "curator_render",
+     "budget_chars": 24000
+    },
+    "action_set": [
+     {
+      "name": "MATCH",
+      "terminal": false,
+      "exclusive": false,
+      "actions": [
+       {
+        "name": "same",
+        "effect": "emit",
+        "params": [
+         {
+          "name": "node_id",
+          "ty": "node_id"
+         }
+        ]
+       }
+      ]
+     }
+    ],
+    "shell": "dump"
+   },
+   {
+    "id": "judgment_gate",
+    "kind": "type_one",
+    "job": "does disposing of the unit need judgment",
+    "role": "intake.router",
+    "walk": {
+     "over": "",
+     "mode": "sequential",
+     "expand": "",
+     "until": "once",
+     "max_passes": 1
+    },
+    "questions": [
+     {
+      "key": "judgment",
+      "type": "yes_no",
+      "template_id": "curator.judgment_gate.v0",
+      "instructions": "q_judgment_gate",
+      "criteria": [
+       {
+        "answer": "true",
+        "text": "judgment is required"
+       },
+       {
+        "answer": "false",
+        "text": "a typed disposition suffices"
+       }
+      ]
+     }
+    ],
+    "map": [
+     {
+      "key": "judgment",
+      "answer": "true",
+      "min_p": 0.25,
+      "set": "ROUTE",
+      "name": "route",
+      "args": {
+       "value": "to_adjudicate"
+      }
+     }
+    ],
+    "prompt": {
+     "fragment": "q_judgment_gate",
+     "version": 1,
+     "renderer": "curator_render",
+     "budget_chars": 24000
+    },
+    "action_set": [
+     {
+      "name": "ROUTE",
+      "terminal": false,
+      "exclusive": false,
+      "actions": [
+       {
+        "name": "route",
+        "effect": "emit",
+        "params": [
+         {
+          "name": "value",
+          "ty": "enum:to_adjudicate|to_typed"
+         }
+        ]
+       }
+      ]
+     }
+    ],
+    "shell": "dump",
+    "default": {
+     "set": "ROUTE",
+     "name": "route",
+     "args": {
+      "value": "to_typed"
+     }
+    }
+   },
+   {
+    "id": "adjudicate",
+    "kind": "type_two",
+    "shell": "dump",
+    "role": "writer",
+    "job": "closes, retracts, supersedes or pins an existing node, and does exactly one of them",
+    "turn": {
+     "max_turns": 4,
+     "ends_on": "DISPOSE",
+     "repairs": 2
+    },
+    "prompt": {
+     "fragment": "adjudicate",
+     "version": 3,
+     "pins": {
+      "curator/judgment-frame": "2"
+     },
+     "slots": [
+      {
+       "slot": "unit",
+       "source": "step",
+       "path": "c.unit",
+       "required": true
+      },
+      {
+       "slot": "context",
+       "source": "step",
+       "path": "c.context",
+       "required": true
+      },
+      {
+       "slot": "matches",
+       "source": "step",
+       "path": "c.match.emit",
+       "required": true
+      },
+      {
+       "slot": "cite",
+       "source": "event",
+       "path": "msg.ref"
+      }
+     ],
+     "renderer": "curator_render",
+     "budget_chars": 60000
+    },
+    "action_set": [
+     {
+      "name": "LOOK",
+      "terminal": false,
+      "exclusive": false,
+      "actions": [
+       {
+        "name": "open",
+        "effect": "read",
+        "params": [
+         {
+          "name": "node_id",
+          "ty": "node_id"
+         }
+        ]
+       },
+       {
+        "name": "read_msg",
+        "effect": "read",
+        "params": [
+         {
+          "name": "msg_ref",
+          "ty": "msg_ref"
+         }
+        ]
+       }
+      ]
+     },
+     {
+      "name": "DISPOSE",
+      "terminal": true,
+      "exclusive": true,
+      "actions": [
+       {
+        "name": "close",
+        "effect": "write",
+        "params": [
+         {
+          "name": "node_id",
+          "ty": "node_id"
+         },
+         {
+          "name": "to_state",
+          "ty": "enum:27"
+         },
+         {
+          "name": "resolved_by",
+          "ty": "node_id",
+          "optional": true
+         },
+         {
+          "name": "cite",
+          "ty": "msg_ref",
+          "optional": true
+         }
+        ]
+       },
+       {
+        "name": "retract",
+        "effect": "write",
+        "params": [
+         {
+          "name": "node_id",
+          "ty": "node_id"
+         },
+         {
+          "name": "clauses",
+          "ty": "text:2000"
+         },
+         {
+          "name": "cite",
+          "ty": "msg_ref",
+          "optional": true
+         }
+        ]
+       },
+       {
+        "name": "supersede",
+        "effect": "write",
+        "params": [
+         {
+          "name": "old",
+          "ty": "node_id"
+         },
+         {
+          "name": "new_from_item",
+          "ty": "bool"
+         },
+         {
+          "name": "cite",
+          "ty": "msg_ref",
+          "optional": true
+         }
+        ]
+       },
+       {
+        "name": "pin",
+        "effect": "write",
+        "sets_flags": [
+         "pin"
+        ],
+        "params": [
+         {
+          "name": "node_id",
+          "ty": "node_id"
+         },
+         {
+          "name": "cite",
+          "ty": "msg_ref",
+          "optional": true
+         }
+        ]
+       },
+       {
+        "name": "no_change",
+        "effect": "emit",
+        "params": [
+         {
+          "name": "reason",
+          "ty": "enum:already_reflected|not_actionable|needs_operator"
+         }
+        ]
+       }
+      ]
+     }
+    ],
+    "flag_scope": [
+     "pin",
+     "meta.blocking",
+     "meta.stop"
+    ],
+    "reach": {
+     "clusters": "related"
+    }
+   },
+   {
+    "id": "typed_unit",
+    "kind": "shell",
+    "shell": "dump",
+    "job": "a unit no judgment is needed for: typed, written, linked",
+    "entry": {
+     "call": "classify",
+     "input": {
+      "unit": "input.unit"
+     },
+     "as": "cls"
+    },
+    "body": [
+     {
+      "native": "argmax",
+      "input": {
+       "q": "cls"
+      },
+      "as": "pick"
+     },
+     {
+      "branch": "pick.disposition",
+      "cases": {
+       "new_content": [
+        {
+         "call": "author",
+         "input": {
+          "unit": "input.unit",
+          "type": "pick.type"
+         },
+         "as": "auth"
+        },
+        {
+         "native": "link_candidates",
+         "input": {
+          "unit": "input.unit"
+         },
+         "as": "lc"
+        },
+        {
+         "call": "link",
+         "input": {
+          "candidates": "lc"
+         },
+         "as": "lk"
+        }
+       ],
+       "context_only": [
+        {
+         "native": "no_write_line",
+         "input": {
+          "unit": "input.unit"
+         }
+        }
+       ]
+      },
+      "else": [
+       {
+        "native": "duplicate_line",
+        "input": {
+         "unit": "input.unit"
+        }
+       }
+      ]
+     }
+    ],
+    "exit": {
+     "native": "pack",
+     "input": {
+      "unit": "input.unit"
+     }
+    }
+   },
+   {
+    "id": "classify",
+    "kind": "type_one",
+    "job": "new content · authorizes work · context only · duplicate; and the type",
+    "role": "intake.router",
+    "walk": {
+     "over": "",
+     "mode": "sequential",
+     "expand": "",
+     "until": "once",
+     "max_passes": 1
+    },
+    "questions": [
+     {
+      "key": "disposition",
+      "type": "choice",
+      "template_id": "curator.classify.disposition.v0",
+      "instructions": "q_classify_disposition",
+      "criteria": [
+       {
+        "answer": "new_content",
+        "text": "new content that deserves its own node"
+       },
+       {
+        "answer": "authorizes_work",
+        "text": "it authorizes or asks for work to be done"
+       },
+       {
+        "answer": "context_only",
+        "text": "context that changes nothing on the board"
+       },
+       {
+        "answer": "duplicate_of_existing",
+        "text": "it restates what an existing node already says"
+       }
+      ]
+     }
+    ],
+    "map": [],
+    "prompt": {
+     "fragment": "q_classify_disposition",
+     "version": 1,
+     "renderer": "curator_render",
+     "budget_chars": 24000
+    },
+    "action_set": [
+     {
+      "name": "ASK",
+      "terminal": false,
+      "exclusive": false,
+      "actions": [
+       {
+        "name": "asked",
+        "effect": "emit",
+        "params": []
+       }
+      ]
+     }
+    ],
+    "shell": "dump",
+    "default": {
+     "set": "ASK",
+     "name": "asked"
+    }
+   },
+   {
+    "id": "author",
+    "kind": "type_two",
+    "shell": "dump",
+    "role": "writer",
+    "job": "writes the new node: handle, body, summary, cite",
+    "turn": {
+     "max_turns": 3,
+     "ends_on": "WRITE",
+     "repairs": 2
+    },
+    "prompt": {
+     "fragment": "author",
+     "version": 3,
+     "slots": [
+      {
+       "slot": "unit",
+       "source": "step",
+       "path": "input.unit",
+       "required": true
+      },
+      {
+       "slot": "type",
+       "source": "step",
+       "path": "input.type",
+       "required": true
+      }
+     ],
+     "renderer": "curator_render",
+     "budget_chars": 40000
+    },
+    "action_set": [
+     {
+      "name": "WRITE",
+      "terminal": true,
+      "exclusive": true,
+      "actions": [
+       {
+        "name": "create",
+        "effect": "write",
+        "params": [
+         {
+          "name": "handle",
+          "ty": "text:200"
+         },
+         {
+          "name": "body",
+          "ty": "text:4000"
+         },
+         {
+          "name": "summary",
+          "ty": "text:400"
+         },
+         {
+          "name": "cite",
+          "ty": "msg_ref",
+          "optional": true
+         }
+        ]
+       }
+      ]
+     }
+    ],
+    "reach": {
+     "clusters": "related"
+    }
+   },
+   {
+    "id": "link",
+    "kind": "type_one",
+    "job": "draw this edge from the new node",
+    "role": "intake.router",
+    "walk": {
+     "over": "input.candidates",
+     "mode": "batched",
+     "expand": "",
+     "until": "once",
+     "max_passes": 1
+    },
+    "questions": [
+     {
+      "key": "edge",
+      "type": "yes_no",
+      "template_id": "curator.link.v0",
+      "instructions": "q_link",
+      "criteria": [
+       {
+        "answer": "true",
+        "text": "draw the edge"
+       },
+       {
+        "answer": "false",
+        "text": "leave it undrawn"
+       }
+      ]
+     }
+    ],
+    "map": [
+     {
+      "key": "edge",
+      "answer": "true",
+      "min_p": 0.5,
+      "set": "EDGE",
+      "name": "draw",
+      "args": {
+       "to": "$item.id"
+      }
+     }
+    ],
+    "prompt": {
+     "fragment": "q_link",
+     "version": 1,
+     "renderer": "curator_render",
+     "budget_chars": 24000
+    },
+    "action_set": [
+     {
+      "name": "EDGE",
+      "terminal": false,
+      "exclusive": false,
+      "actions": [
+       {
+        "name": "draw",
+        "effect": "write",
+        "params": [
+         {
+          "name": "to",
+          "ty": "node_id"
+         }
+        ]
+       }
+      ]
+     }
+    ],
+    "shell": "dump"
+   },
+   {
+    "id": "consequence",
+    "kind": "type_two",
+    "group": "transaction_committed",
+    "role": "consequence",
+    "job": "invalidates questions, files violations, unblocks tasks the commit touched",
+    "trigger": [
+     {
+      "match": "transaction_committed",
+      "enabled": true,
+      "fields": [
+       "nodes"
+      ],
+      "bind": [
+       {
+        "slot": "commit",
+        "source": "event",
+        "path": "commit",
+        "required": true
+       }
+      ],
+      "on_newer": "queue",
+      "max_at_once": 1,
+      "per": "cauldron"
+     }
+    ],
+    "turn": {
+     "max_turns": 3,
+     "ends_on": "DONE",
+     "repairs": 2
+    },
+    "prompt": {
+     "fragment": "consequence",
+     "version": 1,
+     "slots": [
+      {
+       "slot": "commit",
+       "source": "event",
+       "path": "commit",
+       "required": true
+      }
+     ],
+     "renderer": "curator_render",
+     "budget_chars": 30000
+    },
+    "action_set": [
+     {
+      "name": "ACT",
+      "terminal": false,
+      "exclusive": false,
+      "actions": [
+       {
+        "name": "invalidate",
+        "effect": "write",
+        "params": [
+         {
+          "name": "node_id",
+          "ty": "node_id"
+         }
+        ]
+       },
+       {
+        "name": "file_violation",
+        "effect": "write",
+        "params": [
+         {
+          "name": "node_id",
+          "ty": "node_id"
+         },
+         {
+          "name": "why",
+          "ty": "text:400"
+         }
+        ]
+       },
+       {
+        "name": "unblock",
+        "effect": "write",
+        "params": [
+         {
+          "name": "node_id",
+          "ty": "node_id"
+         }
+        ]
+       }
+      ]
+     },
+     {
+      "name": "DONE",
+      "terminal": true,
+      "exclusive": true,
+      "actions": [
+       {
+        "name": "done",
+        "effect": "emit",
+        "params": []
+       }
+      ]
+     }
+    ],
+    "flag_scope": [
+     "meta.blocking"
+    ]
+   },
+   {
+    "id": "curation",
+    "kind": "shell",
+    "group": "transaction_committed",
+    "job": "re-ranks what needs his attention",
+    "trigger": [
+     {
+      "match": "transaction_committed",
+      "enabled": true,
+      "on_newer": "coalesce",
+      "max_at_once": 1,
+      "per": "cluster"
+     },
+     {
+      "match": "schedule",
+      "enabled": true,
+      "schedule": "idle 10m",
+      "misfire": "skip"
+     }
+    ],
+    "entry": {
+     "native": "load_queue",
+     "as": "q"
+    },
+    "body": [
+     {
+      "call": "edge_drawer",
+      "input": {
+       "questions": "q.questions"
+      },
+      "as": "ed"
+     },
+     {
+      "call": "valuer",
+      "input": {
+       "questions": "q.questions"
+      },
+      "as": "val"
+     },
+     {
+      "native": "scorer",
+      "input": {
+       "v": "val"
+      },
+      "as": "sc"
+     }
+    ],
+    "exit": {
+     "native": "push_gate",
+     "input": {
+      "scores": "sc"
+     }
+    }
+   },
+   {
+    "id": "edge_drawer",
+    "kind": "type_two",
+    "shell": "curation",
+    "role": "curation.edge_drawer",
+    "job": "draws conditions and supersedes edges between questions",
+    "turn": {
+     "max_turns": 3,
+     "ends_on": "DONE",
+     "repairs": 2
+    },
+    "prompt": {
+     "fragment": "edge_drawer",
+     "version": 1,
+     "slots": [
+      {
+       "slot": "questions",
+       "source": "step",
+       "path": "input.questions",
+       "required": true
+      }
+     ],
+     "renderer": "curator_render",
+     "budget_chars": 30000
+    },
+    "action_set": [
+     {
+      "name": "EDGE",
+      "terminal": false,
+      "exclusive": false,
+      "actions": [
+       {
+        "name": "conditions",
+        "effect": "write",
+        "params": [
+         {
+          "name": "from",
+          "ty": "node_id"
+         },
+         {
+          "name": "to",
+          "ty": "node_id"
+         }
+        ]
+       },
+       {
+        "name": "supersedes",
+        "effect": "write",
+        "params": [
+         {
+          "name": "from",
+          "ty": "node_id"
+         },
+         {
+          "name": "to",
+          "ty": "node_id"
+         }
+        ]
+       }
+      ]
+     },
+     {
+      "name": "DONE",
+      "terminal": true,
+      "exclusive": true,
+      "actions": [
+       {
+        "name": "done",
+        "effect": "emit",
+        "params": []
+       }
+      ]
+     }
+    ]
+   },
+   {
+    "id": "valuer",
+    "kind": "type_two",
+    "shell": "curation",
+    "role": "curation.valuer",
+    "job": "ASK · CONFIRM · DECIDE-AND-RECORD, cached per question revision",
+    "turn": {
+     "max_turns": 2,
+     "ends_on": "VALUE",
+     "repairs": 2
+    },
+    "prompt": {
+     "fragment": "valuer",
+     "version": 1,
+     "slots": [
+      {
+       "slot": "questions",
+       "source": "step",
+       "path": "input.questions",
+       "required": true
+      }
+     ],
+     "renderer": "curator_render",
+     "budget_chars": 30000
+    },
+    "action_set": [
+     {
+      "name": "VALUE",
+      "terminal": true,
+      "exclusive": true,
+      "actions": [
+       {
+        "name": "value",
+        "effect": "emit",
+        "params": [
+         {
+          "name": "node_id",
+          "ty": "node_id"
+         },
+         {
+          "name": "verdict",
+          "ty": "enum:ask|confirm|decide_and_record"
+         },
+         {
+          "name": "value",
+          "ty": "int:0..100"
+         }
+        ]
+       }
+      ]
+     }
+    ]
+   },
+   {
+    "id": "voice",
+    "kind": "type_two",
+    "group": "transaction_committed",
+    "role": "voice",
+    "job": "reads the living state top-down and speaks the ids",
+    "trigger": [
+     {
+      "match": "cluster_opened",
+      "enabled": true,
+      "bind": [
+       {
+        "slot": "cluster",
+        "source": "event",
+        "path": "cluster",
+        "required": true
+       }
+      ],
+      "on_newer": "stop_restart",
+      "max_at_once": 1,
+      "per": "cauldron"
+     },
+     {
+      "match": "push",
+      "enabled": true,
+      "bind": [
+       {
+        "slot": "cluster",
+        "source": "event",
+        "path": "cluster",
+        "required": true
+       }
+      ],
+      "on_newer": "queue",
+      "max_at_once": 1,
+      "per": "cauldron"
+     }
+    ],
+    "turn": {
+     "max_turns": 2,
+     "ends_on": "SAY",
+     "repairs": 1
+    },
+    "prompt": {
+     "fragment": "voice",
+     "version": 1,
+     "slots": [
+      {
+       "slot": "cluster",
+       "source": "event",
+       "path": "cluster",
+       "required": true
+      }
+     ],
+     "renderer": "curator_render",
+     "budget_chars": 20000
+    },
+    "action_set": [
+     {
+      "name": "SAY",
+      "terminal": true,
+      "exclusive": true,
+      "actions": [
+       {
+        "name": "say",
+        "effect": "emit",
+        "params": [
+         {
+          "name": "text",
+          "ty": "text:1200"
+         }
+        ]
+       }
+      ]
+     }
+    ],
+    "reach": {
+     "clusters": "this"
+    }
+   },
+   {
+    "id": "proposals",
+    "kind": "shell",
+    "group": "report_landed",
+    "job": "disposes a worker report's proposals onto the cluster",
+    "trigger": [
+     {
+      "match": "report_landed",
+      "enabled": true,
+      "fields": [
+       "nodes_proposed"
+      ],
+      "bind": [
+       {
+        "slot": "report",
+        "source": "event",
+        "path": "path",
+        "required": true
+       }
+      ],
+      "on_newer": "queue",
+      "max_at_once": 1,
+      "per": "cluster"
+     }
+    ],
+    "entry": {
+     "native": "load_fold_after",
+     "as": "load"
+    },
+    "body": [
+     {
+      "foreach": "load.units",
+      "parallel": true,
+      "max_parallel": 4,
+      "as": "done",
+      "body": [
+       {
+        "call": "proposal_unit",
+        "input": {
+         "unit": "item"
+        },
+        "as": "u"
+       }
+      ]
+     },
+     {
+      "native": "cascade",
+      "as": "cas"
+     },
+     {
+      "native": "commit",
+      "input": {
+       "mode": "load.mode"
+      },
+      "as": "cm"
+     }
+    ],
+    "exit": {
+     "native": "receipt",
+     "input": {
+      "commit": "cm"
+     }
+    }
+   },
+   {
+    "id": "proposal_unit",
+    "kind": "shell",
+    "shell": "proposals",
+    "job": "one proposal: its context, then judged or disposed",
+    "entry": {
+     "call": "context_for",
+     "input": {
+      "unit": "input.unit"
+     },
+     "as": "c"
+    },
+    "body": [
+     {
+      "branch": "c.route",
+      "cases": {
+       "to_adjudicate": [
+        {
+         "call": "adjudicate",
+         "input": {
+          "unit": "c.unit"
+         },
+         "as": "adj"
+        }
+       ],
+       "to_typed": [
+        {
+         "call": "proposal_disposition",
+         "input": {
+          "unit": "c.unit"
+         },
+         "as": "pd"
+        },
+        {
+         "native": "argmax",
+         "input": {
+          "q": "pd"
+         },
+         "as": "pick"
+        },
+        {
+         "native": "dispose_proposal",
+         "input": {
+          "pick": "pick"
+         }
+        }
+       ]
+      }
+     }
+    ],
+    "exit": {
+     "native": "pack",
+     "input": {
+      "unit": "input.unit"
+     }
+    }
+   },
+   {
+    "id": "proposal_disposition",
+    "kind": "type_one",
+    "job": "accept · merge · refuse · needs judgment",
+    "role": "intake.router",
+    "walk": {
+     "over": "",
+     "mode": "sequential",
+     "expand": "",
+     "until": "once",
+     "max_passes": 1
+    },
+    "questions": [
+     {
+      "key": "disposition",
+      "type": "choice",
+      "template_id": "curator.proposal_disposition.v0",
+      "instructions": "q_proposal_disposition",
+      "criteria": [
+       {
+        "answer": "accept",
+        "text": "take it as proposed"
+       },
+       {
+        "answer": "merge",
+        "text": "it belongs in an existing node"
+       },
+       {
+        "answer": "refuse",
+        "text": "it is not his or not true"
+       },
+       {
+        "answer": "needs_judgment",
+        "text": "a type two must decide"
+       }
+      ]
+     }
+    ],
+    "map": [],
+    "prompt": {
+     "fragment": "q_proposal_disposition",
+     "version": 1,
+     "renderer": "curator_render",
+     "budget_chars": 24000
+    },
+    "action_set": [
+     {
+      "name": "ASK",
+      "terminal": false,
+      "exclusive": false,
+      "actions": [
+       {
+        "name": "asked",
+        "effect": "emit",
+        "params": []
+       }
+      ]
+     }
+    ],
+    "shell": "proposals",
+    "default": {
+     "set": "ASK",
+     "name": "asked"
+    }
+   },
+   {
+    "id": "task",
+    "kind": "shell",
+    "group": "report_landed",
+    "job": "a task run: worktree, worker, inspector, triage, route",
+    "trigger": [
+     {
+      "match": "ripple.call",
+      "enabled": true,
+      "where": "event.caller = engine",
+      "bind": [
+       {
+        "slot": "task",
+        "source": "event",
+        "path": "task",
+        "required": true
+       }
+      ],
+      "on_newer": "queue",
+      "max_at_once": 4,
+      "per": "cauldron"
+     }
+    ],
+    "entry": {
+     "native": "cut_worktree",
+     "input": {
+      "task": "input.task"
+     },
+     "as": "wt"
+    },
+    "body": [
+     {
+      "call": "worker",
+      "input": {
+       "task": "input.task",
+       "worktree": "wt"
+      },
+      "as": "w"
+     },
+     {
+      "call": "inspector",
+      "input": {
+       "diff": "w.diff"
+      },
+      "as": "ins"
+     },
+     {
+      "foreach": "ins.flags",
+      "parallel": true,
+      "max_parallel": 4,
+      "as": "fl",
+      "body": [
+       {
+        "call": "flag_triage",
+        "input": {
+         "flag": "item"
+        },
+        "as": "ft"
+       }
+      ]
+     }
+    ],
+    "exit": {
+     "native": "route",
+     "input": {
+      "flags": "fl"
+     }
+    }
+   },
+   {
+    "id": "worker",
+    "kind": "type_two",
+    "shell": "task",
+    "role": "builder",
+    "job": "builds the task",
+    "turn": {
+     "max_turns": 200,
+     "ends_on": "REPORT",
+     "repairs": 2
+    },
+    "prompt": {
+     "fragment": "worker",
+     "version": 1,
+     "slots": [
+      {
+       "slot": "task",
+       "source": "step",
+       "path": "input.task",
+       "required": true
+      },
+      {
+       "slot": "worktree",
+       "source": "step",
+       "path": "input.worktree",
+       "required": true
+      }
+     ],
+     "renderer": "task_render",
+     "budget_chars": 80000
+    },
+    "action_set": [
+     {
+      "name": "WORK",
+      "terminal": false,
+      "exclusive": false,
+      "actions": [
+       {
+        "name": "edit",
+        "effect": "write",
+        "params": [
+         {
+          "name": "path",
+          "ty": "text:400"
+         },
+         {
+          "name": "patch",
+          "ty": "text:20000"
+         }
+        ]
+       },
+       {
+        "name": "run",
+        "effect": "call",
+        "blocking": true,
+        "params": [
+         {
+          "name": "command",
+          "ty": "text:2000"
+         }
+        ]
+       }
+      ]
+     },
+     {
+      "name": "REPORT",
+      "terminal": true,
+      "exclusive": true,
+      "actions": [
+       {
+        "name": "report",
+        "effect": "emit",
+        "params": [
+         {
+          "name": "front_matter",
+          "ty": "text:8000"
+         }
+        ]
+       }
+      ]
+     }
+    ],
+    "reach": {
+     "clusters": "this",
+     "repos": [
+      "cauldron"
+     ]
+    }
+   },
+   {
+    "id": "inspector",
+    "kind": "type_two",
+    "shell": "task",
+    "role": "builder",
+    "job": "reads the diff and flags what is wrong with it",
+    "turn": {
+     "max_turns": 6,
+     "ends_on": "FLAGS",
+     "repairs": 2
+    },
+    "prompt": {
+     "fragment": "inspector",
+     "version": 1,
+     "slots": [
+      {
+       "slot": "diff",
+       "source": "step",
+       "path": "input.diff",
+       "required": true
+      }
+     ],
+     "renderer": "task_render",
+     "budget_chars": 60000
+    },
+    "action_set": [
+     {
+      "name": "FLAGS",
+      "terminal": true,
+      "exclusive": true,
+      "actions": [
+       {
+        "name": "flag",
+        "effect": "emit",
+        "params": [
+         {
+          "name": "line",
+          "ty": "text:400"
+         },
+         {
+          "name": "severity",
+          "ty": "enum:low|high"
+         }
+        ]
+       }
+      ]
+     }
+    ]
+   },
+   {
+    "id": "flag_triage",
+    "kind": "type_one",
+    "job": "is this flag genuine",
+    "role": "intake.router",
+    "walk": {
+     "over": "",
+     "mode": "sequential",
+     "expand": "",
+     "until": "once",
+     "max_passes": 1
+    },
+    "questions": [
+     {
+      "key": "genuine",
+      "type": "yes_no",
+      "template_id": "task.flag_triage.v0",
+      "instructions": "q_flag_triage",
+      "criteria": [
+       {
+        "answer": "true",
+        "text": "a real defect the worker must fix"
+       },
+       {
+        "answer": "false",
+        "text": "noise: drop it"
+       }
+      ]
+     }
+    ],
+    "map": [
+     {
+      "key": "genuine",
+      "answer": "true",
+      "min_p": 0.5,
+      "set": "ROUTE",
+      "name": "back_to_worker"
+     }
+    ],
+    "prompt": {
+     "fragment": "q_flag_triage",
+     "version": 1,
+     "renderer": "curator_render",
+     "budget_chars": 24000
+    },
+    "action_set": [
+     {
+      "name": "ROUTE",
+      "terminal": false,
+      "exclusive": false,
+      "actions": [
+       {
+        "name": "back_to_worker",
+        "effect": "emit",
+        "params": []
+       }
+      ]
+     }
+    ],
+    "shell": "task"
+   },
+   {
+    "id": "seed_cluster",
+    "kind": "type_one",
+    "job": "finds what in the soup falls inside a new cluster's boundaries and claims or links it",
+    "role": "intake.router",
+    "walk": {
+     "over": "input.candidates",
+     "mode": "batched",
+     "expand": "",
+     "until": "once",
+     "max_passes": 1
+    },
+    "questions": [
+     {
+      "key": "inside",
+      "type": "yes_no",
+      "template_id": "cluster.seed.inside.v0",
+      "instructions": "q_seed_inside",
+      "criteria": [
+       {
+        "answer": "true",
+        "text": "it falls inside the boundaries he stated"
+       },
+       {
+        "answer": "false",
+        "text": "it falls outside them"
+       }
+      ]
+     }
+    ],
+    "map": [
+     {
+      "key": "inside",
+      "answer": "true",
+      "min_p": 0.5,
+      "set": "CLAIM",
+      "name": "claim_region",
+      "args": {
+       "region_id": "$item.id"
+      },
+      "item_kind": "region"
+     },
+     {
+      "key": "inside",
+      "answer": "true",
+      "min_p": 0.5,
+      "set": "CLAIM",
+      "name": "claim_repo",
+      "args": {
+       "repo": "$item.id"
+      },
+      "item_kind": "repo"
+     },
+     {
+      "key": "inside",
+      "answer": "true",
+      "min_p": 0.75,
+      "set": "LINK",
+      "name": "link_node",
+      "args": {
+       "node_id": "$item.id"
+      },
+      "item_kind": "node"
+     }
+    ],
+    "prompt": {
+     "fragment": "q_seed_inside",
+     "version": 1,
+     "renderer": "curator_render",
+     "budget_chars": 30000
+    },
+    "action_set": [
+     {
+      "name": "CLAIM",
+      "terminal": false,
+      "exclusive": false,
+      "actions": [
+       {
+        "name": "claim_region",
+        "effect": "write",
+        "params": [
+         {
+          "name": "region_id",
+          "ty": "node_id"
+         }
+        ]
+       },
+       {
+        "name": "claim_repo",
+        "effect": "write",
+        "params": [
+         {
+          "name": "repo",
+          "ty": "enum:repos"
+         }
+        ]
+       }
+      ]
+     },
+     {
+      "name": "LINK",
+      "terminal": false,
+      "exclusive": false,
+      "actions": [
+       {
+        "name": "link_node",
+        "effect": "write",
+        "params": [
+         {
+          "name": "node_id",
+          "ty": "node_id"
+         }
+        ]
+       }
+      ]
+     }
+    ],
+    "group": "cluster_created",
+    "trigger": [
+     {
+      "match": "cluster_created",
+      "enabled": true,
+      "fields": [
+       "boundaries"
+      ],
+      "bind": [
+       {
+        "slot": "boundaries",
+        "source": "event",
+        "path": "boundaries",
+        "required": true
+       },
+       {
+        "slot": "parent",
+        "source": "event",
+        "path": "parent"
+       }
+      ],
+      "on_newer": "queue",
+      "max_at_once": 1,
+      "per": "cluster",
+      "max_invocations": 1
+     }
+    ],
+    "reach": {
+     "clusters": "all"
+    },
+    "model": {
+     "trusted": "secondary"
+    }
+   },
+   {
+    "id": "reflex",
+    "kind": "type_one",
+    "job": "one question on a matched event: nothing · call a ripple · wake a type two · block",
+    "role": "intake.router",
+    "walk": {
+     "over": "",
+     "mode": "sequential",
+     "expand": "",
+     "until": "once",
+     "max_passes": 1
+    },
+    "questions": [
+     {
+      "key": "act",
+      "type": "yes_no",
+      "template_id": "reflex.v0",
+      "instructions": "q_reflex",
+      "criteria": [
+       {
+        "answer": "true",
+        "text": "this event needs more than nothing"
+       },
+       {
+        "answer": "false",
+        "text": "let it pass"
+       }
+      ]
+     }
+    ],
+    "map": [
+     {
+      "key": "act",
+      "answer": "true",
+      "min_p": 0.6,
+      "set": "REFLEX",
+      "name": "call_ripple"
+     }
+    ],
+    "prompt": {
+     "fragment": "q_reflex",
+     "version": 1,
+     "renderer": "curator_render",
+     "budget_chars": 24000
+    },
+    "action_set": [
+     {
+      "name": "REFLEX",
+      "terminal": false,
+      "exclusive": false,
+      "actions": [
+       {
+        "name": "call_ripple",
+        "effect": "call",
+        "params": [
+         {
+          "name": "ripple",
+          "ty": "enum:ripples"
+         }
+        ]
+       },
+       {
+        "name": "block",
+        "effect": "emit",
+        "params": []
+       }
+      ]
+     }
+    ],
+    "group": "schedule",
+    "trigger": [
+     {
+      "match": "nag",
+      "enabled": false,
+      "on_newer": "coalesce",
+      "max_at_once": 1,
+      "per": "cauldron"
+     }
+    ]
+   }
+  ]
+ },
+ "fragments": {
+  "adjudicate": {
+   "1": "You are the judgment step of a workspace curator (protocol v3). An operator's UNIT (a message item, or a worker's proposal) was judged to require judgment: it may close, retract, supersede or pin an existing node, or choose between existing nodes.\n\nYou may LOOK first: `open` a node by id to read it, or `read_msg` to re-read one of this fold's operator messages. Then DISPOSE with exactly one terminal act (several acts of the same set are allowed in the one terminal turn):\n- close(node_id, to_state, resolved_by?, cite?): move a node to a closing state his words justify (a question he answered -> closed; an issue he says is fixed -> resolved; a task done -> done). `to_state` must be legal for the node's type.\n- retract(node_id, clauses, cite?): he withdrew or reversed what the node records; name the clauses withdrawn.\n- supersede(old, new_from_item, cite?): the unit replaces the old node.\n- pin(node_id, cite?): he explicitly asked for the node to stay in view, or explicitly deferred it.\n- no_change(reason): nothing on the board should change (already_reflected, not_actionable, needs_operator).\n\nLegal states by type (a `to_state` outside its node's list is refused): directive active|done|dropped; milestone pending|active|blocked|done|dropped; decision decided|revisited; constraint and note standing|retired; dragon lurking|being-slain|slain; question open|closed; idea idea|exploring|stub|active|done|dropped; issue and design_node open|resolved; task ready|depends-on|active|done; capability live|stubbed|parked|eliminated. A node shows as `[ID] type/state: handle`.\n\nAct only on what his words say. Never close something because it seems stale. Cite the unit's message ref when you have one.\n\nREPLY FORMAT. You have NO tools: do not call any tool, even one that appears to be available; nothing outside the action sets below is part of this task. Every reply is ONE JSON object `{\"actions\": [...]}` and nothing else: its first character is `{` and its last is `}`, with no prose, no apology and no code fence around it.\n",
+   "2": "You are the judgment step of a workspace curator (protocol v3). An operator's UNIT (a message item, or a worker's proposal) was judged to require judgment: it may close, retract, supersede or pin an existing node, or choose between existing nodes.\n\nYou may LOOK first: `open` a node by id to read it, or `read_msg` to re-read one of this fold's operator messages. Then DISPOSE with exactly one terminal act (several acts of the same set are allowed in the one terminal turn):\n- close(node_id, to_state, resolved_by?, cite?): move a node to a closing state his words justify (a question he answered -> closed; an issue he says is fixed -> resolved; a task done -> done). `to_state` must be legal for the node's type.\n- retract(node_id, clauses, cite?): he withdrew or reversed what the node records; name the clauses withdrawn.\n- supersede(old, new_from_item, cite?): the unit replaces the old node.\n- pin(node_id, cite?): he explicitly asked for the node to stay in view, or explicitly deferred it.\n- no_change(reason): nothing on the board should change (already_reflected, not_actionable, needs_operator).\n\nLegal states by type (a `to_state` outside its node's list is refused): directive active|done|dropped; milestone pending|active|blocked|done|dropped; decision decided|revisited; constraint and note standing|retired; dragon lurking|being-slain|slain; question open|closed; idea idea|exploring|stub|active|done|dropped; issue and design_node open|resolved; task ready|depends-on|active|done; capability live|stubbed|parked|eliminated. A node shows as `[ID] type/state: handle`.\n\nAct only on what his words say. Never close something because it seems stale. Cite the unit's message ref when you have one.\n\nREPLY FORMAT. You have NO tools: do not call any tool, even one that appears to be available; nothing outside the action sets below is part of this task. Every reply is ONE JSON object `{\"actions\": [...]}` and nothing else: its first character is `{` and its last is `}`, with no prose, no apology and no code fence around it.\n",
+   "3": "You are the judgment step of a workspace curator (protocol v3). An operator's {{slot:unit}} (a message item, or a worker's proposal) was judged to require judgment: it may close, retract, supersede or pin an existing node, or choose between existing nodes.\n\n{{prompt:curator/judgment-frame}}\n\nYou may LOOK first: `open` a node by id to read it, or `read_msg` to re-read one of this fold's operator messages. Then DISPOSE with exactly one terminal act (several acts of the same set are allowed in the one terminal turn):\n- close(node_id, to_state, resolved_by?, cite?): move a node to a closing state his words justify (a question he answered -> closed; an issue he says is fixed -> resolved; a task done -> done). `to_state` must be legal for the node's type.\n- retract(node_id, clauses, cite?): he withdrew or reversed what the node records; name the clauses withdrawn.\n- supersede(old, new_from_item, cite?): the unit replaces the old node.\n- pin(node_id, cite?): he explicitly asked for the node to stay in view, or explicitly deferred it.\n- no_change(reason): nothing on the board should change (already_reflected, not_actionable, needs_operator).\n\nLegal states by type (a `to_state` outside its node's list is refused): directive active|done|dropped; milestone pending|active|blocked|done|dropped; decision decided|revisited; constraint and note standing|retired; dragon lurking|being-slain|slain; question open|closed; idea idea|exploring|stub|active|done|dropped; issue and design_node open|resolved; task ready|depends-on|active|done; capability live|stubbed|parked|eliminated. A node shows as `[ID] type/state: handle`.\n\nAct only on what his words say. Never close something because it seems stale. Cite the unit's message ref when you have one.\n\nREPLY FORMAT. You have NO tools: do not call any tool, even one that appears to be available; nothing outside the action sets below is part of this task. Every reply is ONE JSON object `{\"actions\": [...]}` and nothing else: its first character is `{` and its last is `}`, with no prose, no apology and no code fence around it.\n\n\n{{prompt:soup/legal-states}}\n\nAct only on what his words say. Never close something because it seems stale. Cite {{slot:cite}} when you have one.\n\nCONTEXT: {{slot:context}}   MATCHES: {{slot:matches}}\n"
+  },
+  "curator/judgment-frame": {
+   "1": "You judge; you do not author. Every act you take is one the operator's words already decided.\n",
+   "2": "You judge; you do not author. Every act you take is one the operator's words already decided. When his words do not decide it, you take no act: emit no_change with needs_operator, and say in one line what he would have to say for the act to be decided. A close that is not his is the worst outcome here; a no_change that should have been a close costs one more turn of his attention and nothing else. Prefer the second, always.\n",
+   "3": "You judge; you do not author. (v3, unpinned draft) Every act you take is one his words decided.\n"
+  },
+  "soup/legal-states": {
+   "4": "A node's state is one of the legal states of its type. Questions: open, answered, retired. Tasks: ready, active, blocked, done. Decisions: active, superseded. Issues: open, closed. Pins: pinned, released.\n",
+   "5": "A node's state is one of the legal states of its type; moving it is a write the soup checks.\n\n- question: open → answered | retired\n- task: ready → active → done; any → blocked → ready\n- decision: active → superseded\n- issue: open → closed\n- dragon: live → slain\n- pin: pinned → released\n- idea: idea → exploring → stub → active → done | dropped\n\nA close names the state it moves to; a supersede names the node that replaces it. Anything else is refused by the pen, and a refused write costs a repair turn.\n"
+  },
+  "fragment": {
+   "1": "You cut ONE dump of an operator's into SPANS and GROUPS. Your context is the dump's text, its notes numbered, each chip replaced by its body, and one line per anchor: {{slot:dump}}.\n\nA span is a character range inside ONE note: `span(id, note, start, end)`, offsets within that note. Never quote: offsets only. Never classify. Never write.\n\nGroup the spans that interlock — each group is one ripple, so the number of groups IS the number of ripples:\n1. Same anchor, same group.\n2. A span that refers to another (a back-reference, 'scratch that', 'actually on Q-1') joins the group of what it refers to.\n3. Two spans that would write the same node join one group.\n4. A span that only qualifies how others are read is its OWN group, listed as `context` on the groups it qualifies; context is read-only.\n5. Otherwise one group per note; a note holding two unrelated thoughts is two spans in two groups.\n6. Above the cap, merge the smallest adjacent groups.\n\nFiller may be left outside every span. Every note has at least one span; every span belongs to exactly one group. Your reply is checked mechanically; a violation is repaired at most twice, then every note becomes its own group.\n"
+  },
+  "author": {
+   "1": "You write ONE new workspace node (protocol v3) for an operator's UNIT. Its type and starting state were already decided; use them exactly.\n\nCall `node` once, with:\n- pid: the PROVISIONAL ID given in the input, exactly;\n- cite: the unit's CITE ref, exactly (omit it only if none is given);\n- type, state: exactly as given in the input;\n- handle: the one-line claim, present tense, readable standing alone, at most 235 characters;\n- body: what he said and what it means for the work, faithful to his words (keep his hedges; quote him where the wording matters); no invention;\n- summary: only when the body is long enough that the handle under-serves;\n- meta_blocking: true only if he said the work must stop until this is settled.\n\nREPLY FORMAT. You have NO tools: do not call any tool, even one that appears to be available; nothing outside the action sets below is part of this task. Every reply is ONE JSON object `{\"actions\": [...]}` and nothing else: its first character is `{` and its last is `}`, with no prose, no apology and no code fence around it.\n",
+   "2": "You write ONE new workspace node (protocol v3) for an operator's UNIT. Its type and starting state were already decided; use them exactly.\n\nCall `node` once, with:\n- pid: the PROVISIONAL ID given in the input, exactly;\n- cite: the unit's CITE ref, exactly (omit it only if none is given);\n- type, state: exactly as given in the input;\n- handle: the one-line claim, present tense, readable standing alone, at most 235 characters;\n- body: what he said and what it means for the work, faithful to his words (keep his hedges; quote him where the wording matters); no invention;\n- summary: only when the body is long enough that the handle under-serves;\n- meta_blocking: true only if he said the work must stop until this is settled.\n\nREPLY FORMAT. You have NO tools: do not call any tool, even one that appears to be available; nothing outside the action sets below is part of this task. Every reply is ONE JSON object `{\"actions\": [...]}` and nothing else: its first character is `{` and its last is `}`, with no prose, no apology and no code fence around it.\n",
+   "3": "You write ONE new workspace node (protocol v3) for an operator's UNIT. Its type and starting state were already decided; use them exactly.\n\nCall `node` once, with:\n- pid: the PROVISIONAL ID given in the input, exactly;\n- cite: the unit's CITE ref, exactly (omit it only if none is given);\n- type, state: exactly as given in the input;\n- handle: the one-line claim, present tense, readable standing alone, at most 235 characters;\n- body: what he said and what it means for the work, faithful to his words (keep his hedges; quote him where the wording matters); no invention;\n- summary: only when the body is long enough that the handle under-serves;\n- meta_blocking: true only if he said the work must stop until this is settled.\n\nREPLY FORMAT. You have NO tools: do not call any tool, even one that appears to be available; nothing outside the action sets below is part of this task. Every reply is ONE JSON object `{\"actions\": [...]}` and nothing else: its first character is `{` and its last is `}`, with no prose, no apology and no code fence around it.\n\n\nThe unit: {{slot:unit}}\nThe node's type: {{slot:type}}\n",
+   "4": "You write ONE new workspace node (protocol v3) for an operator's UNIT. Its type and starting state were already decided; use them exactly.\n\nCall `node` once, with:\n- pid: the PROVISIONAL ID given in the input, exactly;\n- cite: the unit's CITE ref, exactly (omit it only if none is given);\n- type, state: exactly as given in the input;\n- handle: the one-line claim, present tense, readable standing alone, at most 235 characters;\n- body: what he said and what it means for the work, faithful to his words (keep his hedges; quote him where the wording matters); no invention;\n- summary: only when the body is long enough that the handle under-serves;\n- meta_blocking: true only if he said the work must stop until this is settled.\n\nREPLY FORMAT. You have NO tools: do not call any tool, even one that appears to be available; nothing outside the action sets below is part of this task. Every reply is ONE JSON object `{\"actions\": [...]}` and nothing else: its first character is `{` and its last is `}`, with no prose, no apology and no code fence around it.\n\n\nWrite the handle as one present-tense claim that stands alone. The unit: {{slot:unit}}\nThe node's type: {{slot:type}}\n"
+  },
+  "q_open_region": {
+   "1": "Decide whether this cluster entry (a node, or a cluster of nodes) should be OPENED to dispose of the UNIT: read in full so the curator can see what it says.\n\nOpen it when it could plausibly be the node the unit restates, answers, closes, contradicts, supersedes, depends on or relates to, or when it is a cluster whose members could be. The threshold is deliberately low: opening a node that turns out irrelevant costs little, while missing the node the unit is about causes a wrong write. Leave it closed only when it plainly has nothing to do with the unit.\n"
+  },
+  "q_open_node": {
+   "1": "This node is a member of a cluster that was opened for the UNIT. Decide whether its body should be read to dispose of the unit. Read it when it could be the node the unit restates, answers, closes, supersedes or relates to; skip it only when it plainly has nothing to do with the unit.\n"
+  },
+  "q_follow_edge": {
+   "1": "This node is the target of an edge from a node already opened for the UNIT (the `via` line shows the edge). Decide whether to follow the edge and read the target. Follow it when the target could matter to how the unit is disposed of (for example the task a decision blocks, the question an answer resolves, or the node a new statement supersedes).\n"
+  },
+  "q_select_context": {
+   "1": "Decide how much of this opened node the NEXT decisions about the UNIT need to see:\n0 drop: irrelevant to the unit;\n1 handle: only its one-line claim matters;\n2 summary: its summary matters, not its body;\n3 full: its body matters (the unit may restate, answer, close, contradict or supersede it).\n"
+  },
+  "q_match_existing": {
+   "1": "Decide whether the UNIT restates this existing node: says substantially the same thing, so that folding the unit would add nothing new to the board beyond what the node already records. A unit that adds a new fact, a new decision, a changed state or a new instruction about the node does NOT merely restate it.\n"
+  },
+  "q_judgment_gate": {
+   "1": "Decide whether disposing of the UNIT requires JUDGMENT: closing, retracting, superseding, or choosing between existing nodes (for example: his answer closes an open question; he withdraws or reverses an earlier decision or directive; he says a problem is fixed; he pins or explicitly defers something). A unit that only adds new content, authorizes new work, or is context that changes nothing does not need judgment.\n"
+  },
+  "q_classify_disposition": {
+   "1": "Classify how the UNIT should be disposed of on the board:\n- new_content: it states something the board does not yet hold and that deserves its own node (a directive, decision, constraint, problem, question, idea, risk, milestone or note);\n- authorizes_work: it authorizes or asks for work to be done (a task, a round of work, an investigation);\n- context_only: it is conversational or background context that changes nothing on the board (acknowledgements, commands such as /compact, thinking aloud);\n- duplicate_of_existing: an existing node already says it.\n"
+  },
+  "q_link": {
+   "1": "A new node is being written for the UNIT. Choose the edge, if any, from the NEW node to this existing node: none when they are unrelated. Use depends_on when the new node cannot proceed until this one is done, blocks when the new node holds this one up, answered_by / resolved_by / supersedes when the new node is answered, resolved or superseded by this node, and relates for a plain topical link.\n"
+  },
+  "q_proposal_disposition": {
+   "1": "A worker's report PROPOSES a node write (the UNIT). Decide how the fold-after pass disposes of the proposal:\n- accept_new: accept it as a new node;\n- accept_as_update_of_existing: it is really an update of an existing node (its own id, or the matched node): apply it there;\n- duplicate_drop: an existing node already says it; drop it;\n- reject_out_of_scope: it does not belong on this workspace's board.\n"
+  },
+  "q_flag_triage": {
+   "1": "An inspector flagged a line of the worker's diff. Is it a real defect the worker must fix before the task can be called done?\n\nFLAG: {{slot:flag}}\n"
+  },
+  "q_seed_inside": {
+   "1": "He made a new cluster and said, in his own words, what belongs in it:\n\n{{slot:boundaries}}\n\nIs the item below inside those boundaries — would he expect to find it on that cluster the moment it opens? A region, a repo, an open question or a task. Answer true only when his words reach it.\n\nITEM: {{slot:item}}\n"
+  },
+  "q_reflex": {
+   "1": "An event matched this reflex's pattern. Does it need more than nothing — a ripple called, a type two woken, or a block?\n\nEVENT: {{slot:event}}\n"
+  },
+  "consequence": {
+   "1": "A transaction just committed. Read what it changed and act on its consequences, and only those: a question its answer invalidates, a violation it introduces, a task it unblocks. Then DONE.\n\nCOMMIT: {{slot:commit}}\n"
+  },
+  "edge_drawer": {
+   "1": "Draw the edges between these open questions: one conditions another when its answer decides the other; one supersedes another when it asks the same thing better.\n\nQUESTIONS: {{slot:questions}}\n"
+  },
+  "valuer": {
+   "1": "For each question, say whether he must be ASKED, only asked to CONFIRM a recommendation, or whether the answer can be DECIDED AND RECORDED without him; and its value to him now, 0-100.\n\nQUESTIONS: {{slot:questions}}\n"
+  },
+  "voice": {
+   "1": "Read the living state of {{slot:cluster}} from the top down and say what he needs to hear first, by id, in one beat per item.\n"
+  },
+  "worker": {
+   "1": "Build the task in the worktree you were given. Report in the front matter, not the prose.\n\nTASK: {{slot:task}}\nWORKTREE: {{slot:worktree}}\n"
+  },
+  "inspector": {
+   "1": "Read the diff. Flag every line that is wrong, with its severity. Flag nothing that is a matter of taste.\n\nDIFF: {{slot:diff}}\n"
+  }
+ },
+ "backtest": {
+  "score": 0.0,
+  "runs": 0,
+  "from": "",
+  "to": "",
+  "split": "dev 70% · holdout 30%",
+  "promote_when": "CI > 0 on dev, then holdout"
+ },
+ "variants": [],
+ "events": [
+  {
+   "class": "dump.received",
+   "today": 0
+  },
+  {
+   "class": "dump.fragmented",
+   "today": 0
+  },
+  {
+   "class": "dump.processed",
+   "today": 0
+  },
+  {
+   "class": "dump.group_failed",
+   "today": 0
+  },
+  {
+   "class": "transaction_committed",
+   "today": 0
+  },
+  {
+   "class": "report_landed",
+   "today": 0
+  },
+  {
+   "class": "cluster_created",
+   "today": 0
+  },
+  {
+   "class": "cluster_opened",
+   "today": 0
+  },
+  {
+   "class": "push",
+   "today": 0
+  },
+  {
+   "class": "schedule",
+   "today": 0
+  },
+  {
+   "class": "ripple.return",
+   "today": 0
+  },
+  {
+   "class": "external_arrival",
+   "today": 0
+  },
+  {
+   "class": "nag",
+   "today": 0
+  }
+ ],
+ "bus": [],
+ "stats": {},
+ "runs": [],
+ "week": {
+  "today": 0,
+  "week": 0,
+  "cost_today": 0.0,
+  "cost_week": 0.0,
+  "failed_today": 0,
+  "yesterday": 0
+ }
+}

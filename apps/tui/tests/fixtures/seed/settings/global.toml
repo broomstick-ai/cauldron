@@ -1,0 +1,63 @@
+# Seed of the GLOBAL settings (8e4fca10 msg 186, msg 235): what every
+# cauldron of the root shares — the token sources (Claude Code accounts,
+# Codex) and the defaults they inherit, the inference endpoints (design 0199),
+# the machine, the mesh and its services, permissions and identity, the TUI. Read in place of
+# <root>/data/shared/tui/settings.toml until that file exists. (The 80%
+# weekly threshold on claude_code is a real DEFAULT, settings.rs ENV_DEFAULTS.)
+
+[pools.claude_code.accounts.sam-broomstick]
+share = 50
+
+[pools.claude_code.accounts.acct2]
+share = 30
+
+[pools.claude_code.accounts.acct3]
+share = 20
+enabled = false
+note = "out of the pool, 3d ago · card expired"
+
+# The inference endpoints every cauldron sees (design 0199 §1), on FAKE
+# keys. A global file that has never minted an endpoint id takes these once
+# (settings.rs `Settings::open`); ep-6 is prod's own (prod.toml).
+[endpoints]
+last_id = 6
+
+[endpoints.ep-1]
+template = "openrouter"
+name = "jev"
+key = "sk-or-v1-FAKE0000000000000000000000000000c81e"
+management_key = "sk-or-v1-FAKEMGMT000000000000000000000004f9c"
+models = "explicit"
+model_list = ["anthropic/claude-sonnet-4.5"]
+budget_usd = 100
+max_concurrent = 4
+
+[endpoints.ep-2]
+template = "openrouter"
+name = "general"
+key = "sk-or-v1-FAKE0000000000000000000000000000a7d2"
+budget_usd = 50
+
+[endpoints.ep-3]
+template = "anthropic"
+key = "sk_ant_api03-FAKE000000000000000000000000000093b1"
+budget_usd = 200
+
+[endpoints.ep-4]
+template = "gemini"
+key = "AIzaFAKE00000000000000000000000000005e0c"
+budget_usd = 20
+budget_period = "weekly"
+enabled = false
+
+[endpoints.ep-5]
+template = "local"
+server = "ollama"
+name = "studio-box"
+url = "http://198.51.100.5:11434/v1"
+
+[supervisor]
+auto_restart = true
+
+[identity]
+live_login = "claude_code/sam-broomstick"

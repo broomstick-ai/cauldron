@@ -1,0 +1,65 @@
+[package]
+name = "tui-render"
+version.workspace = true
+edition.workspace = true
+description = "The PURE render layer of the terminal face. (ViewState, now, width, height) -> Vec<Line>. No clock, no socket, no terminal, no filesystem — and the dependency list below is the FIRST of the three mechanisms that enforce that (0023 `architecture`)."
+
+# Moved, not path-depended (R7.S1a). See PROVENANCE.md; `scripts/drift-check`
+# reads this block.
+[package.metadata.provenance]
+source_repo = "~/code/harness"
+source_paths = ["apps/tui/render", "apps/tui/conformance_target.sh", "apps/tui/conformance_mirror.sh"]
+source_sha = "883204b42c440bae3e9eccd0fc2c00a482d6a79f"
+extracted = "2026-10-14"
+
+# ─────────────────────────────────────────────────────────────────────────────
+#  THIS LIST IS A GATE, NOT A CONVENIENCE.
+#
+#  It is also the reason this is a CRATE and not a module inside `apps/tui`.
+#  Rust only lets a crate `use` its DIRECT dependencies, so anything absent
+#  here cannot be named in this crate's source at all — a stray `use tokio::…`
+#  or `use std::fs` is a compile error, not a review finding. A module boundary
+#  inside the shell would have enforced nothing: the shell's own manifest would
+#  have supplied every one of them.
+#
+#  Specifically absent, each for a reason:
+#    tokio / tokio-tungstenite / futures-util  — the socket lives in the shell
+#    crossterm / any terminal backend          — this crate never draws
+#    dirs / rusqlite / any storage             — this crate never reads disk
+#    once_cell / lazy_static                   — no lazily-initialised globals,
+#                                                which is how an import-time
+#                                                side effect sneaks back in
+#    tracing                                   — logging is an I/O act
+#
+#  `chrono` supplies the TYPE of the `now` parameter. It also exposes
+#  `Utc::now()`, which Cargo cannot selectively forbid — that gap is exactly
+#  what `clippy.toml` in this directory exists to close (mechanism 2).
+#
+#  Carried forward from `libs/tui-view` as a PATTERN and never as a dependency:
+#  that crate's `aui-state` dep is the retired v2 wire's vocabulary, and taking
+#  it here would re-import the decoy stack `0023` was written to leave behind.
+# ─────────────────────────────────────────────────────────────────────────────
+[dependencies]
+# Line / Span / Style are plain data structures. default-features = false drops
+# the crossterm backend, so no terminal machinery enters this crate's graph.
+ratatui = { workspace = true }
+chrono = { workspace = true }
+# A lookup table, nothing more: correct display widths for the crop/pad rule.
+unicode-width = "0.1"
+# THE SECOND lookup table, and the composer's whole reason to be correct. It is
+# the only crate that speaks EXTENDED GRAPHEME CLUSTERS, which is the unit a
+# cursor must move in: a ZWJ family emoji is one cluster, three `char`s and
+# twenty-five bytes, and a cursor that counts either of the other two lands
+# inside the glyph. Pure data, no clock, no I/O — it belongs on this list for
+# exactly the reason `unicode-width` does.
+unicode-segmentation = "1"
+
+[dev-dependencies]
+# Property tests over the composer model (`tests/compose_props.rs`). A
+# DEV-dependency, so it is absent from the crate's own dependency graph and the
+# purity gate's `[dependencies]` reading is unaffected — the gate reads that
+# section and this is not in it.
+proptest = "1"
+
+[lints.rust]
+unsafe_code = "forbid"

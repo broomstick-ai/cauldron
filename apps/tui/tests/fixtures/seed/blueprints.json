@@ -1,0 +1,4253 @@
+{
+  "_note": "FAKE DATA \u2014 the prod cauldron's registered repos and their blueprints. Node grammar is core:blueprint's (prefix-slug-8hex ids); every number is invented.",
+  "repos": [
+    {
+      "name": "harness",
+      "path": "/Users/demo/code/harness",
+      "branch": "main",
+      "head": "8299dcc1",
+      "worktrees": [],
+      "registered_at": "2026-09-22T21:12:28Z",
+      "blueprint": {
+        "schema_version": 1,
+        "adopted": "2026-08-22",
+        "nodes": [
+          {
+            "id": "MOD-apps-1a9e0c44",
+            "type": "module",
+            "state": "adopted",
+            "handle": "Container for the applications: the two faces and the CLI.",
+            "meta": {
+              "definitions": 10,
+              "linked": 6
+            }
+          },
+          {
+            "id": "MOD-tui-4f1c9a02",
+            "type": "module",
+            "state": "locked",
+            "built": true,
+            "handle": "The operator's terminal face: the transcript, composer, queue and subagents.",
+            "part_of": "MOD-apps-1a9e0c44",
+            "edges": [
+              {
+                "kind": "owns",
+                "to": "R-draft-store-5b2d8e01"
+              },
+              {
+                "kind": "owns",
+                "to": "R-key-table-9e44b7c3"
+              },
+              {
+                "kind": "owns",
+                "to": "SCH-frame-2f8a6d10"
+              },
+              {
+                "kind": "owns",
+                "to": "SCH-app-state-6b1f9e24"
+              },
+              {
+                "kind": "owns",
+                "to": "SCH-draft-9c2a5f17"
+              },
+              {
+                "kind": "owns",
+                "to": "SCH-input-id-4f8d2a63"
+              },
+              {
+                "kind": "owns",
+                "to": "SCH-dump-args-e1c7b350"
+              },
+              {
+                "kind": "emits",
+                "to": "EV-frame-rendered-5c2a8e13"
+              }
+            ],
+            "meta": {
+              "definitions": 212,
+              "linked": 203,
+              "built_for": "MIG-cluster-face-keys-c3e0a1f4"
+            }
+          },
+          {
+            "id": "IF-tui-0d7e55a1",
+            "type": "interface",
+            "state": "locked",
+            "built": true,
+            "handle": "The one way into the face: a key table, a renderer, a send, a headless dump.",
+            "edges": [
+              {
+                "kind": "fronts",
+                "to": "MOD-tui-4f1c9a02"
+              }
+            ],
+            "meta": {
+              "ops": [
+                {
+                  "slug": "keys",
+                  "purpose": "the bound key table; a key not in it is not bound",
+                  "constructor": true,
+                  "in": [
+                    "SCH-key-event-3a7e1c59"
+                  ],
+                  "out": [
+                    "SCH-action-9d4b2f80"
+                  ],
+                  "err": [
+                    "unbound-key"
+                  ]
+                },
+                {
+                  "slug": "render",
+                  "purpose": "one frame from one state, for the terminal or for --dump",
+                  "in": [
+                    "SCH-app-state-6b1f9e24"
+                  ],
+                  "out": [
+                    "SCH-frame-2f8a6d10"
+                  ],
+                  "err": [
+                    "frame-too-small"
+                  ]
+                },
+                {
+                  "slug": "send",
+                  "purpose": "commit the draft as one input; tags are scanned, never rewritten",
+                  "in": [
+                    "SCH-draft-9c2a5f17"
+                  ],
+                  "out": [
+                    "SCH-input-id-4f8d2a63"
+                  ],
+                  "err": [
+                    "empty-draft",
+                    "unknown-tag"
+                  ]
+                },
+                {
+                  "slug": "dump",
+                  "purpose": "render one frame headlessly and print it; writes nothing",
+                  "in": [
+                    "SCH-dump-args-e1c7b350"
+                  ],
+                  "out": [
+                    "text"
+                  ],
+                  "err": []
+                }
+              ]
+            }
+          },
+          {
+            "id": "R-draft-store-5b2d8e01",
+            "type": "resource",
+            "state": "adopted",
+            "handle": "the composer's draft, saved per environment",
+            "meta": {}
+          },
+          {
+            "id": "R-key-table-9e44b7c3",
+            "type": "resource",
+            "state": "adopted",
+            "handle": "BINDINGS, the one key table every face copies",
+            "meta": {}
+          },
+          {
+            "id": "SCH-frame-2f8a6d10",
+            "type": "schema",
+            "state": "adopted",
+            "handle": "one rendered frame: rows, selection, caret",
+            "meta": {}
+          },
+          {
+            "id": "SCH-app-state-6b1f9e24",
+            "type": "schema",
+            "state": "adopted",
+            "handle": "the whole app's render-input state",
+            "meta": {}
+          },
+          {
+            "id": "SCH-draft-9c2a5f17",
+            "type": "schema",
+            "state": "adopted",
+            "handle": "the composer's uncommitted draft text and tags",
+            "meta": {}
+          },
+          {
+            "id": "SCH-input-id-4f8d2a63",
+            "type": "schema",
+            "state": "adopted",
+            "handle": "the id handed back once a draft is sent as an input",
+            "meta": {}
+          },
+          {
+            "id": "SCH-dump-args-e1c7b350",
+            "type": "schema",
+            "state": "adopted",
+            "handle": "size and mode args for a headless --dump",
+            "meta": {}
+          },
+          {
+            "id": "MOD-cli-77d0e2b5",
+            "type": "module",
+            "state": "adopted",
+            "handle": "The command line: environments, dump, launch.",
+            "part_of": "MOD-apps-1a9e0c44",
+            "edges": [
+              {
+                "kind": "owns",
+                "to": "SCH-cli-args-a0c4e1f7"
+              }
+            ],
+            "meta": {
+              "definitions": 40,
+              "linked": 22
+            }
+          },
+          {
+            "id": "IF-cli-3c1f9a88",
+            "type": "interface",
+            "state": "adopted",
+            "handle": "The command surface: run, dump, choose an environment.",
+            "edges": [
+              {
+                "kind": "fronts",
+                "to": "MOD-cli-77d0e2b5"
+              }
+            ],
+            "meta": {
+              "ops": [
+                {
+                  "slug": "run",
+                  "purpose": "launch a face",
+                  "in": [],
+                  "out": []
+                },
+                {
+                  "slug": "dump",
+                  "purpose": "print one frame headlessly",
+                  "in": [],
+                  "out": []
+                },
+                {
+                  "slug": "env",
+                  "purpose": "pick the environment config",
+                  "in": [],
+                  "out": []
+                }
+              ]
+            }
+          },
+          {
+            "id": "SCH-cli-args-a0c4e1f7",
+            "type": "schema",
+            "state": "adopted",
+            "handle": "the command line's own argument shape",
+            "meta": {}
+          },
+          {
+            "id": "MOD-threads-b61c2e9d",
+            "type": "module",
+            "state": "locked",
+            "built": true,
+            "handle": "The threads daemon: accounts, pools, the usage gauge, the one socket.",
+            "edges": [
+              {
+                "kind": "owns",
+                "to": "R-threads-socket-4d9b0f32"
+              },
+              {
+                "kind": "owns",
+                "to": "R-accounts-store-c7e1a5d8"
+              },
+              {
+                "kind": "owns",
+                "to": "R-usage-ledger-1f6b3e92"
+              },
+              {
+                "kind": "owns",
+                "to": "SCH-thread-event-8a2c7d41"
+              },
+              {
+                "kind": "owns",
+                "to": "SCH-thresholds-5e0d9b17"
+              },
+              {
+                "kind": "emits",
+                "to": "EV-usage-tick-7e9d1b46"
+              }
+            ],
+            "meta": {
+              "definitions": 180,
+              "linked": 90
+            }
+          },
+          {
+            "id": "IF-threads-socket-e8d2a4c1",
+            "type": "interface",
+            "state": "locked",
+            "built": true,
+            "handle": "The one socket into the threads daemon.",
+            "edges": [
+              {
+                "kind": "fronts",
+                "to": "MOD-threads-b61c2e9d"
+              }
+            ],
+            "meta": {
+              "ops": [
+                {
+                  "slug": "spawn",
+                  "purpose": "start a thread",
+                  "in": [],
+                  "out": []
+                },
+                {
+                  "slug": "message",
+                  "purpose": "send one message on a thread",
+                  "in": [],
+                  "out": []
+                },
+                {
+                  "slug": "gather",
+                  "purpose": "collect replies from several threads",
+                  "in": [],
+                  "out": []
+                },
+                {
+                  "slug": "usage",
+                  "purpose": "read the usage gauge",
+                  "in": [],
+                  "out": []
+                },
+                {
+                  "slug": "settings",
+                  "purpose": "read or set pool settings",
+                  "in": [],
+                  "out": []
+                }
+              ]
+            }
+          },
+          {
+            "id": "R-threads-socket-4d9b0f32",
+            "type": "resource",
+            "state": "adopted",
+            "handle": "the one socket the daemon listens on",
+            "meta": {}
+          },
+          {
+            "id": "R-accounts-store-c7e1a5d8",
+            "type": "resource",
+            "state": "adopted",
+            "handle": "the accounts and their pools",
+            "meta": {}
+          },
+          {
+            "id": "R-usage-ledger-1f6b3e92",
+            "type": "resource",
+            "state": "adopted",
+            "handle": "the running usage gauge",
+            "meta": {}
+          },
+          {
+            "id": "SCH-thread-event-8a2c7d41",
+            "type": "schema",
+            "state": "adopted",
+            "handle": "one event on a thread's ledger",
+            "meta": {}
+          },
+          {
+            "id": "SCH-thresholds-5e0d9b17",
+            "type": "schema",
+            "state": "adopted",
+            "handle": "the usage thresholds a pool is held to",
+            "meta": {}
+          },
+          {
+            "id": "MOD-mind-index-9f3e1c6a",
+            "type": "module",
+            "state": "locked",
+            "built": true,
+            "handle": "The v3 workspace tool.",
+            "edges": [
+              {
+                "kind": "owns",
+                "to": "R-v3-pools-6c1a8f23"
+              },
+              {
+                "kind": "owns",
+                "to": "SCH-v3-node-d4e9a0b6"
+              }
+            ],
+            "meta": {
+              "definitions": 150,
+              "linked": 70
+            }
+          },
+          {
+            "id": "IF-mind-index-2b7d4e80",
+            "type": "interface",
+            "state": "locked",
+            "built": true,
+            "handle": "The v3 workspace pen.",
+            "edges": [
+              {
+                "kind": "fronts",
+                "to": "MOD-mind-index-9f3e1c6a"
+              }
+            ],
+            "meta": {
+              "ops": [
+                {
+                  "slug": "node",
+                  "purpose": "CRUD one node",
+                  "in": [],
+                  "out": []
+                },
+                {
+                  "slug": "surface",
+                  "purpose": "read or write the surface index",
+                  "in": [],
+                  "out": []
+                },
+                {
+                  "slug": "context",
+                  "purpose": "render a reader's context",
+                  "in": [],
+                  "out": []
+                },
+                {
+                  "slug": "cluster",
+                  "purpose": "build or dissolve a cluster",
+                  "in": [],
+                  "out": []
+                },
+                {
+                  "slug": "validate",
+                  "purpose": "validate the whole pool",
+                  "in": [],
+                  "out": []
+                }
+              ]
+            }
+          },
+          {
+            "id": "R-v3-pools-6c1a8f23",
+            "type": "resource",
+            "state": "adopted",
+            "handle": "the v3 node pools on disk",
+            "meta": {}
+          },
+          {
+            "id": "SCH-v3-node-d4e9a0b6",
+            "type": "schema",
+            "state": "adopted",
+            "handle": "one v3 node's shape",
+            "meta": {}
+          },
+          {
+            "id": "MOD-mind-index-v5-c83a5d17",
+            "type": "module",
+            "state": "draft",
+            "handle": "The regions pool: pen, validator, context init and round close.",
+            "edges": [
+              {
+                "kind": "owns",
+                "to": "R-v5-pools-3e7c9b54"
+              },
+              {
+                "kind": "owns",
+                "to": "SCH-v5-node-0b8d2f61"
+              },
+              {
+                "kind": "owns",
+                "to": "SCH-region-boundary-9c4a1e75"
+              },
+              {
+                "kind": "emits",
+                "to": "EV-round-closed-2b6f4a90"
+              }
+            ],
+            "meta": {
+              "definitions": 90,
+              "linked": 40
+            }
+          },
+          {
+            "id": "IF-mind-index-v5-f1a0c7e3",
+            "type": "interface",
+            "state": "draft",
+            "handle": "The v5 regions pen.",
+            "edges": [
+              {
+                "kind": "fronts",
+                "to": "MOD-mind-index-v5-c83a5d17"
+              }
+            ],
+            "meta": {
+              "ops": [
+                {
+                  "slug": "reveal",
+                  "purpose": "reveal regions or nodes",
+                  "in": [],
+                  "out": []
+                },
+                {
+                  "slug": "node put",
+                  "purpose": "write one node under a boundary",
+                  "in": [],
+                  "out": []
+                },
+                {
+                  "slug": "region",
+                  "purpose": "carve, re-cut or mint a region",
+                  "in": [],
+                  "out": []
+                },
+                {
+                  "slug": "round close",
+                  "purpose": "close the round's checkpoint",
+                  "in": [],
+                  "out": []
+                },
+                {
+                  "slug": "fold",
+                  "purpose": "advance the fold cursor",
+                  "in": [],
+                  "out": []
+                }
+              ]
+            }
+          },
+          {
+            "id": "R-v5-pools-3e7c9b54",
+            "type": "resource",
+            "state": "adopted",
+            "handle": "the v5 region pools on disk",
+            "meta": {}
+          },
+          {
+            "id": "SCH-v5-node-0b8d2f61",
+            "type": "schema",
+            "state": "adopted",
+            "handle": "one v5 node's shape",
+            "meta": {}
+          },
+          {
+            "id": "SCH-region-boundary-9c4a1e75",
+            "type": "schema",
+            "state": "adopted",
+            "handle": "one region's admits boundary",
+            "meta": {}
+          },
+          {
+            "id": "MOD-bp-8d0e82ab",
+            "type": "module",
+            "state": "adopted",
+            "handle": "The blueprint pen and its rules file.",
+            "edges": [
+              {
+                "kind": "owns",
+                "to": "R-blueprint-pool-479499f9"
+              },
+              {
+                "kind": "owns",
+                "to": "R-violation-rules-c3ecdc4e"
+              },
+              {
+                "kind": "owns",
+                "to": "SCH-bp-docstring-suffix-b164a10b"
+              }
+            ],
+            "meta": {
+              "definitions": 70,
+              "linked": 50
+            }
+          },
+          {
+            "id": "IF-bp-cli-1c2aec09",
+            "type": "interface",
+            "state": "adopted",
+            "handle": "The blueprint command line.",
+            "edges": [
+              {
+                "kind": "fronts",
+                "to": "MOD-bp-8d0e82ab"
+              }
+            ],
+            "meta": {
+              "ops": [
+                {
+                  "slug": "node put",
+                  "purpose": "write one blueprint node",
+                  "in": [],
+                  "out": []
+                },
+                {
+                  "slug": "id mint",
+                  "purpose": "mint a fresh prefix-slug-8hex id",
+                  "in": [],
+                  "out": []
+                },
+                {
+                  "slug": "validate",
+                  "purpose": "validate the pool",
+                  "in": [],
+                  "out": []
+                },
+                {
+                  "slug": "sweep",
+                  "purpose": "sweep for violations",
+                  "in": [],
+                  "out": []
+                },
+                {
+                  "slug": "trace",
+                  "purpose": "trace a back-edge",
+                  "in": [],
+                  "out": []
+                }
+              ]
+            }
+          },
+          {
+            "id": "R-blueprint-pool-479499f9",
+            "type": "resource",
+            "state": "adopted",
+            "handle": "the blueprint node pool on disk, in git",
+            "meta": {}
+          },
+          {
+            "id": "R-violation-rules-c3ecdc4e",
+            "type": "resource",
+            "state": "adopted",
+            "handle": "the rules the sweep checks against",
+            "meta": {}
+          },
+          {
+            "id": "SCH-bp-docstring-suffix-b164a10b",
+            "type": "schema",
+            "state": "adopted",
+            "handle": "the @bp docstring suffix contract",
+            "meta": {}
+          },
+          {
+            "id": "MOD-core-plugin-6f99cf55",
+            "type": "module",
+            "state": "adopted",
+            "handle": "Skills, agents and tools of the core plugin.",
+            "edges": [
+              {
+                "kind": "owns",
+                "to": "R-skills-dir-2d8e4f10"
+              },
+              {
+                "kind": "owns",
+                "to": "R-agents-dir-7a1c9b36"
+              },
+              {
+                "kind": "owns",
+                "to": "R-learned-boxes-e5f2a8d4"
+              },
+              {
+                "kind": "owns",
+                "to": "SCH-settings-f3b8e9a6"
+              }
+            ],
+            "meta": {
+              "definitions": 60,
+              "linked": 15
+            }
+          },
+          {
+            "id": "IF-core-skills-a7b3d5e9",
+            "type": "interface",
+            "state": "adopted",
+            "handle": "How an agent loads a skill or agent definition.",
+            "edges": [
+              {
+                "kind": "fronts",
+                "to": "MOD-core-plugin-6f99cf55"
+              }
+            ],
+            "meta": {
+              "ops": [
+                {
+                  "slug": "load",
+                  "purpose": "load a skill into the turn",
+                  "in": [],
+                  "out": []
+                },
+                {
+                  "slug": "entry-point",
+                  "purpose": "the universal first read",
+                  "in": [],
+                  "out": []
+                }
+              ]
+            }
+          },
+          {
+            "id": "R-skills-dir-2d8e4f10",
+            "type": "resource",
+            "state": "adopted",
+            "handle": "the skills directory",
+            "meta": {}
+          },
+          {
+            "id": "R-agents-dir-7a1c9b36",
+            "type": "resource",
+            "state": "adopted",
+            "handle": "the agent definitions directory",
+            "meta": {}
+          },
+          {
+            "id": "R-learned-boxes-e5f2a8d4",
+            "type": "resource",
+            "state": "adopted",
+            "handle": "the per-agent learned-experience lesson boxes",
+            "meta": {}
+          },
+          {
+            "id": "SCH-settings-f3b8e9a6",
+            "type": "schema",
+            "state": "adopted",
+            "handle": "one cauldron settings row, read by other repos' TUIs",
+            "meta": {}
+          },
+          {
+            "id": "MOD-thread-messages-4b2e7f90",
+            "type": "module",
+            "state": "locked",
+            "built": true,
+            "handle": "Reads a thread's messages out of the daemon's ledger.",
+            "edges": [
+              {
+                "kind": "owns",
+                "to": "SCH-message-row-6e3b8c21"
+              }
+            ],
+            "meta": {
+              "definitions": 30,
+              "linked": 25
+            }
+          },
+          {
+            "id": "IF-thread-messages-c9d1e3a7",
+            "type": "interface",
+            "state": "locked",
+            "built": true,
+            "handle": "Read-only access to a thread's message ledger.",
+            "edges": [
+              {
+                "kind": "fronts",
+                "to": "MOD-thread-messages-4b2e7f90"
+              }
+            ],
+            "meta": {
+              "ops": [
+                {
+                  "slug": "read",
+                  "purpose": "read messages in a thread",
+                  "in": [],
+                  "out": []
+                },
+                {
+                  "slug": "msg-ids",
+                  "purpose": "resolve a cited message id set",
+                  "in": [],
+                  "out": []
+                }
+              ]
+            }
+          },
+          {
+            "id": "SCH-message-row-6e3b8c21",
+            "type": "schema",
+            "state": "adopted",
+            "handle": "one message row in the ledger",
+            "meta": {}
+          },
+          {
+            "id": "MOD-human-action-d2c6a1e8",
+            "type": "module",
+            "state": "locked",
+            "built": true,
+            "handle": "The human-action ticket tool.",
+            "edges": [
+              {
+                "kind": "owns",
+                "to": "R-tickets-dir-b3e7d9f1"
+              },
+              {
+                "kind": "owns",
+                "to": "SCH-ticket-8c1d4a6e"
+              }
+            ],
+            "meta": {
+              "definitions": 35,
+              "linked": 28
+            }
+          },
+          {
+            "id": "IF-human-action-5f8a2c47",
+            "type": "interface",
+            "state": "locked",
+            "built": true,
+            "handle": "File, sync and retire a human-action ticket.",
+            "edges": [
+              {
+                "kind": "fronts",
+                "to": "MOD-human-action-d2c6a1e8"
+              }
+            ],
+            "meta": {
+              "ops": [
+                {
+                  "slug": "file",
+                  "purpose": "file a new ticket",
+                  "in": [],
+                  "out": []
+                },
+                {
+                  "slug": "sync",
+                  "purpose": "sync a ticket's representative node",
+                  "in": [],
+                  "out": []
+                },
+                {
+                  "slug": "retire",
+                  "purpose": "withdraw an ask",
+                  "in": [],
+                  "out": []
+                }
+              ]
+            }
+          },
+          {
+            "id": "R-tickets-dir-b3e7d9f1",
+            "type": "resource",
+            "state": "adopted",
+            "handle": "the human-action tickets directory",
+            "meta": {}
+          },
+          {
+            "id": "SCH-ticket-8c1d4a6e",
+            "type": "schema",
+            "state": "adopted",
+            "handle": "one human-action ticket's shape",
+            "meta": {}
+          },
+          {
+            "id": "MOD-promote-e4f7b2d9",
+            "type": "module",
+            "state": "locked",
+            "built": true,
+            "handle": "Builds, signs and promotes a local crate to a supervised service.",
+            "edges": [
+              {
+                "kind": "owns",
+                "to": "R-signing-identity-a9e2c4b7"
+              }
+            ],
+            "meta": {
+              "definitions": 25,
+              "linked": 15
+            }
+          },
+          {
+            "id": "IF-promote-1d6c3e85",
+            "type": "interface",
+            "state": "locked",
+            "built": true,
+            "handle": "Promote a signed crate to a supervised launchd service.",
+            "edges": [
+              {
+                "kind": "fronts",
+                "to": "MOD-promote-e4f7b2d9"
+              }
+            ],
+            "meta": {
+              "ops": [
+                {
+                  "slug": "promote",
+                  "purpose": "build, sign and restart the service",
+                  "in": [],
+                  "out": []
+                },
+                {
+                  "slug": "check",
+                  "purpose": "check which commit is actually running",
+                  "in": [],
+                  "out": []
+                }
+              ]
+            }
+          },
+          {
+            "id": "R-signing-identity-a9e2c4b7",
+            "type": "resource",
+            "state": "adopted",
+            "handle": "the code-signing identity and designated requirement",
+            "meta": {}
+          },
+          {
+            "id": "MOD-tui-render-7c3b1d20",
+            "type": "module",
+            "state": "locked",
+            "built": true,
+            "handle": "The shared frame renderer and key table both faces use.",
+            "edges": [
+              {
+                "kind": "owns",
+                "to": "SCH-key-event-3a7e1c59"
+              },
+              {
+                "kind": "owns",
+                "to": "SCH-action-9d4b2f80"
+              },
+              {
+                "kind": "emits",
+                "to": "EV-frame-rendered-5c2a8e13"
+              },
+              {
+                "kind": "uses",
+                "to": "EXT-cauldron-repo-0a3d7c52"
+              }
+            ],
+            "meta": {
+              "definitions": 60,
+              "linked": 25
+            }
+          },
+          {
+            "id": "IF-tui-render-b2d8e6f4",
+            "type": "interface",
+            "state": "locked",
+            "built": true,
+            "handle": "The shared key table and draw call both faces front on.",
+            "edges": [
+              {
+                "kind": "fronts",
+                "to": "MOD-tui-render-7c3b1d20"
+              }
+            ],
+            "meta": {
+              "ops": [
+                {
+                  "slug": "bindings",
+                  "purpose": "the shared key table both faces read",
+                  "in": [],
+                  "out": []
+                },
+                {
+                  "slug": "draw",
+                  "purpose": "render one frame from shared state",
+                  "in": [],
+                  "out": []
+                }
+              ]
+            }
+          },
+          {
+            "id": "SCH-key-event-3a7e1c59",
+            "type": "schema",
+            "state": "adopted",
+            "handle": "one raw key press before binding lookup",
+            "meta": {}
+          },
+          {
+            "id": "SCH-action-9d4b2f80",
+            "type": "schema",
+            "state": "adopted",
+            "handle": "one bound action a key resolves to",
+            "meta": {}
+          },
+          {
+            "id": "EV-frame-rendered-5c2a8e13",
+            "type": "event",
+            "state": "adopted",
+            "handle": "one frame finished rendering",
+            "meta": {}
+          },
+          {
+            "id": "EV-usage-tick-7e9d1b46",
+            "type": "event",
+            "state": "adopted",
+            "handle": "the usage gauge advanced one tick",
+            "meta": {}
+          },
+          {
+            "id": "EV-round-closed-2b6f4a90",
+            "type": "event",
+            "state": "adopted",
+            "handle": "a v5 round closed its checkpoint",
+            "meta": {}
+          },
+          {
+            "id": "EXT-cauldron-repo-0a3d7c52",
+            "type": "external",
+            "state": "adopted",
+            "handle": "the Cauldron repo at ~/code/cauldron carries the cluster face; its blueprint is `cauldron`",
+            "meta": {}
+          },
+          {
+            "id": "CAP-one-key-table-b31d6e08",
+            "type": "capability",
+            "state": "live",
+            "handle": "Exactly one key table (BINDINGS) is consulted; nothing shadows it.",
+            "edges": [
+              {
+                "kind": "involves",
+                "to": "MOD-tui-4f1c9a02"
+              },
+              {
+                "kind": "involves",
+                "to": "MOD-tui-render-7c3b1d20"
+              }
+            ],
+            "meta": {
+              "provenance": "human-derived",
+              "verify": "cargo test -p tui-render keys"
+            }
+          },
+          {
+            "id": "CAP-loud-refusal-3754f001",
+            "type": "capability",
+            "state": "live",
+            "handle": "An illegal blueprint write is refused loudly, never silently dropped.",
+            "edges": [
+              {
+                "kind": "involves",
+                "to": "MOD-bp-8d0e82ab"
+              }
+            ],
+            "meta": {
+              "provenance": "human-derived",
+              "verify": "bp_conformance_test.sh"
+            }
+          },
+          {
+            "id": "CAP-id-mint-3af7070f",
+            "type": "capability",
+            "state": "live",
+            "handle": "Every minted id is globally unique and matches prefix-slug-8hex.",
+            "edges": [
+              {
+                "kind": "involves",
+                "to": "MOD-bp-8d0e82ab"
+              },
+              {
+                "kind": "involves",
+                "to": "IF-bp-cli-1c2aec09"
+              }
+            ],
+            "meta": {
+              "provenance": "agent-derived",
+              "verify": "bp id mint --dry-run"
+            }
+          },
+          {
+            "id": "CAP-resumable-board-9e1c5d27",
+            "type": "capability",
+            "state": "stubbed",
+            "handle": "A v5 board always closes its round in a state the next agent can resume from.",
+            "edges": [
+              {
+                "kind": "involves",
+                "to": "MOD-mind-index-v5-c83a5d17"
+              }
+            ],
+            "meta": {
+              "provenance": "human-derived",
+              "verify": "mind-index-v5 validate --final"
+            }
+          },
+          {
+            "id": "VIO-off-path-reach-9c21e7d4",
+            "type": "violation",
+            "state": "open",
+            "handle": "tui-render reads the threads socket directly instead of through its interface.",
+            "edges": [
+              {
+                "kind": "involves",
+                "to": "MOD-tui-render-7c3b1d20"
+              },
+              {
+                "kind": "involves",
+                "to": "R-threads-socket-4d9b0f32"
+              }
+            ],
+            "meta": {
+              "kind": "off-path-reach",
+              "sites": 3,
+              "since": "2026-10-09",
+              "line": "tui-render reads R-threads-socket directly"
+            }
+          },
+          {
+            "id": "VIO-unlinked-definition-4e8a2c60",
+            "type": "violation",
+            "state": "open",
+            "handle": "a definition in the v5 region library carries no @bp docstring suffix.",
+            "edges": [
+              {
+                "kind": "involves",
+                "to": "MOD-mind-index-v5-c83a5d17"
+              }
+            ],
+            "meta": {
+              "kind": "unlinked-definition",
+              "sites": 1,
+              "since": "2026-10-14",
+              "line": "core-plugins/core/tools/mind-index-v5-lib/regions.py"
+            }
+          },
+          {
+            "id": "DRAG-keys-duplicated-7a0e3f91",
+            "type": "drag",
+            "state": "active",
+            "handle": "The cluster face carries its own KEYMAP beside BINDINGS instead of fronting on it.",
+            "edges": [
+              {
+                "kind": "involves",
+                "to": "MOD-tui-4f1c9a02"
+              },
+              {
+                "kind": "involves",
+                "to": "MOD-tui-render-7c3b1d20"
+              }
+            ],
+            "meta": {
+              "kind": "overlap",
+              "instances": 2,
+              "tolerated": "2026-10-09",
+              "line": "the cluster face carries its own KEYMAP beside BINDINGS"
+            }
+          },
+          {
+            "id": "DRAG-surface-hand-written-c5d2b8a3",
+            "type": "drag",
+            "state": "active",
+            "handle": "The blueprint has no surface arm; surface.yaml is written by hand.",
+            "edges": [
+              {
+                "kind": "involves",
+                "to": "MOD-bp-8d0e82ab"
+              }
+            ],
+            "meta": {
+              "kind": "missing-arm",
+              "instances": 1,
+              "tolerated": "2026-08-22",
+              "line": "bp has no surface arm; surface.yaml is written by hand"
+            }
+          },
+          {
+            "id": "DRAG-v3-v5-parallel-1f7e9d42",
+            "type": "drag",
+            "state": "active",
+            "handle": "v3 and v5 workspace pools run side by side during the per-coordinator cutover.",
+            "edges": [
+              {
+                "kind": "involves",
+                "to": "MOD-mind-index-9f3e1c6a"
+              },
+              {
+                "kind": "involves",
+                "to": "MOD-mind-index-v5-c83a5d17"
+              }
+            ],
+            "meta": {
+              "kind": "decomposition",
+              "instances": 1,
+              "tolerated": "2026-10-02",
+              "line": "two parallel workspace pools (v3 and v5) run side by side"
+            }
+          },
+          {
+            "id": "CONTRA-store-ownership-2b82a045",
+            "type": "contradiction",
+            "state": "open",
+            "handle": "The pool entry says every write goes through bp; the adoption record says the nodes were hand-written.",
+            "edges": [
+              {
+                "kind": "involves",
+                "to": "MOD-bp-8d0e82ab"
+              },
+              {
+                "kind": "involves",
+                "to": "R-blueprint-pool-479499f9"
+              },
+              {
+                "kind": "involves",
+                "to": "IF-bp-cli-1c2aec09"
+              },
+              {
+                "kind": "involves",
+                "to": "MOD-core-plugin-6f99cf55"
+              }
+            ],
+            "meta": {
+              "since": "2026-08-22",
+              "line": "the pool entry says every write goes through bp; the adoption record says the nodes were hand-written"
+            }
+          },
+          {
+            "id": "MIG-v5-fold-cursor-6a2c9f14",
+            "type": "migration",
+            "state": "described",
+            "handle": "migration: v5-fold-cursor",
+            "edges": [
+              {
+                "kind": "built",
+                "to": "MOD-mind-index-v5-c83a5d17"
+              }
+            ],
+            "meta": {
+              "at": "2026-10-14",
+              "slug": "v5-fold-cursor"
+            }
+          },
+          {
+            "id": "MIG-cluster-face-keys-c3e0a1f4",
+            "type": "migration",
+            "state": "described",
+            "handle": "migration: cluster-face-keys",
+            "edges": [
+              {
+                "kind": "built",
+                "to": "MOD-tui-4f1c9a02"
+              },
+              {
+                "kind": "built",
+                "to": "MOD-tui-render-7c3b1d20"
+              },
+              {
+                "kind": "built",
+                "to": "R-key-table-9e44b7c3"
+              }
+            ],
+            "meta": {
+              "at": "2026-10-09",
+              "slug": "cluster-face-keys"
+            }
+          },
+          {
+            "id": "MIG-v5-regions-pen-8e1d3a07",
+            "type": "migration",
+            "state": "described",
+            "handle": "migration: v5-regions-pen",
+            "edges": [
+              {
+                "kind": "built",
+                "to": "MOD-mind-index-v5-c83a5d17"
+              }
+            ],
+            "meta": {
+              "at": "2026-10-02",
+              "slug": "v5-regions-pen"
+            }
+          },
+          {
+            "id": "MIG-thread-messages-source-0f6b2c91",
+            "type": "migration",
+            "state": "undescribed",
+            "handle": "migration: thread-messages-source",
+            "edges": [
+              {
+                "kind": "built",
+                "to": "MOD-thread-messages-4b2e7f90"
+              }
+            ],
+            "meta": {
+              "at": "2026-09-26",
+              "slug": "thread-messages-source"
+            }
+          },
+          {
+            "id": "MIG-mind-index-context-cache-5d8a1e63",
+            "type": "migration",
+            "state": "described",
+            "handle": "migration: mind-index-context-cache",
+            "edges": [
+              {
+                "kind": "built",
+                "to": "MOD-mind-index-9f3e1c6a"
+              }
+            ],
+            "meta": {
+              "at": "2026-09-19",
+              "slug": "mind-index-context-cache"
+            }
+          },
+          {
+            "id": "MIG-threads-usage-gauge-2c7f0b48",
+            "type": "migration",
+            "state": "described",
+            "handle": "migration: threads-usage-gauge",
+            "edges": [
+              {
+                "kind": "built",
+                "to": "MOD-threads-b61c2e9d"
+              }
+            ],
+            "meta": {
+              "at": "2026-09-12",
+              "slug": "threads-usage-gauge"
+            }
+          },
+          {
+            "id": "MIG-cli-env-flag-9a4e3d12",
+            "type": "migration",
+            "state": "described",
+            "handle": "migration: cli-env-flag",
+            "edges": [
+              {
+                "kind": "built",
+                "to": "MOD-cli-77d0e2b5"
+              }
+            ],
+            "meta": {
+              "at": "2026-09-05",
+              "slug": "cli-env-flag"
+            }
+          },
+          {
+            "id": "MIG-human-action-sync-6b1c8f55",
+            "type": "migration",
+            "state": "described",
+            "handle": "migration: human-action-sync",
+            "edges": [
+              {
+                "kind": "built",
+                "to": "MOD-human-action-d2c6a1e8"
+              }
+            ],
+            "meta": {
+              "at": "2026-08-29",
+              "slug": "human-action-sync"
+            }
+          },
+          {
+            "id": "MIG-promote-signing-identity-3e9d7a20",
+            "type": "migration",
+            "state": "described",
+            "handle": "migration: promote-signing-identity",
+            "edges": [
+              {
+                "kind": "built",
+                "to": "MOD-promote-e4f7b2d9"
+              }
+            ],
+            "meta": {
+              "at": "2026-08-22",
+              "slug": "promote-signing-identity"
+            }
+          },
+          {
+            "id": "MIG-core-plugin-learned-boxes-7f2b4c86",
+            "type": "migration",
+            "state": "described",
+            "handle": "migration: core-plugin-learned-boxes",
+            "edges": [
+              {
+                "kind": "built",
+                "to": "MOD-core-plugin-6f99cf55"
+              }
+            ],
+            "meta": {
+              "at": "2026-08-15",
+              "slug": "core-plugin-learned-boxes"
+            }
+          },
+          {
+            "id": "MIG-bp-docstring-suffix-1d6e9a33",
+            "type": "migration",
+            "state": "described",
+            "handle": "migration: bp-docstring-suffix",
+            "edges": [
+              {
+                "kind": "built",
+                "to": "MOD-bp-8d0e82ab"
+              }
+            ],
+            "meta": {
+              "at": "2026-08-08",
+              "slug": "bp-docstring-suffix"
+            }
+          },
+          {
+            "id": "MIG-tui-render-split-4a8c2f70",
+            "type": "migration",
+            "state": "described",
+            "handle": "migration: tui-render-split",
+            "edges": [
+              {
+                "kind": "built",
+                "to": "MOD-tui-render-7c3b1d20"
+              },
+              {
+                "kind": "built",
+                "to": "MOD-tui-4f1c9a02"
+              }
+            ],
+            "meta": {
+              "at": "2026-08-01",
+              "slug": "tui-render-split"
+            }
+          },
+          {
+            "id": "MIG-threads-accounts-store-9c3e1b45",
+            "type": "migration",
+            "state": "described",
+            "handle": "migration: threads-accounts-store",
+            "edges": [
+              {
+                "kind": "built",
+                "to": "MOD-threads-b61c2e9d"
+              }
+            ],
+            "meta": {
+              "at": "2026-07-25",
+              "slug": "threads-accounts-store"
+            }
+          },
+          {
+            "id": "MIG-apps-container-cut-2e7a0d98",
+            "type": "migration",
+            "state": "described",
+            "handle": "migration: apps-container-cut",
+            "edges": [
+              {
+                "kind": "built",
+                "to": "MOD-apps-1a9e0c44"
+              },
+              {
+                "kind": "built",
+                "to": "MOD-cli-77d0e2b5"
+              }
+            ],
+            "meta": {
+              "at": "2026-07-18",
+              "slug": "apps-container-cut"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "cauldron",
+      "path": "/Users/demo/code/cauldron",
+      "branch": "main",
+      "head": "06cada2b",
+      "worktrees": [
+        {
+          "name": "cauldron-wt-clusters2",
+          "branch": "clusters-2",
+          "head": "3b9f1e72"
+        },
+        {
+          "name": "cauldron-wt-settings",
+          "branch": "settings",
+          "head": "9a4c2d18"
+        },
+        {
+          "name": "cauldron-wt-voice",
+          "branch": "voice",
+          "head": "e1d7b640"
+        }
+      ],
+      "registered_at": "2026-10-01T09:14:03Z",
+      "blueprint": {
+        "schema_version": 1,
+        "adopted": "2026-10-01",
+        "nodes": [
+          {
+            "id": "MOD-tui-clusters-a4c1e8d2",
+            "type": "module",
+            "state": "locked",
+            "built": true,
+            "handle": "The cluster face: the tree, a cluster's tabs, the one input.",
+            "edges": [
+              {
+                "kind": "owns",
+                "to": "R-layout-share-8e3a7c50"
+              },
+              {
+                "kind": "owns",
+                "to": "R-draft-per-env-2c9d1f64"
+              },
+              {
+                "kind": "owns",
+                "to": "SCH-cluster-f7b4e0a9"
+              },
+              {
+                "kind": "owns",
+                "to": "SCH-corpus-3d8c5e12"
+              },
+              {
+                "kind": "emits",
+                "to": "EV-input-sent-8f3c1d62"
+              }
+            ],
+            "meta": {
+              "definitions": 150,
+              "linked": 140
+            }
+          },
+          {
+            "id": "IF-tui-clusters-6d2f9b31",
+            "type": "interface",
+            "state": "locked",
+            "built": true,
+            "handle": "The one way into the cluster face: launch, dump, keys.",
+            "edges": [
+              {
+                "kind": "fronts",
+                "to": "MOD-tui-clusters-a4c1e8d2"
+              }
+            ],
+            "meta": {
+              "ops": [
+                {
+                  "slug": "tui",
+                  "purpose": "launch the cluster face",
+                  "in": [],
+                  "out": []
+                },
+                {
+                  "slug": "dump",
+                  "purpose": "headless frame dump",
+                  "in": [],
+                  "out": []
+                },
+                {
+                  "slug": "keys",
+                  "purpose": "the cluster face's key table",
+                  "in": [],
+                  "out": []
+                }
+              ]
+            }
+          },
+          {
+            "id": "R-layout-share-8e3a7c50",
+            "type": "resource",
+            "state": "adopted",
+            "handle": "the shared tree/tab layout state",
+            "meta": {}
+          },
+          {
+            "id": "R-draft-per-env-2c9d1f64",
+            "type": "resource",
+            "state": "adopted",
+            "handle": "the composer draft, per environment",
+            "meta": {}
+          },
+          {
+            "id": "SCH-cluster-f7b4e0a9",
+            "type": "schema",
+            "state": "adopted",
+            "handle": "one cluster's shape: tabs, claims, focus",
+            "meta": {}
+          },
+          {
+            "id": "SCH-corpus-3d8c5e12",
+            "type": "schema",
+            "state": "adopted",
+            "handle": "a cluster's corpus of milestones and tasks",
+            "meta": {}
+          },
+          {
+            "id": "MOD-tui-chat-5b7e2a90",
+            "type": "module",
+            "state": "adopted",
+            "handle": "The chat face moved here from the harness.",
+            "edges": [
+              {
+                "kind": "owns",
+                "to": "SCH-transcript-1a6f8d23"
+              }
+            ],
+            "meta": {
+              "definitions": 40,
+              "linked": 30
+            }
+          },
+          {
+            "id": "IF-tui-chat-9c3d1e47",
+            "type": "interface",
+            "state": "adopted",
+            "handle": "The chat face's one launch surface.",
+            "edges": [
+              {
+                "kind": "fronts",
+                "to": "MOD-tui-chat-5b7e2a90"
+              }
+            ],
+            "meta": {
+              "ops": [
+                {
+                  "slug": "tui --chat",
+                  "purpose": "launch the chat face",
+                  "in": [],
+                  "out": []
+                }
+              ]
+            }
+          },
+          {
+            "id": "SCH-transcript-1a6f8d23",
+            "type": "schema",
+            "state": "adopted",
+            "handle": "one chat transcript",
+            "meta": {}
+          },
+          {
+            "id": "MOD-tui-render-5e81c0a4",
+            "type": "module",
+            "state": "locked",
+            "built": true,
+            "handle": "The shared frame renderer and key table (same lineage as harness's).",
+            "edges": [
+              {
+                "kind": "uses",
+                "to": "EXT-harness-render-d3e9a1b8"
+              }
+            ],
+            "meta": {
+              "definitions": 20,
+              "linked": 18
+            }
+          },
+          {
+            "id": "IF-tui-render-0c47d2e9",
+            "type": "interface",
+            "state": "locked",
+            "built": true,
+            "handle": "The shared key table and draw call, cauldron's copy.",
+            "edges": [
+              {
+                "kind": "fronts",
+                "to": "MOD-tui-render-5e81c0a4"
+              }
+            ],
+            "meta": {
+              "ops": [
+                {
+                  "slug": "bindings",
+                  "purpose": "the shared key table this face reads",
+                  "in": [],
+                  "out": []
+                },
+                {
+                  "slug": "draw",
+                  "purpose": "render one frame from shared state",
+                  "in": [],
+                  "out": []
+                }
+              ]
+            }
+          },
+          {
+            "id": "EXT-harness-render-d3e9a1b8",
+            "type": "external",
+            "state": "adopted",
+            "handle": "harness's tui-render crate (MOD-tui-render-7c3b1d20); cauldron's copy is hand-kept, not referenced",
+            "meta": {}
+          },
+          {
+            "id": "MOD-cauldron-daemon-e2d8c4f6",
+            "type": "module",
+            "state": "locked",
+            "built": true,
+            "handle": "The cauldron daemon: environments, the registry, the supervisor.",
+            "edges": [
+              {
+                "kind": "owns",
+                "to": "R-projects-registry-7f1d3c85"
+              },
+              {
+                "kind": "owns",
+                "to": "R-env-toml-b9e4a2d7"
+              },
+              {
+                "kind": "owns",
+                "to": "R-data-root-0c6e8f31"
+              }
+            ],
+            "meta": {
+              "definitions": 90,
+              "linked": 85
+            }
+          },
+          {
+            "id": "IF-cauldron-socket-4a7b9e23",
+            "type": "interface",
+            "state": "locked",
+            "built": true,
+            "handle": "The cauldron daemon's one socket.",
+            "edges": [
+              {
+                "kind": "fronts",
+                "to": "MOD-cauldron-daemon-e2d8c4f6"
+              }
+            ],
+            "meta": {
+              "ops": [
+                {
+                  "slug": "env",
+                  "purpose": "resolve the active environment",
+                  "in": [],
+                  "out": []
+                },
+                {
+                  "slug": "register",
+                  "purpose": "register a repo or a service",
+                  "in": [],
+                  "out": []
+                },
+                {
+                  "slug": "services",
+                  "purpose": "list supervised services",
+                  "in": [],
+                  "out": []
+                },
+                {
+                  "slug": "supervise",
+                  "purpose": "start, stop or restart a service",
+                  "in": [],
+                  "out": []
+                }
+              ]
+            }
+          },
+          {
+            "id": "R-projects-registry-7f1d3c85",
+            "type": "resource",
+            "state": "adopted",
+            "handle": "the registered repos: name, path, branch, registered_at",
+            "meta": {}
+          },
+          {
+            "id": "R-env-toml-b9e4a2d7",
+            "type": "resource",
+            "state": "adopted",
+            "handle": "the environment's env.toml",
+            "meta": {}
+          },
+          {
+            "id": "R-data-root-0c6e8f31",
+            "type": "resource",
+            "state": "adopted",
+            "handle": "the cauldron's data root on disk",
+            "meta": {}
+          },
+          {
+            "id": "MOD-services-1d9b7e4a",
+            "type": "module",
+            "state": "locked",
+            "built": true,
+            "handle": "The supervised services: threads, tts, echo, tally.",
+            "edges": [
+              {
+                "kind": "owns",
+                "to": "R-service-pins-e7a1c3f5"
+              },
+              {
+                "kind": "owns",
+                "to": "SCH-service-status-5d2e9a48"
+              },
+              {
+                "kind": "emits",
+                "to": "EV-service-changed-4e7a9b25"
+              }
+            ],
+            "meta": {
+              "definitions": 50,
+              "linked": 45
+            }
+          },
+          {
+            "id": "IF-service-pins-8b2c6d90",
+            "type": "interface",
+            "state": "locked",
+            "built": true,
+            "handle": "Pin or restart one supervised service.",
+            "edges": [
+              {
+                "kind": "fronts",
+                "to": "MOD-services-1d9b7e4a"
+              }
+            ],
+            "meta": {
+              "ops": [
+                {
+                  "slug": "pin",
+                  "purpose": "pin a service to a build",
+                  "in": [],
+                  "out": []
+                },
+                {
+                  "slug": "restart",
+                  "purpose": "restart a supervised service",
+                  "in": [],
+                  "out": []
+                }
+              ]
+            }
+          },
+          {
+            "id": "R-service-pins-e7a1c3f5",
+            "type": "resource",
+            "state": "adopted",
+            "handle": "which build each supervised service is pinned to",
+            "meta": {}
+          },
+          {
+            "id": "SCH-service-status-5d2e9a48",
+            "type": "schema",
+            "state": "adopted",
+            "handle": "one service's live status row",
+            "meta": {}
+          },
+          {
+            "id": "MOD-settings-9e4c2b71",
+            "type": "module",
+            "state": "draft",
+            "handle": "The settings store: cauldron, pool, account and cluster scopes with inheritance.",
+            "edges": [
+              {
+                "kind": "owns",
+                "to": "R-settings-toml-a1b8d4e2"
+              },
+              {
+                "kind": "owns",
+                "to": "SCH-setting-row-c4f6e9b3"
+              }
+            ],
+            "meta": {
+              "definitions": 35,
+              "linked": 20
+            }
+          },
+          {
+            "id": "IF-settings-3f7a1d86",
+            "type": "interface",
+            "state": "draft",
+            "handle": "Get, set or clear a setting at any scope; resolve the effective value.",
+            "edges": [
+              {
+                "kind": "fronts",
+                "to": "MOD-settings-9e4c2b71"
+              }
+            ],
+            "meta": {
+              "ops": [
+                {
+                  "slug": "get",
+                  "purpose": "read a setting",
+                  "in": [],
+                  "out": []
+                },
+                {
+                  "slug": "set",
+                  "purpose": "write a setting at one scope",
+                  "in": [],
+                  "out": []
+                },
+                {
+                  "slug": "clear",
+                  "purpose": "clear a scope's override",
+                  "in": [],
+                  "out": []
+                },
+                {
+                  "slug": "effective",
+                  "purpose": "resolve the inherited effective value",
+                  "in": [],
+                  "out": []
+                }
+              ]
+            }
+          },
+          {
+            "id": "R-settings-toml-a1b8d4e2",
+            "type": "resource",
+            "state": "adopted",
+            "handle": "the settings store on disk",
+            "meta": {}
+          },
+          {
+            "id": "SCH-setting-row-c4f6e9b3",
+            "type": "schema",
+            "state": "adopted",
+            "handle": "one setting row with its scope and provenance",
+            "meta": {}
+          },
+          {
+            "id": "MOD-testkit-6a3e8d15",
+            "type": "module",
+            "state": "adopted",
+            "handle": "Frame tests and the dump harness.",
+            "edges": [
+              {
+                "kind": "owns",
+                "to": "R-golden-frames-d8c2f7a1"
+              }
+            ],
+            "meta": {
+              "definitions": 25,
+              "linked": 22
+            }
+          },
+          {
+            "id": "IF-testkit-2e9c7a40",
+            "type": "interface",
+            "state": "adopted",
+            "handle": "Compare a live frame against its golden.",
+            "edges": [
+              {
+                "kind": "fronts",
+                "to": "MOD-testkit-6a3e8d15"
+              }
+            ],
+            "meta": {
+              "ops": [
+                {
+                  "slug": "frame",
+                  "purpose": "capture one frame",
+                  "in": [],
+                  "out": []
+                },
+                {
+                  "slug": "golden",
+                  "purpose": "compare against the golden",
+                  "in": [],
+                  "out": []
+                }
+              ]
+            }
+          },
+          {
+            "id": "R-golden-frames-d8c2f7a1",
+            "type": "resource",
+            "state": "adopted",
+            "handle": "the stored golden frames",
+            "meta": {}
+          },
+          {
+            "id": "EV-input-sent-8f3c1d62",
+            "type": "event",
+            "state": "adopted",
+            "handle": "the cluster face sent one input",
+            "meta": {}
+          },
+          {
+            "id": "EV-service-changed-4e7a9b25",
+            "type": "event",
+            "state": "adopted",
+            "handle": "a supervised service's status changed",
+            "meta": {}
+          },
+          {
+            "id": "CAP-one-navigation-7d1e4c93",
+            "type": "capability",
+            "state": "live",
+            "handle": "One navigation model serves every cluster tab.",
+            "edges": [
+              {
+                "kind": "involves",
+                "to": "MOD-tui-clusters-a4c1e8d2"
+              }
+            ],
+            "meta": {
+              "provenance": "human-derived",
+              "verify": "cargo test -p tui nav"
+            }
+          },
+          {
+            "id": "CAP-headless-dump-2a8f6e50",
+            "type": "capability",
+            "state": "live",
+            "handle": "Any cluster tab can be dumped headlessly at a fixed size.",
+            "edges": [
+              {
+                "kind": "involves",
+                "to": "MOD-tui-clusters-a4c1e8d2"
+              },
+              {
+                "kind": "involves",
+                "to": "MOD-testkit-6a3e8d15"
+              }
+            ],
+            "meta": {
+              "provenance": "human-derived",
+              "verify": "cauldron tui --dump --size 120x40"
+            }
+          },
+          {
+            "id": "CAP-settings-inherit-b5c3d9e7",
+            "type": "capability",
+            "state": "stubbed",
+            "handle": "A setting resolves through cauldron, pool, account and cluster scope inheritance.",
+            "edges": [
+              {
+                "kind": "involves",
+                "to": "MOD-settings-9e4c2b71"
+              }
+            ],
+            "meta": {
+              "provenance": "agent-derived"
+            }
+          },
+          {
+            "id": "VIO-second-interface-3b6d8e1f",
+            "type": "violation",
+            "state": "open",
+            "handle": "MOD-tui-clusters is fronted twice: by IF-tui-clusters and by cli.rs's own arg surface.",
+            "edges": [
+              {
+                "kind": "involves",
+                "to": "MOD-tui-clusters-a4c1e8d2"
+              },
+              {
+                "kind": "involves",
+                "to": "IF-tui-clusters-6d2f9b31"
+              }
+            ],
+            "meta": {
+              "kind": "second-interface",
+              "sites": 1,
+              "since": "2026-10-15",
+              "line": "MOD-tui-clusters fronted by IF-tui-clusters and by cli.rs's own arg surface"
+            }
+          },
+          {
+            "id": "DRAG-render-lineage-split-9d4a2c67",
+            "type": "drag",
+            "state": "active",
+            "handle": "cauldron's tui-render is a hand-kept copy of harness's, not a reference.",
+            "edges": [
+              {
+                "kind": "involves",
+                "to": "MOD-tui-render-5e81c0a4"
+              },
+              {
+                "kind": "involves",
+                "to": "EXT-harness-render-d3e9a1b8"
+              }
+            ],
+            "meta": {
+              "kind": "overlap",
+              "instances": 1,
+              "tolerated": "2026-10-01",
+              "line": "keys.rs is byte-identical to the harness copy by hand, not by reference"
+            }
+          },
+          {
+            "id": "MIG-settings-tab-1a7e3c58",
+            "type": "migration",
+            "state": "undescribed",
+            "handle": "migration: settings-tab",
+            "edges": [
+              {
+                "kind": "built",
+                "to": "MOD-settings-9e4c2b71"
+              }
+            ],
+            "meta": {
+              "at": "2026-10-16",
+              "slug": "settings-tab"
+            }
+          },
+          {
+            "id": "MIG-iteration-five-keys-6f2d8a94",
+            "type": "migration",
+            "state": "undescribed",
+            "handle": "migration: iteration-five-keys",
+            "edges": [
+              {
+                "kind": "built",
+                "to": "MOD-tui-clusters-a4c1e8d2"
+              },
+              {
+                "kind": "built",
+                "to": "MOD-tui-render-5e81c0a4"
+              }
+            ],
+            "meta": {
+              "at": "2026-10-15",
+              "slug": "iteration-five-keys"
+            }
+          },
+          {
+            "id": "MIG-iteration-four-3c9b1e07",
+            "type": "migration",
+            "state": "described",
+            "handle": "migration: iteration-four",
+            "edges": [
+              {
+                "kind": "built",
+                "to": "MOD-tui-clusters-a4c1e8d2"
+              }
+            ],
+            "meta": {
+              "at": "2026-10-14",
+              "slug": "iteration-four"
+            }
+          },
+          {
+            "id": "MIG-iteration-three-regions-8e4a6d21",
+            "type": "migration",
+            "state": "described",
+            "handle": "migration: iteration-three-regions",
+            "edges": [
+              {
+                "kind": "built",
+                "to": "MOD-cauldron-daemon-e2d8c4f6"
+              }
+            ],
+            "meta": {
+              "at": "2026-10-10",
+              "slug": "iteration-three-regions"
+            }
+          },
+          {
+            "id": "MIG-cutover-2b7f9c35",
+            "type": "migration",
+            "state": "described",
+            "handle": "migration: cutover",
+            "edges": [
+              {
+                "kind": "built",
+                "to": "MOD-cauldron-daemon-e2d8c4f6"
+              },
+              {
+                "kind": "built",
+                "to": "MOD-services-1d9b7e4a"
+              }
+            ],
+            "meta": {
+              "at": "2026-10-09",
+              "slug": "cutover"
+            }
+          },
+          {
+            "id": "MIG-adoption-5d1a8e60",
+            "type": "migration",
+            "state": "described",
+            "handle": "migration: adoption",
+            "edges": [
+              {
+                "kind": "built",
+                "to": "MOD-tui-clusters-a4c1e8d2"
+              },
+              {
+                "kind": "built",
+                "to": "MOD-cauldron-daemon-e2d8c4f6"
+              }
+            ],
+            "meta": {
+              "at": "2026-10-01",
+              "slug": "adoption"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "broomstick",
+      "path": "/Users/demo/code/broomstick",
+      "branch": "develop",
+      "head": "f41a09b7",
+      "worktrees": [],
+      "registered_at": "2026-09-30T18:02:11Z",
+      "blueprint": {
+        "schema_version": 1,
+        "adopted": "2026-09-30",
+        "nodes": [
+          {
+            "id": "MOD-landing-c7e2a9d4",
+            "type": "module",
+            "state": "locked",
+            "built": true,
+            "handle": "The public landing site and its splash variants.",
+            "edges": [
+              {
+                "kind": "owns",
+                "to": "R-splash-assets-9b3e7c20"
+              },
+              {
+                "kind": "owns",
+                "to": "SCH-lead-2d6f4a81"
+              }
+            ],
+            "meta": {
+              "definitions": 40,
+              "linked": 32
+            }
+          },
+          {
+            "id": "IF-landing-5a1d8f36",
+            "type": "interface",
+            "state": "locked",
+            "built": true,
+            "handle": "Render the landing page, pick a variant, capture a lead.",
+            "edges": [
+              {
+                "kind": "fronts",
+                "to": "MOD-landing-c7e2a9d4"
+              }
+            ],
+            "meta": {
+              "ops": [
+                {
+                  "slug": "render",
+                  "purpose": "render the landing page",
+                  "in": [],
+                  "out": []
+                },
+                {
+                  "slug": "variant",
+                  "purpose": "pick a splash variant",
+                  "in": [],
+                  "out": []
+                },
+                {
+                  "slug": "lead",
+                  "purpose": "capture a lead",
+                  "in": [],
+                  "out": []
+                }
+              ]
+            }
+          },
+          {
+            "id": "R-splash-assets-9b3e7c20",
+            "type": "resource",
+            "state": "adopted",
+            "handle": "the splash page assets",
+            "meta": {}
+          },
+          {
+            "id": "SCH-lead-2d6f4a81",
+            "type": "schema",
+            "state": "adopted",
+            "handle": "one captured lead",
+            "meta": {}
+          },
+          {
+            "id": "MOD-platform-api-3f8b1e67",
+            "type": "module",
+            "state": "locked",
+            "built": true,
+            "handle": "The customer-facing API: accounts, workspaces, invites.",
+            "edges": [
+              {
+                "kind": "owns",
+                "to": "R-customer-db-7a2c9e13"
+              },
+              {
+                "kind": "owns",
+                "to": "SCH-account-4b8d1f60"
+              },
+              {
+                "kind": "owns",
+                "to": "SCH-invite-a6e3c7d9"
+              },
+              {
+                "kind": "emits",
+                "to": "EV-account-created-6c1a8e34"
+              }
+            ],
+            "meta": {
+              "definitions": 160,
+              "linked": 120
+            }
+          },
+          {
+            "id": "IF-platform-api-e9c4d2a5",
+            "type": "interface",
+            "state": "locked",
+            "built": true,
+            "handle": "Signup, login, invite, workspace.",
+            "edges": [
+              {
+                "kind": "fronts",
+                "to": "MOD-platform-api-3f8b1e67"
+              }
+            ],
+            "meta": {
+              "ops": [
+                {
+                  "slug": "signup",
+                  "purpose": "create an account",
+                  "in": [],
+                  "out": []
+                },
+                {
+                  "slug": "login",
+                  "purpose": "authenticate a session",
+                  "in": [],
+                  "out": []
+                },
+                {
+                  "slug": "invite",
+                  "purpose": "invite a teammate",
+                  "in": [],
+                  "out": []
+                },
+                {
+                  "slug": "workspace",
+                  "purpose": "create or read a workspace",
+                  "in": [],
+                  "out": []
+                }
+              ]
+            }
+          },
+          {
+            "id": "R-customer-db-7a2c9e13",
+            "type": "resource",
+            "state": "adopted",
+            "handle": "the customer database",
+            "meta": {}
+          },
+          {
+            "id": "SCH-account-4b8d1f60",
+            "type": "schema",
+            "state": "adopted",
+            "handle": "one customer account",
+            "meta": {}
+          },
+          {
+            "id": "SCH-invite-a6e3c7d9",
+            "type": "schema",
+            "state": "adopted",
+            "handle": "one pending invite",
+            "meta": {}
+          },
+          {
+            "id": "MOD-billing-8d1c5e92",
+            "type": "module",
+            "state": "contradicted",
+            "handle": "Plans, metering and invoices.",
+            "edges": [
+              {
+                "kind": "owns",
+                "to": "R-stripe-events-5e9a3d17"
+              },
+              {
+                "kind": "owns",
+                "to": "SCH-invoice-d1b7e4c8"
+              },
+              {
+                "kind": "emits",
+                "to": "EV-account-created-6c1a8e34"
+              },
+              {
+                "kind": "emits",
+                "to": "EV-invoice-issued-9f4b2d71"
+              }
+            ],
+            "meta": {
+              "definitions": 90,
+              "linked": 55
+            }
+          },
+          {
+            "id": "IF-billing-2c7f9a34",
+            "type": "interface",
+            "state": "contradicted",
+            "handle": "Plan, meter, invoice.",
+            "edges": [
+              {
+                "kind": "fronts",
+                "to": "MOD-billing-8d1c5e92"
+              }
+            ],
+            "meta": {
+              "ops": [
+                {
+                  "slug": "plan",
+                  "purpose": "read or change a plan",
+                  "in": [],
+                  "out": []
+                },
+                {
+                  "slug": "meter",
+                  "purpose": "record metered usage",
+                  "in": [],
+                  "out": []
+                },
+                {
+                  "slug": "invoice",
+                  "purpose": "issue an invoice",
+                  "in": [],
+                  "out": []
+                }
+              ]
+            }
+          },
+          {
+            "id": "R-stripe-events-5e9a3d17",
+            "type": "resource",
+            "state": "adopted",
+            "handle": "the Stripe webhook event log",
+            "meta": {}
+          },
+          {
+            "id": "SCH-invoice-d1b7e4c8",
+            "type": "schema",
+            "state": "adopted",
+            "handle": "one invoice",
+            "meta": {}
+          },
+          {
+            "id": "MOD-auth-6b4e9a21",
+            "type": "module",
+            "state": "locked",
+            "built": true,
+            "handle": "Sessions, tokens, the one password path.",
+            "edges": [
+              {
+                "kind": "owns",
+                "to": "R-session-store-3c8f1a56"
+              },
+              {
+                "kind": "owns",
+                "to": "SCH-session-7f2a9d43"
+              }
+            ],
+            "meta": {
+              "definitions": 70,
+              "linked": 55
+            }
+          },
+          {
+            "id": "IF-auth-9e2d5c70",
+            "type": "interface",
+            "state": "locked",
+            "built": true,
+            "handle": "Session, token, reset.",
+            "edges": [
+              {
+                "kind": "fronts",
+                "to": "MOD-auth-6b4e9a21"
+              }
+            ],
+            "meta": {
+              "ops": [
+                {
+                  "slug": "session",
+                  "purpose": "open or close a session",
+                  "in": [],
+                  "out": []
+                },
+                {
+                  "slug": "token",
+                  "purpose": "mint or verify a token",
+                  "in": [],
+                  "out": []
+                },
+                {
+                  "slug": "reset",
+                  "purpose": "reset a password",
+                  "in": [],
+                  "out": []
+                }
+              ]
+            }
+          },
+          {
+            "id": "R-session-store-3c8f1a56",
+            "type": "resource",
+            "state": "adopted",
+            "handle": "the session store",
+            "meta": {}
+          },
+          {
+            "id": "SCH-session-7f2a9d43",
+            "type": "schema",
+            "state": "adopted",
+            "handle": "one session",
+            "meta": {}
+          },
+          {
+            "id": "MOD-mailer-1e7d3c58",
+            "type": "module",
+            "state": "adopted",
+            "handle": "Transactional mail.",
+            "edges": [
+              {
+                "kind": "owns",
+                "to": "R-templates-8a5c2f91"
+              }
+            ],
+            "meta": {
+              "definitions": 30,
+              "linked": 20
+            }
+          },
+          {
+            "id": "IF-mailer-4d9b6e12",
+            "type": "interface",
+            "state": "adopted",
+            "handle": "Send, template.",
+            "edges": [
+              {
+                "kind": "fronts",
+                "to": "MOD-mailer-1e7d3c58"
+              }
+            ],
+            "meta": {
+              "ops": [
+                {
+                  "slug": "send",
+                  "purpose": "send one transactional mail",
+                  "in": [],
+                  "out": []
+                },
+                {
+                  "slug": "template",
+                  "purpose": "render a mail template",
+                  "in": [],
+                  "out": []
+                }
+              ]
+            }
+          },
+          {
+            "id": "R-templates-8a5c2f91",
+            "type": "resource",
+            "state": "adopted",
+            "handle": "the mail templates",
+            "meta": {}
+          },
+          {
+            "id": "MOD-ops-a9c3f7e1",
+            "type": "module",
+            "state": "adopted",
+            "handle": "Deploy, migrations, backups.",
+            "edges": [
+              {
+                "kind": "owns",
+                "to": "R-backups-bucket-2f6d8a35"
+              }
+            ],
+            "meta": {
+              "definitions": 35,
+              "linked": 22
+            }
+          },
+          {
+            "id": "IF-ops-7b1e4d29",
+            "type": "interface",
+            "state": "adopted",
+            "handle": "Deploy, backup, migrate.",
+            "edges": [
+              {
+                "kind": "fronts",
+                "to": "MOD-ops-a9c3f7e1"
+              }
+            ],
+            "meta": {
+              "ops": [
+                {
+                  "slug": "deploy",
+                  "purpose": "deploy a release",
+                  "in": [],
+                  "out": []
+                },
+                {
+                  "slug": "backup",
+                  "purpose": "take a backup",
+                  "in": [],
+                  "out": []
+                },
+                {
+                  "slug": "migrate",
+                  "purpose": "run a database migration",
+                  "in": [],
+                  "out": []
+                }
+              ]
+            }
+          },
+          {
+            "id": "R-backups-bucket-2f6d8a35",
+            "type": "resource",
+            "state": "adopted",
+            "handle": "the backups bucket",
+            "meta": {}
+          },
+          {
+            "id": "EXT-stripe-0d7e2b49",
+            "type": "external",
+            "state": "adopted",
+            "handle": "Stripe, reached through R-stripe-events",
+            "meta": {}
+          },
+          {
+            "id": "EV-account-created-6c1a8e34",
+            "type": "event",
+            "state": "adopted",
+            "handle": "a customer account was created",
+            "meta": {}
+          },
+          {
+            "id": "EV-invoice-issued-9f4b2d71",
+            "type": "event",
+            "state": "adopted",
+            "handle": "an invoice was issued",
+            "meta": {}
+          },
+          {
+            "id": "CAP-signup-to-workspace-4e8a1c92",
+            "type": "capability",
+            "state": "live",
+            "handle": "Signup always ends with a usable workspace.",
+            "edges": [
+              {
+                "kind": "involves",
+                "to": "MOD-platform-api-3f8b1e67"
+              }
+            ],
+            "meta": {
+              "provenance": "human-derived",
+              "verify": "pytest tests/flows/test_signup.py"
+            }
+          },
+          {
+            "id": "CAP-metered-plans-7a3d9e56",
+            "type": "capability",
+            "state": "parked",
+            "handle": "Usage-metered plans beyond the flat tiers.",
+            "edges": [
+              {
+                "kind": "involves",
+                "to": "MOD-billing-8d1c5e92"
+              }
+            ],
+            "meta": {
+              "provenance": "human-derived"
+            }
+          },
+          {
+            "id": "CAP-passwordless-2b9c6f13",
+            "type": "capability",
+            "state": "eliminated",
+            "handle": "Passwordless magic-link login.",
+            "edges": [
+              {
+                "kind": "involves",
+                "to": "MOD-auth-6b4e9a21"
+              }
+            ],
+            "meta": {
+              "provenance": "human-derived",
+              "superseded": "2026-09-12"
+            }
+          },
+          {
+            "id": "DRAG-mail-in-api-5d2e8a07",
+            "type": "drag",
+            "state": "active",
+            "handle": "The API sends mail directly in four handlers instead of fronting on the mailer.",
+            "edges": [
+              {
+                "kind": "involves",
+                "to": "MOD-platform-api-3f8b1e67"
+              },
+              {
+                "kind": "involves",
+                "to": "MOD-mailer-1e7d3c58"
+              }
+            ],
+            "meta": {
+              "kind": "off-path-reach",
+              "instances": 4,
+              "tolerated": "2026-09-30",
+              "line": "the API sends mail directly in four handlers"
+            }
+          },
+          {
+            "id": "DRAG-two-session-shapes-c3f1b7e9",
+            "type": "drag",
+            "state": "active",
+            "handle": "Auth and platform-api each keep their own session-shape mapping.",
+            "edges": [
+              {
+                "kind": "involves",
+                "to": "MOD-auth-6b4e9a21"
+              },
+              {
+                "kind": "involves",
+                "to": "MOD-platform-api-3f8b1e67"
+              }
+            ],
+            "meta": {
+              "kind": "duplicate-mapping",
+              "instances": 1,
+              "tolerated": "2026-10-05",
+              "line": "MOD-auth and MOD-platform-api each keep their own session-shape mapping"
+            }
+          },
+          {
+            "id": "CONTRA-billing-owner-8e6d2a14",
+            "type": "contradiction",
+            "state": "open",
+            "handle": "platform-api writes Stripe events the design gives to billing.",
+            "edges": [
+              {
+                "kind": "involves",
+                "to": "MOD-billing-8d1c5e92"
+              },
+              {
+                "kind": "involves",
+                "to": "MOD-platform-api-3f8b1e67"
+              },
+              {
+                "kind": "involves",
+                "to": "R-stripe-events-5e9a3d17"
+              }
+            ],
+            "meta": {
+              "since": "2026-10-11",
+              "line": "the builder found platform-api writing Stripe events the design gives to billing"
+            }
+          },
+          {
+            "id": "MIG-billing-split-1c8a2e94",
+            "type": "migration",
+            "state": "described",
+            "handle": "migration: billing-split",
+            "edges": [
+              {
+                "kind": "built",
+                "to": "MOD-billing-8d1c5e92"
+              },
+              {
+                "kind": "built",
+                "to": "MOD-platform-api-3f8b1e67"
+              }
+            ],
+            "meta": {
+              "at": "2026-10-11",
+              "slug": "billing-split"
+            }
+          },
+          {
+            "id": "MIG-auth-session-hardening-6e3d7f52",
+            "type": "migration",
+            "state": "described",
+            "handle": "migration: auth-session-hardening",
+            "edges": [
+              {
+                "kind": "built",
+                "to": "MOD-auth-6b4e9a21"
+              }
+            ],
+            "meta": {
+              "at": "2026-10-09",
+              "slug": "auth-session-hardening"
+            }
+          },
+          {
+            "id": "MIG-mailer-templates-9a1b4c80",
+            "type": "migration",
+            "state": "described",
+            "handle": "migration: mailer-templates",
+            "edges": [
+              {
+                "kind": "built",
+                "to": "MOD-mailer-1e7d3c58"
+              }
+            ],
+            "meta": {
+              "at": "2026-10-08",
+              "slug": "mailer-templates"
+            }
+          },
+          {
+            "id": "MIG-invite-flow-2f7c9e36",
+            "type": "migration",
+            "state": "described",
+            "handle": "migration: invite-flow",
+            "edges": [
+              {
+                "kind": "built",
+                "to": "MOD-platform-api-3f8b1e67"
+              }
+            ],
+            "meta": {
+              "at": "2026-10-06",
+              "slug": "invite-flow"
+            }
+          },
+          {
+            "id": "MIG-session-shape-v2-4d8e1a73",
+            "type": "migration",
+            "state": "described",
+            "handle": "migration: session-shape-v2",
+            "edges": [
+              {
+                "kind": "built",
+                "to": "MOD-auth-6b4e9a21"
+              },
+              {
+                "kind": "built",
+                "to": "MOD-platform-api-3f8b1e67"
+              }
+            ],
+            "meta": {
+              "at": "2026-10-05",
+              "slug": "session-shape-v2"
+            }
+          },
+          {
+            "id": "MIG-ops-backup-cadence-7b2f3d95",
+            "type": "migration",
+            "state": "described",
+            "handle": "migration: ops-backup-cadence",
+            "edges": [
+              {
+                "kind": "built",
+                "to": "MOD-ops-a9c3f7e1"
+              }
+            ],
+            "meta": {
+              "at": "2026-10-03",
+              "slug": "ops-backup-cadence"
+            }
+          },
+          {
+            "id": "MIG-landing-variants-3e9c6a18",
+            "type": "migration",
+            "state": "described",
+            "handle": "migration: landing-variants",
+            "edges": [
+              {
+                "kind": "built",
+                "to": "MOD-landing-c7e2a9d4"
+              }
+            ],
+            "meta": {
+              "at": "2026-10-02",
+              "slug": "landing-variants"
+            }
+          },
+          {
+            "id": "MIG-stripe-events-wired-8c4a7e26",
+            "type": "migration",
+            "state": "described",
+            "handle": "migration: stripe-events-wired",
+            "edges": [
+              {
+                "kind": "built",
+                "to": "MOD-billing-8d1c5e92"
+              }
+            ],
+            "meta": {
+              "at": "2026-10-01",
+              "slug": "stripe-events-wired"
+            }
+          },
+          {
+            "id": "MIG-adoption-5a1d9c40",
+            "type": "migration",
+            "state": "described",
+            "handle": "migration: adoption",
+            "edges": [
+              {
+                "kind": "built",
+                "to": "MOD-landing-c7e2a9d4"
+              },
+              {
+                "kind": "built",
+                "to": "MOD-platform-api-3f8b1e67"
+              }
+            ],
+            "meta": {
+              "at": "2026-09-30",
+              "slug": "adoption"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "orchard",
+      "path": "/Users/demo/code/orchard",
+      "branch": "main",
+      "head": "1b7c0d2e",
+      "worktrees": [],
+      "registered_at": "2026-08-21T12:00:00Z",
+      "blueprint": {
+        "schema_version": 1,
+        "adopted": "2026-08-21",
+        "nodes": [
+          {
+            "id": "MOD-agent-runtime-c8e94dfd",
+            "type": "module",
+            "state": "adopted",
+            "handle": "Runs one timed agent turn-loop: parses fenced tool calls, executes them against a sandboxed shell and jailed filesystem, and captures a JSONL transcript, all under a deadline.",
+            "meta": {
+              "definitions": 180,
+              "linked": 130
+            },
+            "edges": [
+              {
+                "kind": "owns",
+                "to": "R-agent-sandbox-86f647e2"
+              },
+              {
+                "kind": "owns",
+                "to": "R-turn-transcript-9e49f712"
+              },
+              {
+                "kind": "owns",
+                "to": "SCH-runner-config-cf931ac5"
+              },
+              {
+                "kind": "owns",
+                "to": "SCH-shell-allowlist-5fc2ac3e"
+              },
+              {
+                "kind": "owns",
+                "to": "SCH-transcript-event-efc387fb"
+              },
+              {
+                "kind": "uses",
+                "to": "IF-contracts-declared-ops-263d32bb"
+              }
+            ]
+          },
+          {
+            "id": "MOD-bpsync-fd1754ca",
+            "type": "module",
+            "state": "draft",
+            "handle": "Keeps the soup's pointers at the blueprint fresh and records what each design-and-build cycle changed \u2014 detecting and reporting divergence, and never writing anything blueprint-side.",
+            "meta": {
+              "definitions": 20,
+              "linked": 5
+            },
+            "edges": [
+              {
+                "kind": "owns",
+                "to": "R-bp-pointer-set-f1af6ae1"
+              },
+              {
+                "kind": "owns",
+                "to": "R-code-change-log-a5b58b1f"
+              },
+              {
+                "kind": "uses",
+                "to": "IF-soup-write-path-4be00518"
+              }
+            ]
+          },
+          {
+            "id": "MOD-coord-8fe8d118",
+            "type": "module",
+            "state": "draft",
+            "handle": "Owns the round: it decides whether a coordinator may wake at all, opens the round against one frozen context, collects the plan, hands it to the runner, and runs the fixed close order of leakage screen, terminal wake, then curation.",
+            "meta": {
+              "definitions": 15,
+              "linked": 3
+            },
+            "edges": [
+              {
+                "kind": "owns",
+                "to": "R-coordinator-prompts-c6c9ab33"
+              },
+              {
+                "kind": "uses",
+                "to": "IF-snapshot-render-a377b68d"
+              },
+              {
+                "kind": "uses",
+                "to": "IF-dag-run-bdf5d869"
+              },
+              {
+                "kind": "uses",
+                "to": "IF-soup-write-path-4be00518"
+              },
+              {
+                "kind": "uses",
+                "to": "IF-leak-screen-fb607893"
+              }
+            ]
+          },
+          {
+            "id": "MOD-dagrun-e6b7b2b1",
+            "type": "module",
+            "state": "draft",
+            "handle": "Executes any conforming plan graph: it validates the specification, dispatches each node as a scoped child, branches on declared exit states, and resumes a crashed run at the first incomplete node.",
+            "meta": {
+              "definitions": 25,
+              "linked": 5
+            },
+            "edges": [
+              {
+                "kind": "owns",
+                "to": "R-resume-journal-44ed7938"
+              },
+              {
+                "kind": "owns",
+                "to": "R-dag-worker-pool-9b34181c"
+              },
+              {
+                "kind": "owns",
+                "to": "SCH-plan-spec-a769780f"
+              },
+              {
+                "kind": "uses",
+                "to": "IF-soup-write-path-4be00518"
+              },
+              {
+                "kind": "uses",
+                "to": "IF-inference-5c751c80"
+              }
+            ]
+          },
+          {
+            "id": "MOD-data-8d8f2de7",
+            "type": "module",
+            "state": "draft",
+            "handle": "Owns the captured market corpus and every dataset split declared over it: capture with verified hashes, the stratified holdout carve, and the seal that is set once and never unset.",
+            "meta": {
+              "definitions": 30,
+              "linked": 10
+            },
+            "edges": [
+              {
+                "kind": "owns",
+                "to": "R-captured-corpus-fa572734"
+              },
+              {
+                "kind": "owns",
+                "to": "R-dataset-splits-c0ce6b75"
+              },
+              {
+                "kind": "owns",
+                "to": "SCH-dataset-seal-f68c21df"
+              },
+              {
+                "kind": "uses",
+                "to": "IF-cursor-reader-9b241f8e"
+              },
+              {
+                "kind": "uses",
+                "to": "IF-soup-write-path-4be00518"
+              }
+            ]
+          },
+          {
+            "id": "MOD-experiment-93535793",
+            "type": "module",
+            "state": "adopted",
+            "handle": "Manages a branch-per-build sandbox repo (`mindcode`): seeds it, cuts a branch per iteration, gates and builds a builder's commit, runs its train/eval/holdout windows with the holdout sealed off, and tears down after every run.",
+            "meta": {
+              "definitions": 160,
+              "linked": 115
+            },
+            "edges": [
+              {
+                "kind": "owns",
+                "to": "R-mindcode-sandbox-69468b96"
+              },
+              {
+                "kind": "owns",
+                "to": "R-scratch-workspace-a861a4e0"
+              },
+              {
+                "kind": "owns",
+                "to": "R-holdout-ledger-6191c418"
+              },
+              {
+                "kind": "owns",
+                "to": "R-holdout-token-2ee24ca0"
+              },
+              {
+                "kind": "owns",
+                "to": "R-live-process-groups-d0cd5626"
+              },
+              {
+                "kind": "owns",
+                "to": "SCH-experiment-config-49e919c9"
+              },
+              {
+                "kind": "owns",
+                "to": "SCH-experiment-handle-f91723ba"
+              },
+              {
+                "kind": "owns",
+                "to": "SCH-holdout-log-record-10286e2c"
+              },
+              {
+                "kind": "uses",
+                "to": "IF-contracts-declared-ops-263d32bb"
+              }
+            ]
+          },
+          {
+            "id": "MOD-inference-63e2b4eb",
+            "type": "module",
+            "state": "adopted",
+            "handle": "Runs chat-completion generation behind one contract, over two interchangeable backends: local Gemma on Metal and headless claude-cli.",
+            "meta": {
+              "definitions": 90,
+              "linked": 55
+            },
+            "edges": [
+              {
+                "kind": "owns",
+                "to": "R-gemma-model-session-2737d424"
+              },
+              {
+                "kind": "owns",
+                "to": "R-claude-cli-process-d501e89a"
+              },
+              {
+                "kind": "owns",
+                "to": "SCH-gemma-config-57327bbb"
+              },
+              {
+                "kind": "owns",
+                "to": "SCH-claude-cli-config-55e5827e"
+              },
+              {
+                "kind": "uses",
+                "to": "IF-contracts-declared-ops-263d32bb"
+              }
+            ]
+          },
+          {
+            "id": "MOD-inference-experiment-contracts-877e3aee",
+            "type": "module",
+            "state": "adopted",
+            "handle": "Declares the shared LLM-inference and experiment-loop wire shapes (`inference_api`, `experiment_protocol`) that other researchd components build and call against.",
+            "meta": {
+              "definitions": 50,
+              "linked": 40
+            }
+          },
+          {
+            "id": "MOD-leakguard-e3d8f89c",
+            "type": "module",
+            "state": "draft",
+            "handle": "Screens every closed round for data leakage before anything from it is curated, files what it finds, quarantines what was touched, and authors the guardrails that come out of it.",
+            "meta": {
+              "definitions": 20,
+              "linked": 5
+            },
+            "edges": [
+              {
+                "kind": "owns",
+                "to": "R-guardrail-set-901c8a67"
+              },
+              {
+                "kind": "owns",
+                "to": "R-leak-record-64c03f78"
+              },
+              {
+                "kind": "uses",
+                "to": "IF-soup-write-path-4be00518"
+              },
+              {
+                "kind": "uses",
+                "to": "IF-snapshot-render-a377b68d"
+              }
+            ]
+          },
+          {
+            "id": "MOD-market-data-d678fc04",
+            "type": "module",
+            "state": "adopted",
+            "handle": "Reads Binance monthly 1m kline archives and hands bars out one at a time, structurally forbidding any lookahead past the reader's position.",
+            "meta": {
+              "definitions": 70,
+              "linked": 50
+            },
+            "edges": [
+              {
+                "kind": "owns",
+                "to": "R-gated-bar-series-db31b8c3"
+              },
+              {
+                "kind": "owns",
+                "to": "R-aggregation-window-3b3be275"
+              },
+              {
+                "kind": "owns",
+                "to": "SCH-bar-ecbda569"
+              }
+            ]
+          },
+          {
+            "id": "MOD-projector-244c9981",
+            "type": "module",
+            "state": "draft",
+            "handle": "Turns the one soup into many indexes: it owns the projection registry, the mechanistic renderers that enforce the fences, snapshot freezing and hashing, and the ladder-level history the future buoyancy estimator will train on.",
+            "meta": {
+              "definitions": 25,
+              "linked": 5
+            },
+            "edges": [
+              {
+                "kind": "owns",
+                "to": "R-projection-registry-8d7890a4"
+              },
+              {
+                "kind": "owns",
+                "to": "R-snapshot-store-04e3ee12"
+              },
+              {
+                "kind": "owns",
+                "to": "R-ladder-history-068a7c05"
+              },
+              {
+                "kind": "owns",
+                "to": "SCH-projection-spec-a6c67285"
+              },
+              {
+                "kind": "owns",
+                "to": "SCH-snapshot-manifest-c397b6a4"
+              },
+              {
+                "kind": "uses",
+                "to": "IF-soup-write-path-4be00518"
+              }
+            ]
+          },
+          {
+            "id": "MOD-sim-43802e85",
+            "type": "module",
+            "state": "draft",
+            "handle": "Runs one backtest episode \u2014 a strategy against a declared dataset window under a configuration \u2014 and writes its metrics mechanically, refusing any episode whose experiment was not pre-registered before a sealed number could exist.",
+            "meta": {
+              "definitions": 30,
+              "linked": 8
+            },
+            "edges": [
+              {
+                "kind": "owns",
+                "to": "R-episode-record-3015648a"
+              },
+              {
+                "kind": "owns",
+                "to": "SCH-episode-metrics-0170dfe8"
+              },
+              {
+                "kind": "owns",
+                "to": "SCH-strategy-artifact-533d3344"
+              },
+              {
+                "kind": "uses",
+                "to": "IF-cursor-reader-9b241f8e"
+              },
+              {
+                "kind": "uses",
+                "to": "IF-sandbox-runner-8595ffeb"
+              },
+              {
+                "kind": "uses",
+                "to": "IF-soup-write-path-4be00518"
+              },
+              {
+                "kind": "uses",
+                "to": "IF-dataset-admin-bffa6872"
+              }
+            ]
+          },
+          {
+            "id": "MOD-soup-a28c9cee",
+            "type": "module",
+            "state": "draft",
+            "handle": "Owns the soup itself: every node, edge and tool-call row, the id sequences, the prose bodies, and the validating write transaction that makes an illegal write unsayable.",
+            "meta": {
+              "definitions": 35,
+              "linked": 10
+            },
+            "edges": [
+              {
+                "kind": "owns",
+                "to": "R-soup-store-924e532c"
+              },
+              {
+                "kind": "owns",
+                "to": "R-node-bodies-cbcdf304"
+              },
+              {
+                "kind": "owns",
+                "to": "R-id-sequence-2f16b169"
+              },
+              {
+                "kind": "owns",
+                "to": "SCH-soup-node-1096bbc4"
+              },
+              {
+                "kind": "owns",
+                "to": "SCH-soup-edge-de8eb052"
+              },
+              {
+                "kind": "owns",
+                "to": "SCH-tool-call-73fed1c5"
+              }
+            ]
+          },
+          {
+            "id": "MOD-soupboard-5646194e",
+            "type": "module",
+            "state": "draft",
+            "handle": "A read-only local view over the soup: the coordinators, the rounds they ran, the episodes and their metrics, the champion boards, and the leakage and guardrail history.",
+            "meta": {
+              "definitions": 10,
+              "linked": 2
+            },
+            "edges": [
+              {
+                "kind": "owns",
+                "to": "R-soupboard-server-d4b67367"
+              },
+              {
+                "kind": "uses",
+                "to": "IF-soup-write-path-4be00518"
+              }
+            ]
+          },
+          {
+            "id": "IF-agent-runtime-3262eda4",
+            "type": "interface",
+            "state": "adopted",
+            "handle": "The one door into the agent-runtime module: construct a runner bound to a stage, then run one timed turn-loop to completion, timeout or crash.",
+            "edges": [
+              {
+                "kind": "fronts",
+                "to": "MOD-agent-runtime-c8e94dfd"
+              }
+            ],
+            "meta": {
+              "ops": [
+                {
+                  "slug": "agent-runtime",
+                  "purpose": "The one door into the agent-runtime module: construct a runner bound to a stage, then run one timed turn-loop to completion, timeout or crash.",
+                  "in": [],
+                  "out": []
+                }
+              ]
+            }
+          },
+          {
+            "id": "IF-bp-sweep-31823228",
+            "type": "interface",
+            "state": "draft",
+            "handle": "Sweep the blueprint for pointer freshness and file what diverged, and record one design-and-build cycle's change.",
+            "edges": [
+              {
+                "kind": "fronts",
+                "to": "MOD-bpsync-fd1754ca"
+              }
+            ],
+            "meta": {
+              "ops": [
+                {
+                  "slug": "bp-sweep",
+                  "purpose": "Sweep the blueprint for pointer freshness and file what diverged, and record one design-and-build cycle's change.",
+                  "in": [],
+                  "out": []
+                }
+              ]
+            }
+          },
+          {
+            "id": "IF-contracts-declared-ops-263d32bb",
+            "type": "interface",
+            "state": "adopted",
+            "handle": "Fronts the LLM-backend and experiment-build/run operations that `inference_api` and `experiment_protocol` declare for other components to implement and call.",
+            "edges": [
+              {
+                "kind": "fronts",
+                "to": "MOD-inference-experiment-contracts-877e3aee"
+              }
+            ],
+            "meta": {
+              "ops": [
+                {
+                  "slug": "contracts-declared-ops",
+                  "purpose": "Fronts the LLM-backend and experiment-build/run operations that `inference_api` and `experiment_protocol` declare for other components to implement and call.",
+                  "in": [],
+                  "out": []
+                }
+              ]
+            }
+          },
+          {
+            "id": "IF-cursor-reader-9b241f8e",
+            "type": "interface",
+            "state": "adopted",
+            "handle": "The crate's whole public surface: load monthly archives, parse the CSV inside, wrap the result in a forward-only cursor, and aggregate revealed bars into higher timeframes with zero lookahead.",
+            "edges": [
+              {
+                "kind": "fronts",
+                "to": "MOD-market-data-d678fc04"
+              }
+            ],
+            "meta": {
+              "ops": [
+                {
+                  "slug": "cursor-reader",
+                  "purpose": "The crate's whole public surface: load monthly archives, parse the CSV inside, wrap the result in a forward-only cursor, and aggregate revealed bars into higher timeframes with zero lookahead.",
+                  "in": [],
+                  "out": []
+                }
+              ]
+            }
+          },
+          {
+            "id": "IF-dag-run-bdf5d869",
+            "type": "interface",
+            "state": "draft",
+            "handle": "Validate a plan graph, execute it under a named round, and resume a crashed run.",
+            "edges": [
+              {
+                "kind": "fronts",
+                "to": "MOD-dagrun-e6b7b2b1"
+              }
+            ],
+            "meta": {
+              "ops": [
+                {
+                  "slug": "dag-run",
+                  "purpose": "Validate a plan graph, execute it under a named round, and resume a crashed run.",
+                  "in": [],
+                  "out": []
+                }
+              ]
+            }
+          },
+          {
+            "id": "IF-dataset-admin-bffa6872",
+            "type": "interface",
+            "state": "draft",
+            "handle": "Capture a verified market window, carve a stratified holdout out of train, seal a dataset.",
+            "edges": [
+              {
+                "kind": "fronts",
+                "to": "MOD-data-8d8f2de7"
+              }
+            ],
+            "meta": {
+              "ops": [
+                {
+                  "slug": "dataset-admin",
+                  "purpose": "Capture a verified market window, carve a stratified holdout out of train, seal a dataset.",
+                  "in": [],
+                  "out": []
+                }
+              ]
+            }
+          },
+          {
+            "id": "IF-episode-run-40581e68",
+            "type": "interface",
+            "state": "draft",
+            "handle": "Run one registered experiment against one declared dataset window with one strategy.",
+            "edges": [
+              {
+                "kind": "fronts",
+                "to": "MOD-sim-43802e85"
+              }
+            ],
+            "meta": {
+              "ops": [
+                {
+                  "slug": "episode-run",
+                  "purpose": "Run one registered experiment against one declared dataset window with one strategy.",
+                  "in": [],
+                  "out": []
+                }
+              ]
+            }
+          },
+          {
+            "id": "IF-inference-5c751c80",
+            "type": "interface",
+            "state": "adopted",
+            "handle": "The one door into the inference module: construct a backend, generate against a deadline, warm it, shut it down, ask its identity.",
+            "edges": [
+              {
+                "kind": "fronts",
+                "to": "MOD-inference-63e2b4eb"
+              }
+            ],
+            "meta": {
+              "ops": [
+                {
+                  "slug": "inference",
+                  "purpose": "The one door into the inference module: construct a backend, generate against a deadline, warm it, shut it down, ask its identity.",
+                  "in": [],
+                  "out": []
+                }
+              ]
+            }
+          },
+          {
+            "id": "IF-leak-screen-fb607893",
+            "type": "interface",
+            "state": "draft",
+            "handle": "Screen one closed round for leakage, purge what a confirmed leak touched, and author guardrails.",
+            "edges": [
+              {
+                "kind": "fronts",
+                "to": "MOD-leakguard-e3d8f89c"
+              }
+            ],
+            "meta": {
+              "ops": [
+                {
+                  "slug": "leak-screen",
+                  "purpose": "Screen one closed round for leakage, purge what a confirmed leak touched, and author guardrails.",
+                  "in": [],
+                  "out": []
+                }
+              ]
+            }
+          },
+          {
+            "id": "IF-sandbox-runner-8595ffeb",
+            "type": "interface",
+            "state": "adopted",
+            "handle": "Open the sandbox once, cut a branch per iteration, gate-and-build the builder's commit, run its three windows with the holdout sealed off, and always clean up \u2014 plus a pre-bound adapter for the same build/run pair.",
+            "edges": [
+              {
+                "kind": "fronts",
+                "to": "MOD-experiment-93535793"
+              }
+            ],
+            "meta": {
+              "ops": [
+                {
+                  "slug": "sandbox-runner",
+                  "purpose": "Open the sandbox once, cut a branch per iteration, gate-and-build the builder's commit, run its three windows with the holdout sealed off, and always clean up \u2014 plus a pre-bound adapter for the same build/run pair.",
+                  "in": [],
+                  "out": []
+                }
+              ]
+            }
+          },
+          {
+            "id": "IF-snapshot-render-a377b68d",
+            "type": "interface",
+            "state": "draft",
+            "handle": "Render a declared projection into a frozen, hashed snapshot; register new projections.",
+            "edges": [
+              {
+                "kind": "fronts",
+                "to": "MOD-projector-244c9981"
+              }
+            ],
+            "meta": {
+              "ops": [
+                {
+                  "slug": "snapshot-render",
+                  "purpose": "Render a declared projection into a frozen, hashed snapshot; register new projections.",
+                  "in": [],
+                  "out": []
+                }
+              ]
+            }
+          },
+          {
+            "id": "IF-soup-view-239eac5b",
+            "type": "interface",
+            "state": "draft",
+            "handle": "Serve the read-only view over the soup and its frozen snapshots, locally, writing nothing.",
+            "edges": [
+              {
+                "kind": "fronts",
+                "to": "MOD-soupboard-5646194e"
+              }
+            ],
+            "meta": {
+              "ops": [
+                {
+                  "slug": "soup-view",
+                  "purpose": "Serve the read-only view over the soup and its frozen snapshots, locally, writing nothing.",
+                  "in": [],
+                  "out": []
+                }
+              ]
+            }
+          },
+          {
+            "id": "IF-soup-write-path-4be00518",
+            "type": "interface",
+            "state": "draft",
+            "handle": "The single write path into the soup: put a node, get one, link two, list a query.",
+            "edges": [
+              {
+                "kind": "fronts",
+                "to": "MOD-soup-a28c9cee"
+              }
+            ],
+            "meta": {
+              "ops": [
+                {
+                  "slug": "soup-write-path",
+                  "purpose": "The single write path into the soup: put a node, get one, link two, list a query.",
+                  "in": [],
+                  "out": []
+                }
+              ]
+            }
+          },
+          {
+            "id": "IF-wake-run-763e32d3",
+            "type": "interface",
+            "state": "draft",
+            "handle": "One wake attempt for one coordinator: check the gates, and if they admit, run a whole round.",
+            "edges": [
+              {
+                "kind": "fronts",
+                "to": "MOD-coord-8fe8d118"
+              }
+            ],
+            "meta": {
+              "ops": [
+                {
+                  "slug": "wake-run",
+                  "purpose": "One wake attempt for one coordinator: check the gates, and if they admit, run a whole round.",
+                  "in": [],
+                  "out": []
+                }
+              ]
+            }
+          },
+          {
+            "id": "SCH-runner-config-cf931ac5",
+            "type": "schema",
+            "state": "adopted",
+            "handle": "the runner's construction-input shape",
+            "meta": {}
+          },
+          {
+            "id": "SCH-shell-allowlist-5fc2ac3e",
+            "type": "schema",
+            "state": "adopted",
+            "handle": "the sandboxed shell's allowed-command list",
+            "meta": {}
+          },
+          {
+            "id": "SCH-transcript-event-efc387fb",
+            "type": "schema",
+            "state": "adopted",
+            "handle": "one JSONL transcript event",
+            "meta": {}
+          },
+          {
+            "id": "SCH-plan-spec-a769780f",
+            "type": "schema",
+            "state": "adopted",
+            "handle": "a plan graph's specification",
+            "meta": {}
+          },
+          {
+            "id": "SCH-dataset-seal-f68c21df",
+            "type": "schema",
+            "state": "adopted",
+            "handle": "the dataset seal, set once and never unset",
+            "meta": {}
+          },
+          {
+            "id": "SCH-experiment-config-49e919c9",
+            "type": "schema",
+            "state": "adopted",
+            "handle": "the config handed to `open`",
+            "meta": {}
+          },
+          {
+            "id": "SCH-experiment-handle-f91723ba",
+            "type": "schema",
+            "state": "adopted",
+            "handle": "the per-iteration handle `begin` mints",
+            "meta": {}
+          },
+          {
+            "id": "SCH-holdout-log-record-10286e2c",
+            "type": "schema",
+            "state": "adopted",
+            "handle": "one private holdout ledger record",
+            "meta": {}
+          },
+          {
+            "id": "SCH-gemma-config-57327bbb",
+            "type": "schema",
+            "state": "adopted",
+            "handle": "the local Gemma backend's config",
+            "meta": {}
+          },
+          {
+            "id": "SCH-claude-cli-config-55e5827e",
+            "type": "schema",
+            "state": "adopted",
+            "handle": "the headless claude-cli backend's config",
+            "meta": {}
+          },
+          {
+            "id": "SCH-bar-ecbda569",
+            "type": "schema",
+            "state": "adopted",
+            "handle": "one OHLCV bar",
+            "meta": {}
+          },
+          {
+            "id": "SCH-projection-spec-a6c67285",
+            "type": "schema",
+            "state": "adopted",
+            "handle": "a declared projection specification",
+            "meta": {}
+          },
+          {
+            "id": "SCH-snapshot-manifest-c397b6a4",
+            "type": "schema",
+            "state": "adopted",
+            "handle": "one frozen snapshot's manifest",
+            "meta": {}
+          },
+          {
+            "id": "SCH-episode-metrics-0170dfe8",
+            "type": "schema",
+            "state": "adopted",
+            "handle": "one backtest episode's metrics",
+            "meta": {}
+          },
+          {
+            "id": "SCH-strategy-artifact-533d3344",
+            "type": "schema",
+            "state": "adopted",
+            "handle": "a strategy's build artifact",
+            "meta": {}
+          },
+          {
+            "id": "SCH-soup-node-1096bbc4",
+            "type": "schema",
+            "state": "adopted",
+            "handle": "one soup node",
+            "meta": {}
+          },
+          {
+            "id": "SCH-soup-edge-de8eb052",
+            "type": "schema",
+            "state": "adopted",
+            "handle": "one soup edge",
+            "meta": {}
+          },
+          {
+            "id": "SCH-tool-call-73fed1c5",
+            "type": "schema",
+            "state": "adopted",
+            "handle": "one logged tool-call row",
+            "meta": {}
+          },
+          {
+            "id": "R-agent-sandbox-86f647e2",
+            "type": "resource",
+            "state": "adopted",
+            "handle": "the sandboxed shell and jailed filesystem a turn runs inside",
+            "meta": {}
+          },
+          {
+            "id": "R-turn-transcript-9e49f712",
+            "type": "resource",
+            "state": "adopted",
+            "handle": "the JSONL transcript of one turn-loop",
+            "meta": {}
+          },
+          {
+            "id": "R-bp-pointer-set-f1af6ae1",
+            "type": "resource",
+            "state": "adopted",
+            "handle": "the soup's pointers at the blueprint",
+            "meta": {}
+          },
+          {
+            "id": "R-code-change-log-a5b58b1f",
+            "type": "resource",
+            "state": "adopted",
+            "handle": "what each design-and-build cycle changed",
+            "meta": {}
+          },
+          {
+            "id": "R-coordinator-prompts-c6c9ab33",
+            "type": "resource",
+            "state": "adopted",
+            "handle": "the coordinator's prompt set",
+            "meta": {}
+          },
+          {
+            "id": "R-resume-journal-44ed7938",
+            "type": "resource",
+            "state": "adopted",
+            "handle": "the journal a crashed run resumes from",
+            "meta": {}
+          },
+          {
+            "id": "R-dag-worker-pool-9b34181c",
+            "type": "resource",
+            "state": "adopted",
+            "handle": "the pool of scoped child workers",
+            "meta": {}
+          },
+          {
+            "id": "R-captured-corpus-fa572734",
+            "type": "resource",
+            "state": "adopted",
+            "handle": "the captured, hash-verified market corpus",
+            "meta": {}
+          },
+          {
+            "id": "R-dataset-splits-c0ce6b75",
+            "type": "resource",
+            "state": "adopted",
+            "handle": "the stratified train/holdout splits",
+            "meta": {}
+          },
+          {
+            "id": "R-mindcode-sandbox-69468b96",
+            "type": "resource",
+            "state": "adopted",
+            "handle": "the branch-per-build sandbox repo",
+            "meta": {}
+          },
+          {
+            "id": "R-scratch-workspace-a861a4e0",
+            "type": "resource",
+            "state": "adopted",
+            "handle": "one run's ephemeral scratch tree",
+            "meta": {}
+          },
+          {
+            "id": "R-holdout-ledger-6191c418",
+            "type": "resource",
+            "state": "adopted",
+            "handle": "the private, append-only holdout ledger",
+            "meta": {}
+          },
+          {
+            "id": "R-holdout-token-2ee24ca0",
+            "type": "resource",
+            "state": "adopted",
+            "handle": "the private per-run holdout token",
+            "meta": {}
+          },
+          {
+            "id": "R-live-process-groups-d0cd5626",
+            "type": "resource",
+            "state": "adopted",
+            "handle": "the live OS process groups for capped build/run invocations",
+            "meta": {}
+          },
+          {
+            "id": "R-gemma-model-session-2737d424",
+            "type": "resource",
+            "state": "adopted",
+            "handle": "the loaded Gemma model and Metal context",
+            "meta": {}
+          },
+          {
+            "id": "R-claude-cli-process-d501e89a",
+            "type": "resource",
+            "state": "adopted",
+            "handle": "the spawned claude-cli subprocess and its process group",
+            "meta": {}
+          },
+          {
+            "id": "R-guardrail-set-901c8a67",
+            "type": "resource",
+            "state": "adopted",
+            "handle": "the active set of authored guardrails",
+            "meta": {}
+          },
+          {
+            "id": "R-leak-record-64c03f78",
+            "type": "resource",
+            "state": "adopted",
+            "handle": "the mechanistic record of every leakage event",
+            "meta": {}
+          },
+          {
+            "id": "R-gated-bar-series-db31b8c3",
+            "type": "resource",
+            "state": "adopted",
+            "handle": "the cursor's privately-held, monotonically-revealed bar series",
+            "meta": {}
+          },
+          {
+            "id": "R-aggregation-window-3b3be275",
+            "type": "resource",
+            "state": "adopted",
+            "handle": "the in-progress higher-timeframe candle",
+            "meta": {}
+          },
+          {
+            "id": "R-projection-registry-8d7890a4",
+            "type": "resource",
+            "state": "adopted",
+            "handle": "the registry of declared projections",
+            "meta": {}
+          },
+          {
+            "id": "R-snapshot-store-04e3ee12",
+            "type": "resource",
+            "state": "adopted",
+            "handle": "the store of frozen, hashed snapshots",
+            "meta": {}
+          },
+          {
+            "id": "R-ladder-history-068a7c05",
+            "type": "resource",
+            "state": "adopted",
+            "handle": "the ladder-level history the buoyancy estimator trains on",
+            "meta": {}
+          },
+          {
+            "id": "R-episode-record-3015648a",
+            "type": "resource",
+            "state": "adopted",
+            "handle": "one backtest episode's record",
+            "meta": {}
+          },
+          {
+            "id": "R-soup-store-924e532c",
+            "type": "resource",
+            "state": "adopted",
+            "handle": "the bundled SQLite structure store",
+            "meta": {}
+          },
+          {
+            "id": "R-node-bodies-cbcdf304",
+            "type": "resource",
+            "state": "adopted",
+            "handle": "the per-node markdown prose bodies",
+            "meta": {}
+          },
+          {
+            "id": "R-id-sequence-2f16b169",
+            "type": "resource",
+            "state": "adopted",
+            "handle": "the soup's id sequences",
+            "meta": {}
+          },
+          {
+            "id": "R-soupboard-server-d4b67367",
+            "type": "resource",
+            "state": "adopted",
+            "handle": "the read-only local soupboard server",
+            "meta": {}
+          },
+          {
+            "id": "SCH-pair-072d8cb3",
+            "type": "schema",
+            "state": "draft",
+            "handle": "a train/eval pair, experiment_protocol",
+            "meta": {
+              "owner": "unresolved"
+            }
+          },
+          {
+            "id": "SCH-window-9bcf91d8",
+            "type": "schema",
+            "state": "draft",
+            "handle": "a dataset window, experiment_protocol",
+            "meta": {
+              "owner": "unresolved"
+            }
+          },
+          {
+            "id": "SCH-build-outcome-c1cbb0e9",
+            "type": "schema",
+            "state": "draft",
+            "handle": "a sandboxed build's outcome, experiment_protocol",
+            "meta": {
+              "owner": "unresolved"
+            }
+          },
+          {
+            "id": "SCH-window-exit-6395ef12",
+            "type": "schema",
+            "state": "draft",
+            "handle": "a window's exit state, experiment_protocol",
+            "meta": {
+              "owner": "unresolved"
+            }
+          },
+          {
+            "id": "SCH-metrics-c67ae034",
+            "type": "schema",
+            "state": "draft",
+            "handle": "episode metrics, experiment_protocol",
+            "meta": {
+              "owner": "unresolved"
+            }
+          },
+          {
+            "id": "SCH-run-report-e560fa44",
+            "type": "schema",
+            "state": "draft",
+            "handle": "a run's report, experiment_protocol",
+            "meta": {
+              "owner": "unresolved"
+            }
+          },
+          {
+            "id": "SCH-cleanup-report-15c5ed6c",
+            "type": "schema",
+            "state": "draft",
+            "handle": "a sandbox cleanup's report, experiment_protocol",
+            "meta": {
+              "owner": "unresolved"
+            }
+          },
+          {
+            "id": "SCH-experiment-error-3f5ad62c",
+            "type": "schema",
+            "state": "draft",
+            "handle": "an experiment error, experiment_protocol",
+            "meta": {
+              "owner": "unresolved"
+            }
+          },
+          {
+            "id": "SCH-backend-id-db238852",
+            "type": "schema",
+            "state": "draft",
+            "handle": "a backend's identity, inference_api",
+            "meta": {
+              "owner": "unresolved"
+            }
+          },
+          {
+            "id": "SCH-gen-request-9e73c00f",
+            "type": "schema",
+            "state": "draft",
+            "handle": "a generation request, inference_api",
+            "meta": {
+              "owner": "unresolved"
+            }
+          },
+          {
+            "id": "SCH-gen-output-ea875e18",
+            "type": "schema",
+            "state": "draft",
+            "handle": "a generation output, inference_api",
+            "meta": {
+              "owner": "unresolved"
+            }
+          },
+          {
+            "id": "SCH-inference-error-56c84fa6",
+            "type": "schema",
+            "state": "draft",
+            "handle": "an inference error, inference_api",
+            "meta": {
+              "owner": "unresolved"
+            }
+          },
+          {
+            "id": "DRAG-contracts-declared-vs-real-9b9d239b",
+            "type": "drag",
+            "state": "active",
+            "handle": "Six operation slugs \u2014 generate, warm, shutdown, identify, build and run \u2014 appear on BOTH the contracts declaration interface and the interfaces that actually realize them, and they are ONE behaviour written twice, not a legal declaration-and-realization pair.",
+            "edges": [
+              {
+                "kind": "involves",
+                "to": "IF-contracts-declared-ops-263d32bb"
+              },
+              {
+                "kind": "involves",
+                "to": "IF-inference-5c751c80"
+              },
+              {
+                "kind": "involves",
+                "to": "IF-sandbox-runner-8595ffeb"
+              },
+              {
+                "kind": "involves",
+                "to": "MOD-inference-experiment-contracts-877e3aee"
+              }
+            ],
+            "meta": {
+              "kind": "overlap",
+              "instances": 6,
+              "tolerated": "2026-08-21",
+              "line": "generate/warm/shutdown/identify/build/run appear on both the declaration interface and its realizers"
+            }
+          },
+          {
+            "id": "DRAG-contracts-two-facades-f2f44539",
+            "type": "drag",
+            "state": "active",
+            "handle": "The contracts module fronts two disjoint facades \u2014 the inference backend contract and the experiment build-and-run contract \u2014 behind ONE interface, which the grammar reads as wanting a sub-module fronted once each.",
+            "edges": [
+              {
+                "kind": "involves",
+                "to": "MOD-inference-experiment-contracts-877e3aee"
+              },
+              {
+                "kind": "involves",
+                "to": "IF-contracts-declared-ops-263d32bb"
+              },
+              {
+                "kind": "involves",
+                "to": "MOD-inference-63e2b4eb"
+              },
+              {
+                "kind": "involves",
+                "to": "MOD-sim-43802e85"
+              },
+              {
+                "kind": "involves",
+                "to": "SCH-strategy-artifact-533d3344"
+              }
+            ],
+            "meta": {
+              "kind": "decomposition",
+              "instances": 2,
+              "tolerated": "2026-08-21",
+              "line": "contracts fronts the inference and experiment facades behind one interface"
+            }
+          },
+          {
+            "id": "DRAG-exp-protocol-shape-ownership-9a3cc852",
+            "type": "drag",
+            "state": "active",
+            "handle": "The eight `experiment_protocol` wire shapes have NO owning module recorded, because two modules each credibly claim them: the `contracts` crate that declares them and the `experiment` module that realizes and carries them.",
+            "edges": [
+              {
+                "kind": "involves",
+                "to": "MOD-inference-experiment-contracts-877e3aee"
+              },
+              {
+                "kind": "involves",
+                "to": "MOD-experiment-93535793"
+              },
+              {
+                "kind": "involves",
+                "to": "SCH-pair-072d8cb3"
+              },
+              {
+                "kind": "involves",
+                "to": "SCH-window-9bcf91d8"
+              },
+              {
+                "kind": "involves",
+                "to": "SCH-build-outcome-c1cbb0e9"
+              },
+              {
+                "kind": "involves",
+                "to": "SCH-window-exit-6395ef12"
+              },
+              {
+                "kind": "involves",
+                "to": "SCH-metrics-c67ae034"
+              },
+              {
+                "kind": "involves",
+                "to": "SCH-run-report-e560fa44"
+              },
+              {
+                "kind": "involves",
+                "to": "SCH-cleanup-report-15c5ed6c"
+              },
+              {
+                "kind": "involves",
+                "to": "SCH-experiment-error-3f5ad62c"
+              }
+            ],
+            "meta": {
+              "kind": "unresolved-ownership",
+              "instances": 8,
+              "tolerated": "2026-08-21",
+              "line": "eight experiment_protocol shapes claimed by both contracts and experiment"
+            }
+          },
+          {
+            "id": "DRAG-inference-api-shape-ownership-b2f44168",
+            "type": "drag",
+            "state": "active",
+            "handle": "The four `inference_api` wire shapes have NO owning module recorded, because two modules each credibly claim them: the `contracts` crate that declares them and the `inference` module that realizes and carries them.",
+            "edges": [
+              {
+                "kind": "involves",
+                "to": "MOD-inference-experiment-contracts-877e3aee"
+              },
+              {
+                "kind": "involves",
+                "to": "MOD-inference-63e2b4eb"
+              },
+              {
+                "kind": "involves",
+                "to": "SCH-backend-id-db238852"
+              },
+              {
+                "kind": "involves",
+                "to": "SCH-gen-request-9e73c00f"
+              },
+              {
+                "kind": "involves",
+                "to": "SCH-gen-output-ea875e18"
+              },
+              {
+                "kind": "involves",
+                "to": "SCH-inference-error-56c84fa6"
+              }
+            ],
+            "meta": {
+              "kind": "unresolved-ownership",
+              "instances": 4,
+              "tolerated": "2026-08-21",
+              "line": "four inference_api shapes claimed by both contracts and inference"
+            }
+          },
+          {
+            "id": "MIG-adoption-7e2c9a05",
+            "type": "migration",
+            "state": "described",
+            "handle": "migration: adoption",
+            "edges": [
+              {
+                "kind": "built",
+                "to": "MOD-agent-runtime-c8e94dfd"
+              },
+              {
+                "kind": "built",
+                "to": "MOD-experiment-93535793"
+              },
+              {
+                "kind": "built",
+                "to": "MOD-inference-63e2b4eb"
+              },
+              {
+                "kind": "built",
+                "to": "MOD-inference-experiment-contracts-877e3aee"
+              },
+              {
+                "kind": "built",
+                "to": "MOD-market-data-d678fc04"
+              }
+            ],
+            "meta": {
+              "at": "2026-08-21",
+              "slug": "adoption"
+            }
+          }
+        ]
+      }
+    }
+  ]
+}

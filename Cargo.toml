@@ -1,0 +1,202 @@
+[workspace]
+resolver = "2"
+# One workspace, members grouped by KIND. `cauldron` is the whole system's
+# name, so nothing inside it carries that name: `cli/` is the router that the
+# name belongs to, and everything it routes to has a name of its own.
+members = [
+    # The `cauldron` binary — the front door and the verb router.
+    "cli",
+    # Faces: things a human looks at. `cauldron <name>` routes to one of these
+    # by name, and a bare `cauldron` defaults to `tui`.
+    "apps/tui",
+    # Things that are LINKED.
+    "libs/term-shell",
+    # The PURE render layer of the terminal face, moved from harness
+    # `apps/tui/render` (R7.S1a); see libs/tui-render/PROVENANCE.md.
+    "libs/tui-render",
+    # The AUI proto-v2 mutation wire as a face links it, and the
+    # ~/.cauldron/projects.json registry — both moved from harness (R7.S1b).
+    "libs/aui-wire",
+    "libs/projects",
+    # Wave 1 of the supervisor: environments and seams.
+    "libs/env",
+    # The subscription-shape chassis every producer serves its shapes through.
+    # Rewritten from substrate `lib/shapewire` (R3.S2.0); gates every service
+    # migration after tts, because no service can register a seam without it.
+    "libs/shapewire",
+    # R5.S2 (DEC-34): the supervisor's MCP tool host — declared tools
+    # (`mcp/<name>.toml`), woken on demand, at most one awake.
+    "libs/mcp-host",
+    # Fixtures. Structurally never deployed: nothing under testkit/ is a
+    # service, so a reference service cannot be shipped by mistaking it for one.
+    "testkit/seam-probe",
+    # Services whose code lives here. `tts` is the first, rewritten from
+    # substrate `lib/tts`; `threads` follows.
+    "services/tts",
+    # Moved from substrate `lib/threads` @9cf7615 (R3.S2.M, move-and-fit).
+    "services/threads",
+    # REL-3.S1: the MINIMAL soup crate on the release branch: the curated
+    # `cauldron-build` dataset and its loader, until the real soup lands.
+    "libs/soup",
+]
+# `services/` holds the things that RUN — one declaration (`<name>.toml`) per
+# service, carrying its OWN build profile, and, for a service whose code lives
+# in this repo, one directory per service beside it. Declarations are
+# discovered by filename, so a service directory is not mistaken for one.
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+
+[workspace.dependencies]
+# Pinned to the SAME minor as the harness workspace's own
+# `[workspace.dependencies] ratatui = 0.28`, which `libs/tui-render` was moved
+# from. `tui-render` returns ratatui `Style`/`Line` values to `apps/tui`; if two
+# members named different ratatui minors, cargo would compile two copies and
+# those types would not unify.
+ratatui = { version = "0.28", default-features = false }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+anyhow = "1"
+# Human-edited files only (service declarations, the per-environment manifest).
+# Machine-written files are JSON. The eventual supervisor's declaration format
+# (design v2 D7) is TOML, so the files he edits are already in the right shape.
+toml = "0.8"
+
+# ── The chassis's wire-facing graph: VERSION here, FEATURES at each use ─────
+#
+# These seven arrived in this workspace with `services/tts/Cargo.toml` and are
+# about to arrive again with `libs/shapewire` (R3.S2.0), which is the crate the
+# TWO FACES VENDOR. A face's vendored copy unifies types with the chassis, so a
+# minor drift between two literal pins in this tree is the kind of mismatch
+# that shows up as "expected `axum::ws::Message`, found `axum::ws::Message`"
+# in somebody else's repo. The requirement that must AGREE is the version, so
+# that is what is declared once here; FEATURES stay at each use site, because
+# they genuinely differ (shapewire's producer runtime wants five tokio
+# features, its own dev-dependencies want `full`) and a member may add to a
+# workspace entry's feature list but may never subtract from it.
+#
+# `services/tts/Cargo.toml` still pins these literally, at versions MEASURED
+# equal to the ones above (R3.S2.0 report §"owed"). It is left alone on
+# purpose: tts is in prod, and a manifest edit there buys nothing this step
+# needs. Point it here the next time that crate is opened for a reason.
+chrono = { version = "0.4" }
+tracing = { version = "0.1" }
+tokio = { version = "1" }
+axum = { version = "0.7" }
+futures = { version = "0.3" }
+uuid = { version = "1" }
+sha2 = { version = "0.10" }
+
+# ── The terminal face's runtime (R7.S1b, moved from harness apps/tui) ───────
+# Versions as harness pinned them. tokio-tungstenite matches harness `apps/aui`
+# (both faces speak to the same daemon); the threads chassis' own consumers
+# should stay on this minor.
+tokio-tungstenite = { version = "0.24" }
+futures-util = { version = "0.3" }
+tracing-subscriber = { version = "0.3" }
+tracing-appender = { version = "0.2" }
+dirs = { version = "5" }
+
+# ─────────────────────────────────────────────────────────────────────────────
+# [profile.release] — RELEASE SPEED WITH EVERY ASSERTION STILL LIVE.
+#
+# THE DECISION (R3.S2.0, for every migrated crate at once). Until this block
+# this workspace set no `[profile.release]`, so `profile = "release"` in a
+# service declaration meant `debug-assertions` and `overflow-checks` OFF —
+# where substrate's release, the tree these crates are being rewritten OUT of,
+# kept both on. `services/tts.toml` recorded that as the open question. Three
+# services now point at `profile = "release"` (`tts`, `tally`, `threads`) and
+# the chassis every one of them will fold through lands in this release, so the
+# answer is taken once, here, and not per crate: cargo honours `[profile.*]`
+# from the workspace ROOT manifest only, and a member crate that declares one
+# is ignored with a warning.
+#
+# WHAT EACH KNOB BUYS, and what it costs:
+#
+#   debug-assertions = true   `debug_assert!` still panics in a release build.
+#                             COST: the macro bodies run. Cheap here and about
+#                             to stop being free — tts carries none, but the
+#                             chassis asserts unreachable arms and broken
+#                             exclusions in its hub and its connection loop,
+#                             and those are the bugs that are invisible until
+#                             a ledger is already wrong. Also sets
+#                             `cfg(debug_assertions)`; there are no
+#                             `cfg(debug_assertions)` blocks in this workspace
+#                             today, so for now the knob means the macros and
+#                             nothing else.
+#
+#   overflow-checks  = true   Arithmetic PANICS instead of wrapping, over every
+#                             `+`/`-`/`*` in the tree rather than at hand-placed
+#                             sites — by volume the larger half. COST: a branch
+#                             per arithmetic op (single-digit % on hot integer
+#                             paths) and a real behaviour change, because a
+#                             subtraction that used to wrap now aborts the
+#                             process. That is the trade taken deliberately: a
+#                             wrapped subtraction in a budget or a byte count is
+#                             a wrong number written to the system of record,
+#                             and the supervisor can see a crash. Stated
+#                             EXPLICITLY and not left to follow
+#                             `debug-assertions`, so turning assertions off
+#                             later cannot quietly take overflow checks with
+#                             them.
+#
+#   debug            = 1      Line tables, so a panic backtrace from a
+#                             supervised daemon names a file and a line in the
+#                             log the operator actually reads. COST: binary
+#                             size and link time; `threads.toml` already
+#                             records a 3.4 GB release target, and line tables
+#                             are a slice of that. Not `2`: full symbols cost
+#                             much more and buy nothing a line number does not.
+#
+# LEFT AT THE RELEASE DEFAULT, deliberately: `opt-level = 3` (the whole point),
+# `lto = false` and `codegen-units = 16` (build time matters more than the last
+# few percent, and promotion is by hand through the supervisor), and
+# `panic = "unwind"` — load-bearing, because `panic = "abort"` would deny the
+# supervisor its graceful-shutdown rung and would break any proof that catches
+# an assertion to show the guard fires.
+#
+# SCOPE: these apply to DEPENDENCIES too. Intended for `debug-assertions`; an
+# accepted risk for `overflow-checks`, where a third-party crate relying on
+# wrapping arithmetic would now panic. If that ever bites, the narrow fix is a
+# `[profile.release.package."*"]` override, NOT dropping the knob for our own
+# code.
+# ─────────────────────────────────────────────────────────────────────────────
+[profile.release]
+debug-assertions = true
+overflow-checks  = true
+debug            = 1
+
+# ─────────────────────────────────────────────────────────────────────────────
+# [profile.dev] — LINE TABLES, NOT FULL DEBUG INFO (R6.S7, E11-5).
+#
+# The shared target dirs reached ~51 GB. Full DWARF (`debug = 2`, the dev
+# default) is the largest single slice of a debug build: on macOS it lands in
+# the per-codegen-unit `.o` files cargo keeps in `debug/deps/` and in every
+# test executable that links them.
+#
+# `debug = "line-tables-only"` keeps exactly what a panic backtrace needs —
+# every frame still prints `at <file>:<line>` — and drops variable/type info,
+# which only a debugger reads. Nobody on this arc debugs under lldb; every
+# diagnosis is a backtrace or a log line.
+#
+# SCOPE (decision recorded in RECOMMENDATIONS-LEDGER, R6.S7): dependencies AND
+# our own crates. `[profile.dev]` is the base `test` inherits from, so this
+# covers `cargo build`, `cargo test` and `cargo test --no-run` alike. If a
+# session ever needs lldb on one crate, override that crate alone:
+#     [profile.dev.package.threads]
+#     debug = 2
+#
+# NOT TOUCHED: `[profile.release]` above. Release does not inherit from dev,
+# so the signed release artifacts are built exactly as before.
+# ─────────────────────────────────────────────────────────────────────────────
+[profile.dev]
+debug = "line-tables-only"
+
+# THE NARROW FIX THE NOTE ABOVE NAMES, TAKEN ONCE (task 0215, 0214 A14): it
+# bit. crossterm 0.28's SGR mouse parser computes `column - 1` unchecked, so a
+# mouse report at column or row 0 (`ESC [ < 0 ; 0 ; 1 M`) panics the face in
+# release with "attempt to subtract with overflow". crossterm relies on
+# wrapping there; wrapped, such a report lands off-screen and hits nothing.
+[profile.release.package.crossterm]
+overflow-checks = false

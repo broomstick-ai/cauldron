@@ -1,0 +1,30 @@
+[package]
+name = "soup"
+version.workspace = true
+edition.workspace = true
+description = "The MINIMAL soup crate on the release branch (REL-3.S1): the curated `cauldron-build` dataset (cauldron's own development, scrubbed) and the loader that seeds that one environment. Replaced by whichever real soup wins (ripple/v2 or soup/phase-d); see src/lib.rs."
+
+# ONE integration-test binary (core:cargo-lease): every test is a module of
+# tests/it/main.rs. Add a module there, never a new top-level tests/*.rs.
+autotests = false
+
+[[test]]
+name = "it"
+path = "tests/it/main.rs"
+
+[dependencies]
+env = { path = "../env" }
+serde_json = { workspace = true }
+anyhow = { workspace = true }
+sha2 = { workspace = true }
+regex = "1"
+
+[lints.rust]
+unsafe_code = "forbid"
+
+[dev-dependencies]
+# The FACE'S OWN loaders read the installed seed in tests/it/face.rs: the
+# dataset is proven against the reader, not against a copy of its schema.
+# (A dev-dependency only: nothing in the face depends on this crate yet.)
+tui = { path = "../../apps/tui" }
+

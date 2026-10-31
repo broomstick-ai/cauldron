@@ -1,0 +1,173 @@
+{
+  "_note": "The GLOBAL token board (8e4fca10 msg 186): the token sources every cauldron of the root shares, read by every cauldron in place of its own seed's. Claude Code's accounts and their usage, the other sources' members (Codex accounts), the opportunistic flips, the models each subscription source was detected to offer, and each inference endpoint's reading by id (design 0199: what its key spent this period, when that resets, what each cauldron drew of it, what its /models lists for the key). FAKE: nothing is called from the face.",
+  "accounts": [
+    {
+      "number": 1,
+      "label": "sam-broomstick",
+      "login": "12d",
+      "badges": [
+        "▶ running 2"
+      ],
+      "axes": [
+        {
+          "axis": "session",
+          "pct": 41,
+          "resets": "2h 15m"
+        },
+        {
+          "axis": "weekly",
+          "pct": 41,
+          "resets": "3d 4h"
+        },
+        {
+          "axis": "fable",
+          "pct": 18,
+          "resets": "3d 4h"
+        }
+      ],
+      "subscription": "max"
+    },
+    {
+      "number": 2,
+      "label": "acct2",
+      "login": "4d",
+      "badges": [
+        "AT LIMIT"
+      ],
+      "axes": [
+        {
+          "axis": "session",
+          "pct": 100,
+          "resets": "1h 05m"
+        },
+        {
+          "axis": "weekly",
+          "pct": 88,
+          "resets": "2d 1h"
+        },
+        {
+          "axis": "fable",
+          "pct": 72,
+          "resets": "2d 1h"
+        }
+      ],
+      "subscription": "max"
+    },
+    {
+      "number": 3,
+      "label": "acct3",
+      "login": "EXPIRED",
+      "badges": [],
+      "axes": [],
+      "subscription": "max"
+    }
+  ],
+  "next_back": {
+    "account": "acct2",
+    "in": "1h 05m"
+  },
+  "pools": [
+    {
+      "id": "codex",
+      "accounts": [
+        "sam-codex"
+      ]
+    }
+  ],
+  "flips": [
+    {
+      "at": "2026-10-17T21:40:00Z",
+      "pool": "claude_code",
+      "account": "acct2",
+      "on": true,
+      "why": "weekly reset · R 72"
+    },
+    {
+      "at": "2026-10-18T16:05:00Z",
+      "pool": "claude_code",
+      "account": "acct2",
+      "on": false,
+      "why": "R 58 · 60 needed"
+    },
+    {
+      "at": "2026-10-19T07:30:00Z",
+      "pool": "claude_code",
+      "account": "sam-broomstick",
+      "on": true,
+      "why": "S 0.9 · R 17 · 15.8 needed"
+    }
+  ],
+  "models": {
+    "claude_code": [
+      "haiku",
+      "sonnet",
+      "opus",
+      "fable"
+    ],
+    "codex": [
+      "gpt-5-codex",
+      "gpt-5",
+      "o3"
+    ]
+  },
+  "endpoints": {
+    "ep-1": {
+      "spent": 12.4,
+      "resets": "3d 4h",
+      "by_cauldron": {
+        "prod": 9.1,
+        "design": 3.3
+      },
+      "listed": [
+        "anthropic/claude-sonnet-4.5",
+        "deepseek/deepseek-v4.1-flash-1017",
+        "google/gemini-2.5-flash",
+        "openai/gpt-5-mini"
+      ]
+    },
+    "ep-2": {
+      "spent": 3.75,
+      "resets": "3d 4h",
+      "by_cauldron": {
+        "design": 3.75
+      },
+      "listed": [
+        "anthropic/claude-sonnet-4.5",
+        "deepseek/deepseek-v4.1-flash-1017",
+        "google/gemini-2.5-flash",
+        "openai/gpt-5-mini"
+      ]
+    },
+    "ep-3": {
+      "spent": 41.2,
+      "resets": "3d 4h",
+      "by_cauldron": {
+        "prod": 41.2
+      },
+      "listed": []
+    },
+    "ep-4": {
+      "spent": 0.0,
+      "resets": "5d 2h",
+      "listed": [
+        "gemini-2.5-flash",
+        "gemini-2.5-pro"
+      ]
+    },
+    "ep-5": {
+      "spent": 0.0,
+      "resets": "",
+      "listed": [
+        "qwen3:32b",
+        "llama3.3:70b"
+      ]
+    },
+    "ep-6": {
+      "spent": 0.0,
+      "resets": "",
+      "listed": [
+        "qwen3-coder-30b"
+      ]
+    }
+  }
+}

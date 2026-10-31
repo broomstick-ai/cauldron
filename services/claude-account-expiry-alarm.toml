@@ -1,0 +1,59 @@
+# claude-account-expiry-alarm — a once-a-day CALENDAR JOB. DECLARED with its
+# schedule (R5.S3, HOLDS R23) and, since R5.S4, HOSTABLE: its image no longer
+# has to sit beside its data. Still launched by launchd until the executor's
+# cut-over (runbook section D), which is why `[migration]` stays.
+#
+# Scouted 2026-10-14 (R5.S1), read-only: launchd
+# `ai.broomstick.claude-account-expiry-alarm`, StartCalendarInterval 09:30,
+# RunAtLoad=false, no KeepAlive, PATH /opt/homebrew/bin:/usr/local/bin:...,
+# stdout/stderr to lib/threads/accounts/expiry-alarm.{out,err}.
+#
+# R5.S3 gave cauldron a scheduler: `[schedule] at = "09:30"` is launchd's
+# StartCalendarInterval, run by the holder, each pass recorded in
+# `supervisions`.
+#
+# R5.S4 closed the image blocker. The script used to find `claude-accounts`
+# beside itself, and `claude-accounts` its store (`accounts/`) one directory
+# above ITSELF, so a copy in `data/shared/builds/…` resolved both to nothing.
+# Now both are NAMED, below in `[env]`:
+#   EXPIRY_ALARM_CLAUDE_ACCOUNTS — which `claude-accounts` the alarm reads through
+#   CLAUDE_ACCOUNTS_HOME         — the threads home whose `accounts/` is the store
+# Unset, each script derives exactly what it derived before. A copy with
+# neither set now fails LOUDLY (`cannot find claude-accounts`, or
+# `no account store at …`) instead of reading an empty pool.
+
+name        = "claude-account-expiry-alarm"
+description = "Daily 09:30 check for expiring Claude accounts. Hostable: the installed copy is told where claude-accounts and the account store are. Still launched by launchd until the runbook's cut-over."
+kind        = "job"
+registers   = false
+probe       = "none"
+restart     = "always"
+
+[schedule]
+at          = "09:30"
+run_at_load = false
+retry_secs  = 300
+timeout_secs = 300
+
+[env]
+EXPIRY_ALARM_LOG = "${CAULDRON_SERVICE_DATA_DIR}/expiry-alarm.log"
+# The store: this env's threads home (`threads.toml`: THREADS_HOME =
+# ${CAULDRON_SERVICE_DATA_DIR}/store, beside this service's data dir). In prod
+# its `accounts` is the operator's account store (a symlink, measured
+# 2026-10-15: ~/.cauldron/data/prod/threads/store/accounts ->
+# substrate-interface-layer/lib/threads/accounts).
+CLAUDE_ACCOUNTS_HOME = "${CAULDRON_SERVICE_DATA_DIR}/../threads/store"
+# The reader: this tree's `claude-accounts` (the one that honours
+# CLAUDE_ACCOUNTS_HOME), from the prod build dir, as `[build] artifact` is.
+# A default checkout location (`~` is expanded at load); point both paths at
+# the checkout you build from.
+EXPIRY_ALARM_CLAUDE_ACCOUNTS = "~/code/cauldron/services/threads/scripts/claude-accounts"
+# launchd's PATH for this job, carried over: python3 and a bash >= 4.4 are
+# found on it.
+PATH = "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
+
+[build]
+artifact = "~/code/cauldron/services/threads/scripts/claude-account-expiry-alarm"
+bin      = "claude-account-expiry-alarm"
+profile  = "release"
+

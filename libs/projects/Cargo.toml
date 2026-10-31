@@ -1,0 +1,35 @@
+[package]
+name = "projects"
+version.workspace = true
+edition.workspace = true
+description = "The ~/.cauldron project registry: one JSON document that is the list of his projects. Owns the path, the schema, the locked atomic write, the bootstrap from the ~/minds relic, the synthesized `miscellaneous` bucket, and every refusal sentence. Moved home from harness libs/cauldron; see PROVENANCE.md."
+
+[package.metadata.provenance]
+source_repo = "~/code/harness"
+source_paths = ["libs/cauldron/**"]
+source_sha = "883204b42c440bae3e9eccd0fc2c00a482d6a79f"
+moved = "2026-10-14"
+
+# The agent-facing CLI (harness `0071` §13), renamed from `cauldron` to
+# `projects`: in this repo `cauldron` is the router's binary (`cli/`), and two
+# packages may not declare one binary name. Still NOT INSTALLED — nothing puts
+# it on a PATH; reaching it is a separate, explicit act.
+[[bin]]
+name = "projects"
+path = "src/bin/projects.rs"
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+chrono = { workspace = true, features = ["serde"] }
+dirs = { workspace = true }
+tracing = { workspace = true }
+# Advisory whole-file locking for the read-modify-write in `update`; `fd-lock`
+# and not raw `libc::flock` because this crate forbids `unsafe_code`.
+fd-lock = "4"
+
+[dev-dependencies]
+tempfile = "3"
+
+[lints.rust]
+unsafe_code = "forbid"

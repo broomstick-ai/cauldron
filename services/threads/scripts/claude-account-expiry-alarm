@@ -1,0 +1,581 @@
+#!/usr/bin/env bash
+# claude-account-expiry-alarm — the daily watch on this machine's Claude logins.
+#
+#   claude-account-expiry-alarm                 run the check, file/update/close tickets
+#   claude-account-expiry-alarm --dry-run       decide and print; write nothing
+#   claude-account-expiry-alarm --json          machine-readable result of the run
+#   claude-account-expiry-alarm install-schedule  write AND load the launchd job
+#   claude-account-expiry-alarm schedule-status   is it loaded, when does it next fire
+#
+# ── WHAT THIS IS FOR ─────────────────────────────────────────────────────────
+# Every Claude login on this machine carries TWO clocks, and only one of them
+# was being watched.
+#
+#   the ACCESS token   — hours. Refreshes itself, headlessly, and always has.
+#                        `claude-accounts rotate` exists to help this along.
+#   the REFRESH token  — weeks. `refreshTokenExpiresAt`, an absolute deadline
+#                        fixed at the moment of the BROWSER login. Measured on
+#                        five credentials on this machine, four for four, it
+#                        does NOT move when the access token refreshes.
+#
+# That second clock is the one that kills accounts, and it is invisible: a slot
+# refreshing itself perfectly every day still dies exactly on schedule. It ran
+# out on two slots here before anything noticed. This job is the thing that
+# notices, and it is deliberately the dullest possible program — it reads a
+# number and writes a ticket.
+#
+# ── IT NEVER ASSUMES 28 DAYS ─────────────────────────────────────────────────
+# The ~28-day grant is INFERRED from five credentials on one machine. It is not
+# a documented contract and Anthropic can change it. So nothing here computes a
+# deadline; the deadline is READ, every time, from the stored value, and the
+# threshold is expressed in days REMAINING. If the grant length changes this
+# keeps telling the truth instead of confidently lying.
+#
+# ── IT NEVER TOUCHES A CREDENTIAL ────────────────────────────────────────────
+# The entire read is `claude-accounts expiry --json`, which reads the keychain
+# item and parses one field. No writes, no copies, no refresh attempts, no
+# `claude` invocation, and it does not take the rotation lock. Two reasons that
+# matters:
+#
+#   1. NEVER COPY A CREDENTIAL BETWEEN STORES. Two stores sharing one refresh
+#      token means the second refresher is handed a retired token and self-
+#      wipes. That is what killed the `primary` slot (see CLONE_REFUSAL and the
+#      measurement comment in accounts.rs). This job has no copy verb at all.
+#   2. `CLAUDE_CODE_OAUTH_TOKEN` MUST NEVER BE SET. With it set, `claude`
+#      silently DELETES the machine-default keychain item on exit (upstream
+#      #37512). This job never invokes `claude`, and it scrubs that variable
+#      (and its two siblings) out of every child it spawns anyway. The launchd
+#      job it installs sets PATH and nothing else.
+#
+# ── WHY IT IS ITS OWN JOB AND NOT PART OF `rotate` ───────────────────────────
+# `rotate` was the obvious host and it is the wrong one, for three reasons.
+#   · rotate INVOKES `claude` against every rotatable slot. This must not, and
+#     an alarm that can only run as a side effect of a credential-mutating pass
+#     inherits every one of that pass's risks.
+#   · rotate needs the `threads` crate BUILT — it reads `threads accounts
+#     health --json`, falling back to `cargo run`. An alarm that goes silent
+#     when a build breaks is not an alarm. This reads the keychain directly.
+#   · rotate has never actually run. Its 120 log lines are 15 passes, all
+#     `dry-run=1`, all on 2026-08-08, and its LaunchAgent has never been
+#     loaded. Enabling it for real is a separate decision with credential
+#     consequences, and it is NOT this job's to make. Turning the alarm on must
+#     not require turning the mutating pass on.
+# What IS reused is the thing that should be: the reader. There is exactly one
+# parser of `refreshTokenExpiresAt` on this machine — `slot_days_left` in
+# claude-accounts — and `claude-accounts expiry` is a thin read-only surface
+# over it. This file does not parse a credential at all.
+#
+# ── IDEMPOTENCY ──────────────────────────────────────────────────────────────
+# It runs daily and must not file a new ticket every day. One ticket per slot,
+# id `claude-login-<slot>`, and the ticket is its OWN state: the deadline it was
+# filed against is recorded in its frontmatter as `expires_at_ms`. So
+#   · nothing changed            -> writes nothing at all
+#   · the slot got worse         -> the SAME ticket is escalated, not duplicated
+#   · the deadline MOVED forward -> he signed in; the ticket is closed
+# The deadline moving is the only in-band evidence of a browser login, which is
+# why it is the close signal. `human-action create` also refuses a colliding
+# id, so a duplicate is impossible even if the logic above were wrong.
+set -uo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "$(readlink "${BASH_SOURCE[0]}" || echo "${BASH_SOURCE[0]}")")" && pwd)"
+# EXPIRY_ALARM_CLAUDE_ACCOUNTS (R5.S4, HOLDS R23): the `claude-accounts` to
+# read through, for a copy that does not sit beside one (cauldron installs
+# this file ALONE into its version store). Pair it with CLAUDE_ACCOUNTS_HOME,
+# which `claude-accounts` honours and which this script passes through, so the
+# store is named too. Unset = the one beside this file, as before.
+CLAUDE_ACCOUNTS="${EXPIRY_ALARM_CLAUDE_ACCOUNTS:-$SCRIPT_DIR/claude-accounts}"
+LABEL="ai.broomstick.claude-account-expiry-alarm"
+PLIST="$HOME/Library/LaunchAgents/$LABEL.plist"
+
+THRESHOLD_DAYS="${EXPIRY_ALARM_THRESHOLD:-7}"
+HUMAN_ACTION="${EXPIRY_ALARM_HUMAN_ACTION:-$HOME/code/harness/core-plugins/core/tools/human-action}"
+WORKSPACE="${EXPIRY_ALARM_WORKSPACE:-$HOME/code/harness/.mind/workspaces/threads-bug-ledger}"
+LOG="${EXPIRY_ALARM_LOG:-$SCRIPT_DIR/../accounts/expiry-alarm.log}"
+ACTOR="claude-account-expiry-alarm"
+
+# The one test seam. Honoured ONLY under EXPIRY_ALARM_TEST=1, so a stray
+# variable in a real shell can never feed the alarm a fake inventory and blind
+# it. Same discipline as claude-accounts' `seam`.
+TEST_MODE="${EXPIRY_ALARM_TEST:-0}"
+FIXTURE=""
+[ "$TEST_MODE" = "1" ] && FIXTURE="${EXPIRY_ALARM_INVENTORY:-}"
+
+say()  { printf '%s\n' "$*"; }
+warn() { printf '%s\n' "$*" >&2; }
+die()  { printf 'claude-account-expiry-alarm: %s\n' "$*" >&2; exit 1; }
+logline() {
+  mkdir -p "$(dirname "$LOG")" 2>/dev/null
+  printf '%s %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$*" >> "$LOG"
+}
+
+# Every child runs with the three hazard variables STRIPPED. None of them is
+# needed to read a keychain item, and CLAUDE_CODE_OAUTH_TOKEN in particular is
+# the one that makes `claude` delete the machine default on exit. Stripping
+# them here means the alarm keeps working from any shell, including one where
+# the operator has them set, without ever passing them on.
+scrubbed() {
+  env -u CLAUDE_CODE_OAUTH_TOKEN -u CLAUDE_SECURESTORAGE_CONFIG_DIR \
+      -u CLAUDE_CONFIG_DIR "$@"
+}
+
+# ── the read ─────────────────────────────────────────────────────────────────
+
+inventory() {
+  if [ -n "$FIXTURE" ]; then
+    [ -f "$FIXTURE" ] || die "fixture not found: $FIXTURE"
+    cat "$FIXTURE"; return
+  fi
+  [ -x "$CLAUDE_ACCOUNTS" ] || die "cannot find claude-accounts at $CLAUDE_ACCOUNTS"
+  scrubbed "$CLAUDE_ACCOUNTS" expiry --json --threshold "$THRESHOLD_DAYS"
+}
+
+# ── the ticket ───────────────────────────────────────────────────────────────
+
+ticket_file() { printf '%s/human-actions/%s.md' "$WORKSPACE" "$1"; }
+
+# The deadline this ticket was filed against, out of its own frontmatter. This
+# reads a key the ALARM wrote, never an operator-submitted value — those are
+# `human-action values`' alone and are never parsed out of the file.
+recorded_expiry() {
+  local f; f="$(ticket_file "$1")"
+  [ -f "$f" ] || { printf ''; return 0; }
+  python3 - "$f" <<'PY'
+import sys
+seen_open = False
+for line in open(sys.argv[1], encoding="utf-8"):
+    if line.rstrip("\n") == "---":
+        if seen_open:
+            break
+        seen_open = True
+        continue
+    if seen_open and line.startswith("expires_at_ms:"):
+        print(line.split(":", 1)[1].strip())
+        break
+PY
+}
+
+recorded_status() {
+  local f; f="$(ticket_file "$1")"
+  [ -f "$f" ] || { printf ''; return 0; }
+  python3 - "$f" <<'PY'
+import sys
+seen_open = False
+for line in open(sys.argv[1], encoding="utf-8"):
+    if line.rstrip("\n") == "---":
+        if seen_open:
+            break
+        seen_open = True
+        continue
+    if seen_open and line.startswith("status:"):
+        print(line.split(":", 1)[1].strip())
+        break
+PY
+}
+
+# ── the run ──────────────────────────────────────────────────────────────────
+
+cmd_check() {
+  local dry=0 as_json=0
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --dry-run) dry=1; shift ;;
+      --json)    as_json=1; shift ;;
+      --threshold) THRESHOLD_DAYS="${2:-}"; [ -n "$THRESHOLD_DAYS" ] || die "--threshold needs a number"; shift 2 ;;
+      -*) die "unknown option $1" ;;
+      *)  die "check takes no arguments" ;;
+    esac
+  done
+
+  [ -x "$HUMAN_ACTION" ] || die "cannot find the human-action tool at $HUMAN_ACTION"
+  [ -d "$WORKSPACE" ]    || die "no such workspace: $WORKSPACE"
+  mkdir -p "$WORKSPACE/human-actions" 2>/dev/null
+
+  local json; json="$(inventory)"
+  [ -n "$json" ] || die "could not read the login inventory"
+
+  logline "check: start (threshold=${THRESHOLD_DAYS}d dry-run=$dry workspace=$WORKSPACE)"
+
+  # The decision table is computed in one place, in python, and handed back as
+  # records. Bash below only EXECUTES it — same split as `rotate`'s plan, and
+  # for the same reason: the judgement is testable on its own.
+  local plan_py
+  read -r -d '' plan_py <<'PY' || true
+import json, sys, time, datetime
+d = json.load(sys.stdin)
+US = "\u001f"
+threshold = float(sys.argv[1])
+now = time.time()
+def when(ms):
+    # Local time, spelled out. He reads these, he does not parse them.
+    t = datetime.datetime.fromtimestamp(ms/1000)
+    return t.strftime("%A %-d %B %Y at %-I:%M%p").replace("AM", "am").replace("PM", "pm")
+for s in d.get("slots", []):
+    ms = s.get("expires_at_ms")
+    # THE CLASSIFICATION IS THIS FILE'S, NOT THE INVENTORY'S. The reader's job
+    # is to report the deadline; deciding what counts as "too close" is the
+    # ALARM's policy, and it is re-derived here from the raw deadline on every
+    # run. Two consequences, both deliberate:
+    #   - `--threshold` means something end to end, rather than only relabelling
+    #     a verdict the reader already reached;
+    #   - a fixture cannot smuggle a verdict past the logic under test, so the
+    #     threshold cases in the conformance test exercise the threshold rather
+    #     than a mirror of themselves.
+    # Only the two READABILITY states are taken on trust, because they are facts
+    # about the keychain item that this file cannot re-observe.
+    reported = s.get("state")
+    if reported in ("no-credential", "unreadable") or ms is None:
+        st = reported if reported in ("no-credential", "unreadable") else "unreadable"
+        days = None
+    else:
+        days = (ms/1000 - now)/86400
+        # `dead` is decided against the DEADLINE itself, so a slot that lapsed
+        # nine minutes ago is dead, not "expiring in -0.01 days".
+        st = "dead" if ms/1000 <= now else ("expiring" if days <= threshold else "healthy")
+    print(US.join([
+        s["label"],
+        st,
+        "" if ms is None else str(ms),
+        "" if ms is None else when(ms),
+        "" if ms is None else datetime.datetime.fromtimestamp(
+            ms/1000, datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "" if days is None else f"{days:.2f}",
+    ]))
+PY
+
+  local plan; plan="$(printf '%s' "$json" | python3 -c "$plan_py" "$THRESHOLD_DAYS")"
+  local -a results=()
+  local n_filed=0 n_escalated=0 n_closed=0 n_quiet=0 n_healthy=0
+  local US=$'\x1f'
+
+  local label state exp_ms exp_human exp_iso days
+  while IFS=$'\x1f' read -r label state exp_ms exp_human exp_iso days; do
+    [ -n "${label:-}" ] || continue
+    local id="claude-login-$label"
+    local tf; tf="$(ticket_file "$id")"
+    local prev_exp prev_status
+    prev_exp="$(recorded_expiry "$id")"
+    prev_status="$(recorded_status "$id")"
+    local has_open=0
+    [ -f "$tf" ] && [ "$prev_status" = "open" ] && has_open=1
+
+    case "$state" in
+      healthy)
+        # A ticket that is open on a slot that is now healthy can only mean one
+        # thing: the deadline moved, i.e. he signed in. Close it — and say so
+        # with the alarm's own name on the status, because a status an agent
+        # authored must never read as his.
+        if [ "$has_open" -eq 1 ]; then
+          if [ "$dry" -eq 0 ]; then
+            scrubbed "$HUMAN_ACTION" update "$WORKSPACE" "$id" \
+              --status resolved --force --by "$ACTOR" \
+              --basis "refreshTokenExpiresAt moved to $exp_iso (${days}d left) — the slot was signed in again" \
+              >/dev/null 2>&1 || warn "could not close $id"
+            scrubbed "$HUMAN_ACTION" ack "$WORKSPACE" "$id" \
+              --note "closed automatically: the deadline moved" >/dev/null 2>&1 || true
+          fi
+          n_closed=$((n_closed+1))
+          results+=("$label${US}closed${US}${days}${US}deadline moved to $exp_iso — signed in again")
+          logline "CLOSED $label — deadline moved to $exp_iso (${days}d)"
+        else
+          n_healthy=$((n_healthy+1))
+          results+=("$label${US}healthy${US}${days}${US}expires $exp_iso")
+        fi
+        ;;
+
+      expiring|dead|no-credential|unreadable)
+        local priority summary blocking
+        case "$state" in
+          expiring)
+            priority=high; blocking=false
+            summary="Runs out $exp_human — about $(printf '%.1f' "$days") days left. Only a browser sign-in resets it." ;;
+          dead)
+            priority=high; blocking=true
+            summary="EXPIRED $exp_human. This account is dead and is failing now." ;;
+          no-credential)
+            priority=high; blocking=false
+            summary="No stored login at all — this slot has never been signed in, or was wiped." ;;
+          unreadable)
+            priority=high; blocking=false
+            summary="Its keychain item is unreadable, so its deadline cannot be checked." ;;
+        esac
+
+        if [ "$has_open" -eq 0 ] && [ ! -f "$tf" ]; then
+          [ "$dry" -eq 0 ] && file_ticket "$id" "$label" "$state" "$exp_ms" "$exp_human" "$exp_iso" "$days" "$priority" "$blocking" "$summary"
+          n_filed=$((n_filed+1))
+          results+=("$label${US}filed${US}${days}${US}$summary")
+          logline "FILED  $id — $state — $summary"
+        elif [ "$has_open" -eq 0 ]; then
+          # A closed ticket on a slot that is bad again. The deadline moved and
+          # then lapsed, or he resolved it without signing in. Re-open the SAME
+          # ticket rather than minting a second one.
+          [ "$dry" -eq 0 ] && reopen_ticket "$id" "$state" "$exp_ms" "$exp_human" "$exp_iso" "$priority" "$blocking" "$summary"
+          n_filed=$((n_filed+1))
+          results+=("$label${US}reopened${US}${days}${US}$summary")
+          logline "REOPEN $id — $state — $summary"
+        elif [ "$prev_exp" != "$exp_ms" ] || ! ticket_says_state "$id" "$state"; then
+          # Same ticket, changed facts: either the deadline moved (a sign-in
+          # that did not clear the threshold) or the slot got worse
+          # (expiring -> dead). Escalate in place; never duplicate.
+          [ "$dry" -eq 0 ] && escalate_ticket "$id" "$state" "$exp_ms" "$exp_human" "$exp_iso" "$priority" "$blocking" "$summary" "$prev_exp"
+          n_escalated=$((n_escalated+1))
+          results+=("$label${US}updated${US}${days}${US}$summary")
+          logline "UPDATE $id — $state — $summary"
+        else
+          # Nothing changed. Write NOTHING. This is the branch that runs on
+          # 27 of every 28 days and it is the whole point of the design.
+          n_quiet=$((n_quiet+1))
+          results+=("$label${US}unchanged${US}${days}${US}ticket already open and current")
+        fi
+        ;;
+      *)
+        results+=("$label${US}unknown${US}${days}${US}unrecognised state ${state}; did nothing")
+        logline "?      $label — unrecognised state $state" ;;
+    esac
+  done <<< "$plan"
+
+  logline "check: done — $n_filed filed, $n_escalated updated, $n_closed closed, $n_quiet unchanged, $n_healthy healthy"
+
+  if [ "$as_json" -eq 1 ]; then
+    local out_py
+    read -r -d '' out_py <<'PY' || true
+import json, sys
+rows = []
+for line in sys.stdin.read().splitlines():
+    if not line.strip():
+        continue
+    label, outcome, days, note = line.split("\u001f", 3)
+    rows.append({"label": label, "outcome": outcome,
+                 "days_left": None if days in ("", "?") else float(days),
+                 "note": note})
+print(json.dumps({"at": sys.argv[1], "threshold_days": float(sys.argv[2]),
+                  "dry_run": sys.argv[3] == "1", "slots": rows}, indent=2))
+PY
+    printf '%s\n' "${results[@]+"${results[@]}"}" \
+      | python3 -c "$out_py" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$THRESHOLD_DAYS" "$dry"
+    return 0
+  fi
+
+  say ""
+  say "  ════ Claude login expiry — threshold ${THRESHOLD_DAYS} days ════"
+  say ""
+  local row outcome note
+  for row in "${results[@]+"${results[@]}"}"; do
+    IFS=$'\x1f' read -r label outcome days note <<< "$row"
+    printf '  %-26s %-11s %8s  %s\n' "$label" "$outcome" \
+      "$( [ -z "${days:-}" ] && printf '%s' '—' || printf '%sd' "$days" )" "$note"
+  done
+  say ""
+  say "  tickets: $WORKSPACE/human-actions"
+  say "  log:     $LOG"
+  say ""
+  return 0
+}
+
+# Does the open ticket already describe THIS state? The state is recorded as a
+# frontmatter key the alarm owns, so an escalation is detected without parsing
+# prose.
+ticket_says_state() {
+  local f; f="$(ticket_file "$1")"
+  [ -f "$f" ] || return 1
+  grep -qx "slot_state: $2" "$f"
+}
+
+file_ticket() {
+  local id="$1" label="$2" state="$3" exp_ms="$4" exp_human="$5" exp_iso="$6"
+  local days="$7" priority="$8" blocking="$9" summary="${10}"
+  local intro section cmdfile
+  cmdfile="$(mktemp -t expiry-alarm-cmd)"
+  if [ "$label" = "machine-default" ]; then
+    printf 'claude-accounts set-live-login <the account this machine signs in as>\n' > "$cmdfile"
+  else
+    printf 'claude-accounts login %s\n' "$label" > "$cmdfile"
+  fi
+
+  case "$state" in
+    dead)
+      intro="Your \`$label\` Claude login EXPIRED on $exp_human. It is not expiring — it has already run out, and anything routed to this account is failing right now.
+
+This is not something a background job can fix, and nothing was ever going to fix it on its own. The deadline was fixed at the moment you last signed in through a browser, and it does not move when the token refreshes itself. Signing in again is the only thing that resets it."
+      section="Sign $label back in" ;;
+    expiring)
+      intro="Your \`$label\` Claude login runs out on $exp_human — $days days from now. It still works today.
+
+Worth knowing why nothing will save it: that deadline is fixed at the moment you sign in through a browser, and it does NOT move when the token refreshes itself. The background refresh has been working perfectly and is irrelevant to this. A browser sign-in is the only thing that resets the clock."
+      section="Sign $label back in, before $exp_human" ;;
+    no-credential)
+      intro="The \`$label\` slot has a config directory but no stored login at all — either it was never signed in, or its credential was wiped.
+
+Until it is signed in, this slot is dead weight in the pool."
+      section="Sign $label in" ;;
+    unreadable)
+      intro="The \`$label\` slot has a keychain item, but its \`refreshTokenExpiresAt\` could not be read — so I cannot tell you when, or whether, it expires.
+
+I am reporting this rather than assuming it is fine. A login whose deadline cannot be checked is not a login you can count on."
+      section="Check $label by hand" ;;
+  esac
+
+  scrubbed "$HUMAN_ACTION" create "$WORKSPACE" \
+    --id "$id" \
+    --title "Sign in again — $label" \
+    --platform "Claude Code" \
+    --category readonly \
+    --resubmit repeatable \
+    --priority "$priority" \
+    --summary "$summary" \
+    --intro "$intro" \
+    --section "$section" \
+    --step "Run this in a terminal. It opens a browser." \
+    --copy-label "Sign $label in" \
+    --copy-note "Paste this into a terminal." \
+    --copy-file "$cmdfile" \
+    --step "Finish the consent page in the browser. That is the whole job — this check runs daily, sees the new deadline, and closes this ticket by itself." \
+    >/dev/null 2>&1 \
+    || { warn "could not file $id"; rm -f "$cmdfile"; return 1; }
+  rm -f "$cmdfile"
+
+  scrubbed "$HUMAN_ACTION" update "$WORKSPACE" "$id" \
+    --set "expires_at_ms=${exp_ms:-0}" \
+    --set "slot_state=$state" \
+    --set "blocking=$blocking" >/dev/null 2>&1 || true
+}
+
+escalate_ticket() {
+  local id="$1" state="$2" exp_ms="$3" exp_human="$4" exp_iso="$5"
+  local priority="$6" blocking="$7" summary="$8" prev_exp="$9"
+  local note
+  if [ "$prev_exp" != "$exp_ms" ]; then
+    note="**Update $(date '+%-d %B %Y').** The deadline moved to $exp_human, so this slot was signed in again — but it is still inside the ${THRESHOLD_DAYS}-day window, so this ticket stays open."
+  else
+    note="**Update $(date '+%-d %B %Y').** This slot has got worse: it is now **$state**. $summary"
+  fi
+  scrubbed "$HUMAN_ACTION" update "$WORKSPACE" "$id" \
+    --set "expires_at_ms=${exp_ms:-0}" \
+    --set "slot_state=$state" \
+    --set "priority=$priority" \
+    --set "blocking=$blocking" \
+    --set "summary=$summary" \
+    --append "$note" >/dev/null 2>&1 || warn "could not update $id"
+}
+
+reopen_ticket() {
+  local id="$1" state="$2" exp_ms="$3" exp_human="$4" exp_iso="$5"
+  local priority="$6" blocking="$7" summary="$8"
+  scrubbed "$HUMAN_ACTION" update "$WORKSPACE" "$id" \
+    --status open \
+    --set "expires_at_ms=${exp_ms:-0}" \
+    --set "slot_state=$state" \
+    --set "priority=$priority" \
+    --set "blocking=$blocking" \
+    --set "summary=$summary" \
+    --append "**Reopened $(date '+%-d %B %Y').** $summary" >/dev/null 2>&1 \
+    || warn "could not reopen $id"
+  scrubbed "$HUMAN_ACTION" unack "$WORKSPACE" "$id" >/dev/null 2>&1 || true
+}
+
+# ── the schedule ─────────────────────────────────────────────────────────────
+#
+# This INSTALLS AND LOADS. `claude-accounts daily-setup` prints a recipe and
+# installs nothing, and the result of that is a rotation job that has never run
+# once in the weeks since it was written. An alarm nobody scheduled is exactly
+# the failure that produced this situation, so the schedule is not a suggestion
+# here — it is a verb.
+
+cmd_install_schedule() {
+  local hour=9 minute=30
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --hour)   hour="${2:-}"; shift 2 ;;
+      --minute) minute="${2:-}"; shift 2 ;;
+      -*) die "unknown option $1" ;;
+      *)  die "install-schedule takes no arguments" ;;
+    esac
+  done
+  mkdir -p "$HOME/Library/LaunchAgents"
+  # EnvironmentVariables carries PATH and NOTHING ELSE. In particular it never
+  # carries CLAUDE_CODE_OAUTH_TOKEN, and because launchd does not inherit the
+  # operator's shell, the job cannot pick it up by accident either.
+  cat > "$PLIST" <<PLIST
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key><string>$LABEL</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>$SCRIPT_DIR/claude-account-expiry-alarm</string>
+  </array>
+  <key>StartCalendarInterval</key>
+  <dict><key>Hour</key><integer>$hour</integer><key>Minute</key><integer>$minute</integer></dict>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>PATH</key>
+    <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+  </dict>
+  <key>StandardOutPath</key><string>$(dirname "$LOG")/expiry-alarm.out</string>
+  <key>StandardErrorPath</key><string>$(dirname "$LOG")/expiry-alarm.err</string>
+  <key>RunAtLoad</key><false/>
+</dict>
+</plist>
+PLIST
+  # bootout first so this is re-runnable: bootstrap onto a loaded label fails.
+  launchctl bootout "gui/$(id -u)/$LABEL" >/dev/null 2>&1
+  launchctl bootstrap "gui/$(id -u)" "$PLIST" \
+    || die "launchctl bootstrap failed for $PLIST"
+  say "  loaded $LABEL — daily at $(printf '%02d:%02d' "$hour" "$minute") local"
+  logline "schedule: installed and loaded ($hour:$minute daily)"
+  cmd_schedule_status
+}
+
+cmd_schedule_status() {
+  local out
+  out="$(launchctl print "gui/$(id -u)/$LABEL" 2>&1)" || {
+    say "  NOT LOADED — $LABEL is not registered with launchd"
+    return 1
+  }
+  say ""
+  say "  $LABEL"
+  printf '%s\n' "$out" | grep -E '^\s*(state|program|path|runs|last exit code) ' | sed 's/^/  /'
+  printf '%s\n' "$out" | grep -A4 'start interval\|StartCalendarInterval' | sed 's/^/  /' | head -8
+  say ""
+  return 0
+}
+
+cmd_help() {
+  cat <<'EOF'
+
+  claude-account-expiry-alarm — the daily watch on this machine's Claude logins.
+
+    claude-account-expiry-alarm                    run the check
+    claude-account-expiry-alarm --dry-run          decide and print; write nothing
+    claude-account-expiry-alarm --json             machine-readable result
+    claude-account-expiry-alarm --threshold N      days remaining that trips it (default 7)
+    claude-account-expiry-alarm install-schedule   write AND load the launchd job
+    claude-account-expiry-alarm schedule-status    is it loaded, and when does it fire
+    claude-account-expiry-alarm help
+
+  It reads `refreshTokenExpiresAt` for every slot in the pool and raises a
+  human action naming the account and the date when any slot is at or below
+  the threshold. A slot that has already run out is reported as DEAD, which is
+  a different and more urgent message than a countdown.
+
+  It never writes, copies or refreshes a credential, and it never invokes
+  `claude`. One ticket per slot, updated rather than duplicated, and closed
+  automatically when the slot's deadline moves — which is the signal that you
+  signed in again.
+
+EOF
+}
+
+main() {
+  [ "$(uname -s)" = "Darwin" ] || die "macOS only (this is all keychain-backed)"
+  case "${1:-}" in
+    install-schedule) shift; cmd_install_schedule "$@" ;;
+    schedule-status)  shift; cmd_schedule_status ;;
+    help|-h|--help)   cmd_help ;;
+    check)            shift; cmd_check "$@" ;;
+    *)                cmd_check "$@" ;;
+  esac
+}
+
+main "$@"

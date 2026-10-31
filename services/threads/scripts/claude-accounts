@@ -1,0 +1,2785 @@
+#!/usr/bin/env bash
+# claude-accounts — the one command for managing which Claude accounts this
+# machine is signed into.
+#
+#   claude-accounts                       interactive menu (what you want)
+#   claude-accounts list                  your accounts and their login health
+#   claude-accounts status [--json]       same, machine-readable
+#   claude-accounts login <name> [opts]   sign an account in (or create one)
+#   claude-accounts set-live-login <name> make it the login plain `claude` uses
+#   claude-accounts rename <old> <new>    rename an account (dir, keychain, all)
+#   claude-accounts delete <name>         remove this machine's copy of a login
+#   claude-accounts prune [--dry-run]     retire credential stores nothing needs
+#   claude-accounts rotate [--dry-run]    the daily key-rotation pass
+#   claude-accounts daily-setup           print the launchd job (installs nothing)
+#
+# ── THERE IS NO `default` ROW ────────────────────────────────────────────────
+# The machine login is not an account. It is the credential store `claude` reads
+# when CLAUDE_CONFIG_DIR is unset, and whatever is in it is ALWAYS one of the
+# real accounts (operator, msg #928: "the default is always going to be one of
+# the other two"). So the listing shows accounts only, and marks the one the
+# machine login is currently signed in as. The join is on IDENTITY, not on the
+# secret: the machine store and that account's own slot are two INDEPENDENT
+# grants for one account — different secrets, different expiries — which is the
+# healthy shape, and the shape a secret-hash join would get exactly wrong.
+#
+# ── WHAT THIS REFUSES TO DO, AND WHY ─────────────────────────────────────────
+#
+#   1. IT WILL NOT LOG ANYTHING OUT. `claude auth logout` asks the SERVER to
+#      revoke the refresh token (CONFIRMED-CODE, claude v2.1.220: performLogout
+#      POSTs to /oauth/revoke unless preserveInProcessTokens). Several slots on
+#      this machine share one credential with the live login, so a logout in
+#      the wrong place kills the operator's own session, irreversibly. The verb
+#      is refused outright rather than merely unimplemented.
+#
+#   2. IT NEVER REFRESHES A SHARED OR CLONED CREDENTIAL. Two config dirs are two
+#      keychain entries and two locks; Claude Code reconciles concurrent
+#      refreshes only WITHIN one store, so refreshing a copy rotates the
+#      original's token away and the loser self-wipes. Only a slot that
+#      completed its OWN `claude auth login` is ever refreshed. (This is not
+#      theoretical: `secondary-live` was byte-identical to the live login at
+#      2026-07-29T18:59Z and had been rotated away from by 04:44Z the next
+#      morning.)
+#
+#   3. IT NEVER TOUCHES THE MACHINE DEFAULT. That entry IS the operator's live
+#      login. His own sessions keep it fresh; a background job racing them is
+#      the documented way to lose it (upstream #24317 / #43392).
+#
+#   4. IT REFUSES TO RUN WITH `CLAUDE_SECURESTORAGE_CONFIG_DIR` SET. Set to the
+#      empty string it drops the keychain suffix entirely, which would let a
+#      slot's login overwrite the machine-default credential in place. Set to
+#      anything else it decouples the service name from the config dir, so
+#      every derivation in here becomes a lie.
+#
+#   5. IT REFUSES TO RUN WITH `CLAUDE_CODE_OAUTH_TOKEN` SET. Upstream #37512:
+#      with it set, claude silently DELETES the machine-default keychain item
+#      on exit.
+#
+# ── SECRETS ──────────────────────────────────────────────────────────────────
+# No credential value is ever printed, logged, or written. Secrets are compared
+# only as 8-hex sha256 prefixes, produced by piping `security`'s output straight
+# into `shasum`. Identities are hashes too. The one piece of plain personal data
+# this writes is a login hint (an email address, so the consent page can be
+# pre-filled next time) at accounts/<label>/login-hint — mode 600, inside a
+# `*`-gitignored 0700 directory. It is NO LONGER OPTIONAL: every successful
+# login writes one, taking the address you typed if you typed one and otherwise
+# reading it back out of the slot's own `.claude.json`, which the completed
+# login just wrote. A slot with a login therefore always has a hint.
+#
+# ── MAKE IT GLOBAL (the operator does this once) ─────────────────────────────
+#   ln -sf "$PWD/services/threads/scripts/claude-accounts" /usr/local/bin/claude-accounts
+# Run that from the repo root. Then `claude-accounts` works from anywhere.
+set -uo pipefail
+
+# ── INTERPRETER GUARD: this script needs bash ≥ 4.4 ──────────────────────────
+# It uses `${x@Q}` (4.4+) and associative arrays (4.0+). macOS ships bash 3.2 at
+# /bin/bash, and `#!/usr/bin/env bash` finds THAT whenever /bin precedes
+# homebrew on PATH — which it does on this machine. The failure mode without
+# this guard is the worst kind for a credential tool: it parses fine, prints its
+# banner, and dies with "bad substitution" partway INTO a login. So re-exec
+# under a modern bash before a single line of work runs.
+if [ "${BASH_VERSINFO[0]:-0}" -lt 4 ] \
+   || { [ "${BASH_VERSINFO[0]}" -eq 4 ] && [ "${BASH_VERSINFO[1]:-0}" -lt 4 ]; }; then
+  # The candidate is version-checked BEFORE the exec, so the re-exec'd shell
+  # cannot re-enter this branch and there is no loop to guard against. (A
+  # marker env var would be worse than useless here: it would be inherited by
+  # `add-account`, which carries the same guard and re-execs for itself.)
+  for _newer_bash in /opt/homebrew/bin/bash /usr/local/bin/bash /bin/bash; do
+    [ -x "$_newer_bash" ] || continue
+    case "$("$_newer_bash" -c 'echo "${BASH_VERSINFO[0]}.${BASH_VERSINFO[1]}"' 2>/dev/null)" in
+      4.4|4.[5-9]|[5-9].*|[1-9][0-9].*)
+        exec "$_newer_bash" "${BASH_SOURCE[0]}" "$@" ;;
+    esac
+  done
+  echo "claude-accounts: needs bash 4.4 or newer; this is ${BASH_VERSION:-unknown}." >&2
+  echo "  Install one and re-run — nothing else is needed:  brew install bash" >&2
+  exit 1
+fi
+
+SCRIPT_DIR="$(cd "$(dirname "$(readlink "${BASH_SOURCE[0]}" || echo "${BASH_SOURCE[0]}")")" && pwd)"
+THREADS_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
+# REPO_ROOT follows the PHYSICAL scripts dir (`cd -P`/`pwd -P`): under cauldron
+# this script is reached as <data-home>/scripts/<name>, where `scripts` is a
+# SYMLINKED DIR into services/threads/scripts and <data-home> is outside any repo.
+# The logical path put REPO_ROOT above the data home (H179: "not a git
+# repository" on every board sign-in). THREADS_DIR stays the invoking home on
+# purpose: it is the data dir (threads.db, accounts) the caller meant.
+REPO_ROOT="$(cd -P "$SCRIPT_DIR/../../.." && pwd -P)"
+# CLAUDE_ACCOUNTS_HOME (R5.S4, HOLDS R23): the threads home whose `accounts/`
+# is the store, named EXPLICITLY instead of derived from where this file sits.
+# A copy installed elsewhere (cauldron's version store) has no store beside
+# it, so its caller says where the store is. Unset = the old derivation, byte
+# for byte. Set but not a directory = a loud refusal, never a fallback: an
+# override that silently fell back would read the wrong (or an empty) pool.
+if [ -n "${CLAUDE_ACCOUNTS_HOME:-}" ]; then
+  [ -d "$CLAUDE_ACCOUNTS_HOME" ] || {
+    printf 'claude-accounts: CLAUDE_ACCOUNTS_HOME=%s is not a directory\n' \
+      "$CLAUDE_ACCOUNTS_HOME" >&2; exit 1; }
+  THREADS_DIR="$(cd "$CLAUDE_ACCOUNTS_HOME" && pwd)"
+fi
+ACCOUNTS_DIR="$THREADS_DIR/accounts"
+ADD_ACCOUNT="$SCRIPT_DIR/add-account"
+
+KEYCHAIN_SERVICE_BASE="Claude Code-credentials"
+# The free, no-spend probe. `/usage` bills nothing and is the only thing this
+# script ever asks claude to do besides `auth login`.
+USAGE_PROBE=(-p "/usage" --output-format json --no-session-persistence)
+PROBE_TIMEOUT_SECS=120
+# Field separator for the internal plan/result records. NOT a tab: tab is IFS
+# *whitespace*, so `read` collapses runs of it and one empty field (a slot with
+# no config dir — i.e. the machine default) silently shifts every later field
+# left, turning "skip" into a config dir and a secret hash into an action. The
+# ASCII unit separator is not IFS whitespace and cannot occur in a path, a
+# label, or a prose reason.
+SEP=$'\x1f'
+
+# ── test seams ───────────────────────────────────────────────────────────────
+# Only honoured under CLAUDE_ACCOUNTS_TEST=1, so a stray env var in a real shell
+# can never redirect which binary gets run or which inventory is trusted.
+TEST_MODE="${CLAUDE_ACCOUNTS_TEST:-0}"
+seam() { [ "$TEST_MODE" = "1" ] && printf '%s' "${!1:-}" || printf ''; }
+
+# Under test, the whole working area moves to a temp dir so a test run cannot
+# take the real rotation lock, write the real log, or read the real slots.
+# Under test, the registry and database move too. Without this the deletion
+# guard could only ever be exercised against the REAL inventory — the one thing
+# a test must neither depend on nor mutate — and the case that matters most
+# ("refuse when something still references this") could not be CONSTRUCTED at
+# all, only waited for.
+if [ "$TEST_MODE" = "1" ] && [ -n "${CLAUDE_ACCOUNTS_STATE_DIR:-}" ]; then
+  THREADS_DIR="$CLAUDE_ACCOUNTS_STATE_DIR"
+fi
+
+# Under test, the whole working area moves to a temp dir so a test run cannot
+# take the real rotation lock, write the real log, or read the real slots.
+if [ "$TEST_MODE" = "1" ] && [ -n "${CLAUDE_ACCOUNTS_DIR:-}" ]; then
+  ACCOUNTS_DIR="$CLAUDE_ACCOUNTS_DIR"
+fi
+
+say()  { printf '%s\n' "$*"; }
+warn() { printf '%s\n' "$*" >&2; }
+die()  { printf 'claude-accounts: %s\n' "$*" >&2; exit 1; }
+
+# ── the refusals, asserted before anything else happens ──────────────────────
+
+assert_safe_env() {
+  if [ "${CLAUDE_SECURESTORAGE_CONFIG_DIR+set}" = set ]; then
+    if [ -z "${CLAUDE_SECURESTORAGE_CONFIG_DIR}" ]; then
+      die "REFUSING: CLAUDE_SECURESTORAGE_CONFIG_DIR is set to the EMPTY STRING.
+  That drops the per-config-dir suffix from the keychain service name, so every
+  account collapses onto the machine-default entry — a slot's login would
+  overwrite your live login in place. Unset it (\`unset
+  CLAUDE_SECURESTORAGE_CONFIG_DIR\`) and re-run. Note that an empty value is NOT
+  the same as unset, and inherited empty values are the whole hazard here."
+    fi
+    die "REFUSING: CLAUDE_SECURESTORAGE_CONFIG_DIR is set (${CLAUDE_SECURESTORAGE_CONFIG_DIR@Q}).
+  It decouples the keychain service name from the config dir, which makes every
+  service name this tool derives wrong. Unset it and re-run."
+  fi
+  [ -z "${CLAUDE_CODE_OAUTH_TOKEN:-}" ] || die \
+    "REFUSING: CLAUDE_CODE_OAUTH_TOKEN is set. Upstream issue #37512 — with it
+  set, claude silently DELETES the machine-default keychain item on exit, which
+  would destroy your live login. Unset it and re-run."
+  [ "$(uname -s)" = "Darwin" ] || die "macOS only (this is all keychain-backed)"
+}
+
+refuse_logout() {
+  warn "claude-accounts: REFUSED — this tool does not log accounts out, ever."
+  warn ""
+  warn "  \`claude auth logout\` asks the SERVER to revoke the refresh token, and"
+  warn "  several slots here share one credential with your live login. A logout"
+  warn "  in the wrong place kills the session you are working in, and there is"
+  warn "  no undo."
+  warn ""
+  warn "  You never need it. Every account has its own CLAUDE_CONFIG_DIR and its"
+  warn "  own keychain entry, so they are ALL signed in at once. That is the"
+  warn "  whole point — you never have to log out to switch accounts again."
+  warn ""
+  warn "  To retire a slot, delete its keychain item instead. That is local-only"
+  warn "  and revokes nothing:"
+  warn "      claude-accounts list      # shows each slot's keychain service"
+  warn "      security delete-generic-password -a \"\$USER\" -s '<that service>'"
+  exit 2
+}
+
+# ── plumbing ─────────────────────────────────────────────────────────────────
+
+# The `threads` binary cauldron runs here, read the way cauldron exposes it:
+# `cauldron status --json threads` names the environment's root and the version
+# it runs (or pins), and a version is the directory
+# <root>/data/shared/builds/threads/<label>/ holding the image `threads`.
+# Read-only: one cauldron READ verb and an `-x` test. Nothing under the cauldron
+# root is written. Prints nothing when cauldron is absent, pins no concrete
+# version (`latest` or none), or the image is not there.
+#
+# Under test the cauldron binary comes ONLY from the seam, never PATH, so a test
+# run can never resolve to the operator's real pinned threads.
+cauldron_threads_image() {
+  local cbin
+  if [ "$TEST_MODE" = "1" ]; then
+    cbin="$(seam CLAUDE_ACCOUNTS_CAULDRON_BIN)"
+  else
+    cbin="$(command -v cauldron 2>/dev/null || true)"
+    [ -n "$cbin" ] || { [ -x "$HOME/.cauldron/bin/cauldron" ] && cbin="$HOME/.cauldron/bin/cauldron"; }
+  fi
+  [ -n "$cbin" ] && [ -x "$cbin" ] || return 0
+  local img
+  img="$("$cbin" status --json threads 2>/dev/null | python3 -c '
+import json, os, sys
+try:
+    d = json.load(sys.stdin)
+except Exception:
+    sys.exit(0)
+root = (d.get("environment") or {}).get("root")
+if not root:
+    sys.exit(0)
+for s in d.get("services") or []:
+    if s.get("service") != "threads":
+        continue
+    for label in (s.get("running_version"), s.get("pinned")):
+        if not label or label == "latest" or "/" in label or label.startswith("."):
+            continue
+        p = os.path.join(root, "data", "shared", "builds", "threads", label, "threads")
+        if os.path.isfile(p) and os.access(p, os.X_OK):
+            print(p)
+            sys.exit(0)
+' 2>/dev/null)"
+  printf '%s' "$img"
+}
+
+# The `threads` binary, in this order (Q-23-sync4-1):
+#   1. the build cauldron runs/pins for this environment — the one the daemon
+#      actually serves, so rename/delete act through the same code it runs;
+#   2. $CARGO_TARGET_DIR/{release,debug}/threads — where every build on this
+#      machine goes (the shared target dirs live OUTSIDE the repo);
+#   3. $REPO_ROOT/target/{release,debug}/threads — the legacy in-repo location.
+# Prefer something already built (a launchd job may have no cargo at all).
+threads_cli() {
+  local override; override="$(seam CLAUDE_ACCOUNTS_THREADS_BIN)"
+  if [ -n "$override" ]; then printf '%s' "$override"; return; fi
+  local b
+  b="$(cauldron_threads_image)"
+  [ -n "$b" ] && { printf '%s' "$b"; return; }
+  for b in ${CARGO_TARGET_DIR:+"$CARGO_TARGET_DIR/release/threads" "$CARGO_TARGET_DIR/debug/threads"} \
+           "$REPO_ROOT/target/release/threads" "$REPO_ROOT/target/debug/threads"; do
+    [ -x "$b" ] && { printf '%s' "$b"; return; }
+  done
+  printf ''
+}
+
+# The cargo fallback's build-dir guard (same shape as 2619cd57). With
+# CARGO_TARGET_DIR unset, `cargo run` builds into $REPO_ROOT/target — a 753M+
+# in-repo tree on a machine where disk is the binding constraint. Unset,
+# relative, or inside the repository: REFUSED, loudly, and no cargo runs.
+cargo_target_ok() {
+  if [ -z "${CARGO_TARGET_DIR:-}" ]; then
+    warn "claude-accounts: REFUSED to cargo-build threads — CARGO_TARGET_DIR is unset; cargo would build into $REPO_ROOT/target. Export the shared target dir (outside the repo), or build threads there first."
+    return 1
+  fi
+  case "$CARGO_TARGET_DIR" in
+    /*) ;;
+    *) warn "claude-accounts: REFUSED to cargo-build threads — CARGO_TARGET_DIR=$CARGO_TARGET_DIR is relative; cargo resolves it against the cwd, which may be the repo. Give an absolute path."
+       return 1 ;;
+  esac
+  # Compare PHYSICAL paths. A target dir that does not exist yet (the usual case
+  # for an in-repo `target/` cargo is about to create) cannot be `cd -P`'d, so
+  # resolve its nearest existing ancestor and re-append the rest — otherwise a
+  # symlinked prefix (/var -> /private/var, /tmp -> /private/tmp) makes the
+  # comparison miss and an in-repo dir slips through.
+  local ctd repo head="$CARGO_TARGET_DIR" tail=""
+  while [ ! -d "$head" ] && [ "$head" != "/" ]; do
+    tail="/$(basename "$head")$tail"; head="$(dirname "$head")"
+  done
+  ctd="$(cd -P "$head" 2>/dev/null && pwd -P)$tail" || ctd="$CARGO_TARGET_DIR"
+  repo="$(cd -P "$REPO_ROOT" && pwd -P)"
+  case "$ctd/" in
+    "$repo"/*)
+      warn "claude-accounts: REFUSED to cargo-build threads — CARGO_TARGET_DIR=$CARGO_TARGET_DIR is inside the repository ($REPO_ROOT). Use the shared target dir outside it."
+      return 1 ;;
+  esac
+  return 0
+}
+
+# Ask for the login inventory as JSON. This is `threads accounts health --json`
+# — read-only, free, never invokes claude.
+health_json() {
+  local fixture; fixture="$(seam CLAUDE_ACCOUNTS_HEALTH_JSON)"
+  if [ -n "$fixture" ]; then cat "$fixture"; return; fi
+  local bin; bin="$(threads_cli)"
+  if [ -n "$bin" ]; then
+    THREADS_HOME="$THREADS_DIR" "$bin" accounts health --json 2>/dev/null
+  else
+    cargo_target_ok || return 1
+    PATH="$HOME/.cargo/bin:$PATH" THREADS_HOME="$THREADS_DIR" \
+      cargo run --quiet --manifest-path "$REPO_ROOT/Cargo.toml" \
+      -p threads --bin threads -- accounts health --json 2>/dev/null
+  fi
+}
+
+claude_bin() {
+  local override; override="$(seam CLAUDE_ACCOUNTS_CLAUDE_BIN)"
+  [ -n "$override" ] && { printf '%s' "$override"; return; }
+  command -v claude 2>/dev/null || printf ''
+}
+
+# sha8 of a keychain secret, or "" when the entry does not exist. The secret is
+# piped straight into shasum: never argv, never a variable, never disk.
+#
+# The existence probe is separate and FIRST, deliberately — piping a missing
+# entry's empty output into shasum yields sha8("") = e3b0c442, a plausible hash
+# that would make "no credential" read as a real, distinct secret. (Same guard,
+# same reason, as add-account's `kc_secret_sha8`.)
+kc_secret_sha8() {
+  local svc="$1" acct="${USER:-claude-code-user}"
+  security find-generic-password -a "$acct" -s "$svc" >/dev/null 2>&1 || return 0
+  security find-generic-password -a "$acct" -w -s "$svc" 2>/dev/null \
+    | tr -d '\n' | shasum -a 256 | cut -c1-8
+}
+
+# The keychain service name Claude Code derives for a CLAUDE_CONFIG_DIR.
+# Mirrors `accounts::keychain_service_for` and add-account's `kc_service`.
+kc_service() { printf '%s-%s' "$KEYCHAIN_SERVICE_BASE" \
+  "$(printf %s "$1" | shasum -a 256 | cut -c1-8)"; }
+
+# The keychain item's modification date. Metadata only — no secret is read.
+kc_mdat() {
+  local svc="$1" acct="${USER:-claude-code-user}"
+  security find-generic-password -a "$acct" -s "$svc" 2>/dev/null \
+    | sed -n 's/.*"mdat"<timedate>=0x[0-9A-F]*  *"\(.*\)\\000".*/\1/p' | head -1
+}
+
+# Identity fingerprint of a .claude.json, hashes only. Mirrors
+# `accounts::IdentityFingerprint::from_config_json`.
+fingerprint() {
+  local f="$1"
+  [ -f "$f" ] || { printf ''; return 0; }
+  python3 - "$f" <<'PY' 2>/dev/null || true
+import hashlib, json, sys
+h = lambda v: hashlib.sha256(v.encode()).hexdigest()[:8] if isinstance(v, str) else "-"
+try:
+    oa = (json.load(open(sys.argv[1])) or {}).get("oauthAccount")
+except Exception:
+    raise SystemExit
+if not oa: raise SystemExit
+print(f'acct={h(oa.get("accountUuid"))} email={h(oa.get("emailAddress"))} '
+      f'org={h(oa.get("organizationUuid"))}')
+PY
+}
+
+# ── THE IDENTITY GUARD: who a fresh login ACTUALLY authenticates as (R12.5) ──
+#
+# The operator's point (R12, doc ACCOUNT-EMAIL-ID.md §3): a login for account A
+# that lands B's credential in A's slot must be REFUSED AND REVERTED, never
+# registered. `claude auth status` and `<slot>/.claude.json` cannot tell you
+# that: both answer from the cached `oauthAccount` block, a plain file a copied
+# slot, a restore or a hand edit can leave naming A while the keychain holds B.
+#
+# THE TRUSTED READ is the one R12.1's `IdentityGuard` uses: GET
+# `/api/oauth/profile` with the access token stored in THAT keychain item, and
+# read `account.email` out of the server's answer. Anything else — offline, a
+# non-2xx, an expired token, a body without the field, a missing item — is
+# UNREADABLE, and unreadable is a refusal, never a pass. Nothing here ever falls
+# back to the cached file.
+#
+# The token goes from `security` straight into python's STDIN and from there
+# into one request header. It is never on an argv, never in a variable of this
+# shell, never on disk, never printed. Redirects are refused, so the header can
+# only ever reach the URL named here.
+PROFILE_URL="https://api.anthropic.com/api/oauth/profile"
+
+# A keychain service name `claude` can never derive (its grammar is
+# `Claude Code-credentials[-<8 hex>]`) and that no pass in this file enumerates.
+# A slot's previous credential is parked under it for the length of one guarded
+# login, so a refused login can put it back.
+PRELOGIN_SERVICE_PREFIX="Claude Code-prelogin"
+
+read -r -d '' PROFILE_PY <<'PY' || true
+import json, sys, time, urllib.request, urllib.error
+url = sys.argv[1]
+def out(kind, msg):
+    sys.stdout.write(f"{kind}\t{msg}")
+    sys.exit(0 if kind == "ok" else 1)
+try:
+    blob = json.loads(sys.stdin.read() or "null") or {}
+    oauth = blob.get("claudeAiOauth") or {}
+    token = oauth.get("accessToken")
+except Exception:
+    out("unreadable", "the keychain item is not a credential blob")
+if not isinstance(token, str) or not token:
+    out("unreadable", "the keychain item holds no access token")
+exp = oauth.get("expiresAt")
+if isinstance(exp, (int, float)) and exp > 0 and exp / 1000 <= time.time():
+    out("unreadable", "the access token has expired (this tool never refreshes one)")
+class NoRedirect(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, *a, **k):
+        return None
+req = urllib.request.Request(url, headers={
+    "Authorization": "Bearer " + token, "Cache-Control": "no-cache",
+    "Accept": "application/json", "User-Agent": "claude-accounts-identity-guard"})
+token = None
+try:
+    with urllib.request.build_opener(NoRedirect).open(req, timeout=10) as r:
+        status, body = r.status, r.read()
+except urllib.error.HTTPError as e:
+    out("unreadable", f"the profile server answered HTTP {e.code}")
+except Exception as e:
+    out("unreadable", f"the profile server could not be reached ({type(e).__name__})")
+if not 200 <= status < 300:
+    out("unreadable", f"the profile server answered HTTP {status}")
+try:
+    email = json.loads(body)["account"]["email"]
+except Exception:
+    out("unreadable", "the profile answer carries no account.email")
+if not isinstance(email, str) or "@" not in email:
+    out("unreadable", "the profile answer carries no account.email")
+out("ok", email.strip())
+PY
+
+# Normalise an address exactly as `accounts::AccountId::parse` does (G1d): trim;
+# no whitespace; exactly one `@`; a non-empty local part; a domain with an
+# interior `.`; the WHOLE address lower-cased. Plus-addressing and dots are
+# KEPT — `a+1@d` is a different login from `a@d`. Non-zero = not an address.
+normalize_email() {
+  local t="$1" local_part domain
+  t="${t#"${t%%[![:space:]]*}"}"; t="${t%"${t##*[![:space:]]}"}"
+  case "$t" in ""|*[[:space:]]*|*[[:cntrl:]]*) return 1 ;; esac
+  local_part="${t%%@*}"; domain="${t#*@}"
+  [ "$local_part" != "$t" ] || return 1
+  case "$domain" in *@*) return 1 ;; esac
+  [ -n "$local_part" ] || return 1
+  case "$domain" in ""|.*|*.) return 1 ;; *.*) ;; *) return 1 ;; esac
+  printf '%s' "$t" | tr '[:upper:]' '[:lower:]'
+}
+
+# trusted_email <keychain service>
+# Prints `ok<TAB><email>` (rc 0) or `unreadable<TAB><reason>` (rc 1). The email
+# is the server's, not normalised; callers normalise before comparing.
+trusted_email() {
+  local svc="$1" acct="${USER:-claude-code-user}" url
+  url="$(seam CLAUDE_ACCOUNTS_PROFILE_URL)"
+  if [ -z "$url" ]; then
+    # Under test with no fake profile source, the real keychain item and the
+    # real server are never consulted: that is unreadable, so it refuses.
+    if [ "$TEST_MODE" = "1" ]; then
+      printf 'unreadable\ttest mode: no profile source (CLAUDE_ACCOUNTS_PROFILE_URL)'; return 1
+    fi
+    url="$PROFILE_URL"
+  fi
+  if ! security find-generic-password -a "$acct" -s "$svc" >/dev/null 2>&1; then
+    printf 'unreadable\tthere is no keychain item %s' "$svc"; return 1
+  fi
+  local res
+  res="$(security find-generic-password -a "$acct" -w -s "$svc" 2>/dev/null \
+    | python3 -c "$PROFILE_PY" "$url" 2>/dev/null)"
+  case "$res" in
+    ok$'\t'*) printf '%s' "$res"; return 0 ;;
+    unreadable$'\t'*) printf '%s' "$res"; return 1 ;;
+    *) printf 'unreadable\tthe identity check produced no answer'; return 1 ;;
+  esac
+}
+
+# identity_verdict <keychain service> <wanted normalised email | "">
+# Sets GUARD_GOT (the server's email, normalised, or "<unreadable: why>") and
+# returns 0 = verified, 3 = crossed (another email), 4 = unreadable.
+# With no wanted email the read must still SUCCEED — it just has nothing to be
+# crossed against.
+GUARD_GOT="" GUARD_RAW=""
+identity_verdict() {
+  local svc="$1" want="$2" res got
+  GUARD_RAW=""
+  if ! res="$(trusted_email "$svc")"; then
+    GUARD_GOT="<unreadable: ${res#*$'\t'}>"; return 4
+  fi
+  if ! got="$(normalize_email "${res#*$'\t'}")"; then
+    GUARD_GOT="<unreadable: the server's email is not an address>"; return 4
+  fi
+  GUARD_GOT="$got"; GUARD_RAW="${res#*$'\t'}"
+  [ -z "$want" ] || [ "$got" = "$want" ] || return 3
+  return 0
+}
+
+# Keychain → keychain copy, verified by hash. The secret goes from `security`
+# into `security -i`'s stdin as hex: never a variable, an argv, or disk.
+kc_copy() {  # kc_copy <from service> <to service>; rc 0 only when the copy verifies
+  local from="$1" to="$2" acct="${USER:-claude-code-user}" want
+  want="$(kc_secret_sha8 "$from")"; [ -n "$want" ] || return 1
+  {
+    printf 'add-generic-password -U -a "%s" -s "%s" -X ' "$acct" "$to"
+    security find-generic-password -a "$acct" -s "$from" -w 2>/dev/null \
+      | tr -d '\n' | xxd -p | tr -d '\n'
+    printf '\n'
+  } | security -i >/dev/null 2>&1
+  [ "$(kc_secret_sha8 "$to")" = "$want" ]
+}
+
+# THE PRE-LOGIN SNAPSHOT. Taken before `claude auth login` touches a slot:
+#   * the slot's `.claude.json`, `manifest.toml` and `login-hint` (or a marker
+#     that each was ABSENT, so a revert removes what the login created);
+#   * the keychain item's NAME, mdat and secret sha8 (metadata; no secret);
+#   * when the slot already had a credential, a keychain→keychain copy of it
+#     under a dormant `Claude Code-prelogin.*` name, so a refused login can put
+#     the previous grant back byte for byte instead of leaving the slot empty.
+# rc != 0 means the snapshot could not be taken, and the caller must not log in.
+login_guard_snapshot() {  # login_guard_snapshot <slot dir> <snapshot dir>
+  local slot="$1" snap="$2" svc f before
+  svc="$(kc_service "$slot")"
+  mkdir -p "$snap" && chmod 700 "$snap" || return 1
+  [ -d "$slot" ] || : > "$snap/slot.absent"
+  for f in .claude.json manifest.toml login-hint; do
+    if [ -f "$slot/$f" ]; then cp -p "$slot/$f" "$snap/$f" || return 1
+    else : > "$snap/$f.absent"; fi
+  done
+  before="$(kc_secret_sha8 "$svc")"
+  {
+    printf 'service=%s\n' "$svc"
+    printf 'mdat=%s\n' "$(kc_mdat "$svc")"
+    printf 'secret_sha8=%s\n' "$before"
+  } > "$snap/keychain.meta"
+  if [ -n "$before" ]; then
+    local parked; parked="$PRELOGIN_SERVICE_PREFIX.$(basename "$snap")"
+    kc_copy "$svc" "$parked" || return 1
+    printf 'prelogin_service=%s\n' "$parked" >> "$snap/keychain.meta"
+  fi
+  chmod 600 "$snap"/* 2>/dev/null
+  return 0
+}
+
+snap_meta() { sed -n "s/^$2=//p" "$1/keychain.meta" 2>/dev/null | head -1; }
+
+# Drop a snapshot whose login PASSED (or never landed): the parked copy is our
+# own scratch, made seconds ago, and is deleted directly.
+login_guard_discard() {  # login_guard_discard <snapshot dir>
+  local snap="$1" parked
+  parked="$(snap_meta "$snap" prelogin_service)"
+  [ -z "$parked" ] || security delete-generic-password -a "${USER:-claude-code-user}" \
+    -s "$parked" >/dev/null 2>&1 || true
+  rm -rf "$snap"
+}
+
+# REFUSE AND REVERT. The crossed credential is retired through
+# `retire_keychain_item` (copied to a dormant name, then deleted — the other
+# account's grant is parked, not destroyed), the previous credential is put
+# back from its parked copy, and the slot's files are restored or removed to
+# match the snapshot. rc != 0 = some part could not be reverted; every such
+# part has already been named on stderr.
+login_guard_revert() {  # login_guard_revert <slot dir> <snapshot dir> <reason>
+  local slot="$1" snap="$2" reason="$3" svc parked want_sha f fail=0
+  svc="$(snap_meta "$snap" service)"; parked="$(snap_meta "$snap" prelogin_service)"
+  want_sha="$(snap_meta "$snap" secret_sha8)"
+  if [ -n "$(kc_secret_sha8 "$svc")" ]; then
+    retire_keychain_item "$svc" "refused login: $reason" 0 "$slot" >&2 || {
+      warn "  ✗ the crossed credential ${svc@Q} could NOT be retired; it is still in the slot."
+      fail=1; }
+  fi
+  if [ -n "$parked" ]; then
+    if kc_copy "$parked" "$svc" && [ "$(kc_secret_sha8 "$svc")" = "$want_sha" ]; then
+      security delete-generic-password -a "${USER:-claude-code-user}" -s "$parked" >/dev/null 2>&1 || true
+    else
+      warn "  ✗ the previous credential could not be put back; it is parked at ${parked@Q}."
+      fail=1
+    fi
+  fi
+  for f in .claude.json manifest.toml login-hint; do
+    if [ -f "$snap/$f" ]; then cp -p "$snap/$f" "$slot/$f" || fail=1
+    elif [ -f "$snap/$f.absent" ]; then rm -f "$slot/$f"; fi
+  done
+  [ "$fail" -eq 0 ] && rm -rf "$snap"
+  return "$fail"
+}
+
+# ── THE POST-LOGIN HOOK: the ONE place a verified login lands (R12.10) ───────
+# Called exactly once per login that PASSED the identity guard — after
+# `claude-accounts login` and after `set-live-login` — and never after a refused
+# or reverted one. R12.10 ("a stale account flag never survives a fresh login")
+# extends THIS function with its `recheck_flags`; nothing else should be added
+# at the two call sites.
+on_login_verified() {  # on_login_verified <login|set-live-login> <label> <email>
+  say "  ✓ identity verified by the server: ${2@Q} authenticates as $3"
+  recheck_flags "$2"
+}
+
+# R12.10 (operator ruling r41-2): a stale wiped / expired / dead / auth flag
+# never survives a fresh login. Asks the RUNNING daemon to re-check every flag
+# on <label> now (`threads accounts recheck`): the daemon re-runs the trusted
+# read and the slot's credential probe ITSELF — this call reports nothing it
+# could be fooled by — and clears a flag only on a pass. Never fatal: the login
+# already succeeded, so a daemon that cannot be reached is said out loud and the
+# daemon's own credential sample re-reads the slot within its period.
+recheck_flags() {  # recheck_flags <label>
+  local bin out rc
+  bin="$(threads_cli)"
+  if [ -z "$bin" ]; then
+    warn "  ! flags on ${1@Q} not re-checked now: no threads binary here; the daemon re-reads the slot on its next credential sample."
+    return 0
+  fi
+  out="$(THREADS_HOME="$THREADS_DIR" "$bin" accounts recheck "$1" 2>&1)"; rc=$?
+  if [ "$rc" -eq 0 ]; then
+    printf '%s\n' "$out" | sed 's/^/  /'
+  elif [ "$rc" -eq 2 ] && printf '%s' "$out" | head -1 | grep -q '^usage:'; then
+    # R12.10 inspect finding 1: a threads binary that predates the verb prints
+    # its usage and exits 2. Say what is missing, in a sentence, not "usage:".
+    warn "  ! flags on ${1@Q} were NOT re-checked: the threads binary at $bin has no 'accounts recheck' command (it is older than the flag re-check, R12.10)."
+    warn "    Until a newer threads is installed, a wiped or expired flag lifts on the daemon's next credential sample, and a login bar only when its timer runs out."
+  else
+    warn "  ! flags on ${1@Q} not re-checked now (threads accounts recheck rc=$rc): $(printf '%s' "$out" | head -1)"
+    warn "    the daemon re-reads the slot on its next credential sample."
+  fi
+  return 0
+}
+
+# ── UNDER TEST, NEVER THE OPERATOR'S REAL LOGIN (R12.5 inspect B1) ─────────
+# A guarded login WRITES: set-live-login backs up and may restore the machine
+# keychain item and `$HOME/.claude.json`; `login` parks and restores slot items.
+# Under CLAUDE_ACCOUNTS_TEST=1 none of that may ever reach the operator's real
+# home or real keychain, so both are refused BEFORE anything is written:
+#   * HOME must not be the account's real home directory (from the password
+#     database, not from $HOME — $HOME is the thing being checked);
+#   * `security` must not be the system binary (a test puts a fake first on
+#     PATH, and the fake is the only keychain a test may write).
+# The real home is a seam only so the conformance suite can construct the
+# refusal against a temp dir; outside test mode this function is never called.
+real_home() {
+  local h; h="$(seam CLAUDE_ACCOUNTS_REAL_HOME)"
+  [ -n "$h" ] || h="$(python3 -c 'import os, pwd; print(pwd.getpwuid(os.getuid()).pw_dir)' 2>/dev/null)"
+  printf '%s' "$h"
+}
+# R12.10 (R12.5 inspect-2 N4-N6) hardens all three checks:
+#   * N6 — the gate was opt-in: a test that FORGOT the marker ran as the
+#     operator. Only a test sets a seam, so a seam (or the fakes' FAKE_KC) set
+#     WITHOUT CLAUDE_ACCOUNTS_TEST=1 is refused. CLAUDE_ACCOUNTS_HOME (R5.S4)
+#     and CLAUDE_ACCOUNTS_LOG (the daemon sets it for `rotate`) are production
+#     variables and are not on the list.
+#   * N5 — HOME was compared as a path STRING, and APFS is case-insensitive:
+#     `~` spelled in a different case is the real home. Compared by (device, inode) now.
+#   * N4 — `security` was a denylist of one realpath, which a pass-through
+#     wrapper or a COPY of the binary walked past. Now an allowlist: under test
+#     the `security` on PATH must answer the fakes' sentinel verb
+#     `--claude-accounts-fake` with exit 0, which the system binary cannot.
+TEST_ONLY_SEAMS=(CLAUDE_ACCOUNTS_ADD_ACCOUNT CLAUDE_ACCOUNTS_CAULDRON_BIN CLAUDE_ACCOUNTS_CLAUDE_BIN
+  CLAUDE_ACCOUNTS_DIR CLAUDE_ACCOUNTS_HEALTH_JSON CLAUDE_ACCOUNTS_KEYCHAIN_LIST
+  CLAUDE_ACCOUNTS_PROFILE_URL CLAUDE_ACCOUNTS_REAL_HOME CLAUDE_ACCOUNTS_STATE_DIR
+  CLAUDE_ACCOUNTS_THREADS_BIN FAKE_KC)
+same_file() {  # same_file <a> <b>: the same (device, inode)
+  local a b
+  a="$(stat -f '%d:%i' "$1" 2>/dev/null)" || return 1
+  b="$(stat -f '%d:%i' "$2" 2>/dev/null)" || return 1
+  [ -n "$a" ] && [ "$a" = "$b" ]
+}
+refuse_real_login_writes_under_test() {  # <what is about to be written>
+  local v
+  if [ "$TEST_MODE" != "1" ]; then
+    for v in "${TEST_ONLY_SEAMS[@]}"; do
+      [ -z "${!v:-}" ] || die "REFUSED: $v is set but CLAUDE_ACCOUNTS_TEST=1 is not. Only a test sets
+  it, and a test that forgets the marker would run $1 against the REAL home and
+  keychain. Set CLAUDE_ACCOUNTS_TEST=1 (a test), or unset $v (a real login)."
+    done
+    return 0
+  fi
+  local rh sec
+  rh="$(real_home)"
+  if [ -z "$rh" ] || same_file "${HOME:-/}" "$rh"; then
+    die "REFUSED under test: HOME is the real home (${HOME@Q}), and $1 would write
+  its .claude.json. Run the test with HOME pointed at a temp dir."
+  fi
+  sec="$(command -v security 2>/dev/null)"
+  if [ -z "$sec" ] || ! "$sec" --claude-accounts-fake >/dev/null 2>&1; then
+    die "REFUSED under test: \`security\` (${sec:-none}) is not a test fake — it does not
+  answer \`--claude-accounts-fake\` — so $1 could write the real keychain. Put a
+  fake \`security\` that answers that verb first on PATH."
+  fi
+  return 0
+}
+
+# An email given where a label is expected names the slot whose login hint is
+# that address, or else the slot an email is filed under (`a.b@c.d` → `a-b-c-d`,
+# the existing folder grammar).
+label_for_email() {  # label_for_email <normalised email>
+  local want="$1" d h
+  for d in "$ACCOUNTS_DIR"/*/; do
+    [ -f "${d}login-hint" ] || continue
+    h="$(head -1 "${d}login-hint")"
+    [ "$(normalize_email "$h" 2>/dev/null)" = "$want" ] && { basename "${d%/}"; return 0; }
+  done
+  printf '%s' "$want" | tr -c 'a-z0-9' '-'
+}
+
+# Days until a store's LOGIN (not its access token) expires, from that store's
+# own keychain item. Reads the blob and prints ONE NUMBER: the secret is piped
+# into python, only `refreshTokenExpiresAt` is looked at, and nothing else
+# leaves. Mirrors `accounts::days_left`.
+#
+# With `--with-expiry` it prints TWO fields, "<days> <epoch_ms>", because the
+# deadline itself — not the countdown — is what tells you whether a slot was
+# signed in again: `refreshTokenExpiresAt` is ABSOLUTE and does not move on a
+# token refresh, so a CHANGE in it is the only in-band evidence of a new
+# browser login. The default single-field output is unchanged, byte for byte,
+# so every existing caller reads exactly what it read before. This stays ONE
+# reader on purpose: a second parser of this field would be a second thing to
+# keep true when the payload shape moves.
+slot_days_left() {  # slot_days_left <keychain service> [--with-expiry]
+  local svc="$1" acct="${USER:-claude-code-user}" want_exp="${2:-}"
+  security find-generic-password -a "$acct" -s "$svc" >/dev/null 2>&1 || return 0
+  security find-generic-password -a "$acct" -w -s "$svc" 2>/dev/null | python3 -c '
+import json, sys, time
+want_exp = len(sys.argv) > 1 and sys.argv[1] == "--with-expiry"
+try:
+    exp = json.load(sys.stdin)["claudeAiOauth"]["refreshTokenExpiresAt"]
+except Exception:
+    raise SystemExit
+if isinstance(exp, (int, float)) and exp > 0:
+    days = f"{(exp/1000 - time.time())/86400:.2f}"
+    print(f"{days} {int(exp)}" if want_exp else days)
+' "$want_exp" 2>/dev/null
+}
+
+# `<cmd...>` with a wall-clock cap. macOS has no coreutils `timeout`.
+run_capped() {
+  local secs="$1"; shift
+  "$@" & local pid=$!
+  ( sleep "$secs"; kill -TERM "$pid" 2>/dev/null ) & local watchdog=$!
+  wait "$pid"; local rc=$?
+  kill "$watchdog" 2>/dev/null; wait "$watchdog" 2>/dev/null
+  return $rc
+}
+
+login_hint_file() { printf '%s/%s/login-hint' "$ACCOUNTS_DIR" "$1"; }
+read_login_hint() { local f; f="$(login_hint_file "$1")"; [ -f "$f" ] && head -1 "$f" || printf ''; }
+
+# The address a COMPLETED login recorded in the slot's own `.claude.json`.
+#
+# This is why a hint can never again be missing. The old `write_login_hint` had
+# exactly one source — an `--email` the operator typed — so a slot signed in
+# WITHOUT that flag got no hint, and the next sign-in for it could not pre-fill
+# the consent page. That is not a cosmetic gap: the slot it actually happened to
+# (`owner-account`) is the one whose login died, so the one sign-in he
+# is forced to do by hand was the one sign-in the tooling could not help with.
+#
+# After a successful login the address is not a guess — `claude` has written the
+# authenticated account's own email into the slot. Read it from there.
+slot_email_from_config() {
+  local f="$ACCOUNTS_DIR/$1/.claude.json"
+  [ -f "$f" ] || { printf ''; return 0; }
+  python3 - "$f" <<'PY' 2>/dev/null || true
+import json, sys
+try:
+    d = json.load(open(sys.argv[1]))
+except Exception:
+    sys.exit(0)
+acct = d.get("oauthAccount") or {}
+e = acct.get("emailAddress")
+print(e if isinstance(e, str) and "@" in e else "", end="")
+PY
+}
+
+# Write the slot's login hint. `email` is what the operator typed, and may be
+# empty — in which case the completed login's own record is used. Returns
+# non-zero only when NEITHER source had an address, which is the one case a
+# caller may want to warn about.
+write_login_hint() {
+  local label="$1" email="${2:-}" f
+  [ -n "$email" ] || email="$(slot_email_from_config "$label")"
+  [ -n "$email" ] || return 1
+  f="$(login_hint_file "$label")"
+  mkdir -p "$(dirname "$f")" && chmod 700 "$(dirname "$f")" 2>/dev/null
+  printf '%s\n' "$email" > "$f" && chmod 600 "$f"
+}
+
+# ── RETIRING A KEYCHAIN ITEM: the only place this tool deletes a credential ──
+#
+# The operator, on finding eleven keychain items behind three accounts:
+#
+#   > *"it sounds like maybe it's keeping like multiple copies of the same login
+#   > and it doesn't need to do that. It can replace the previous one. It
+#   > doesn't have to. I don't have to keep the old sets of tokens."*
+#
+# He is right, and the accumulation was never a design choice — it is an absence
+# of cleanup. Nothing in this tool ever removed a credential store. A login over
+# an existing label left the superseded store behind; deleting a slot directory
+# by hand left its keychain item behind forever, because the service name is
+# derived from the DIRECTORY PATH and the directory is the only thing that knows
+# it. Six live-login backups accumulated for the same reason. So the fix is not
+# a sweep, it is this: ONE guarded routine, called from the login path and the
+# delete path, that keeps the derived keychain items in step with the slots.
+#
+# THE INVARIANT IT MAINTAINS: the set of `Claude Code-credentials-<8hex>` items
+# on this machine is exactly the set of live slot directories. Nothing else.
+# That is "a new login replaces the old" stated as a property rather than as a
+# special case — it covers the force-login, the deleted directory, the renamed
+# slot and the abandoned experiment identically, because it never asks how an
+# item became orphaned, only whether anything still derives it.
+#
+# ── WHY DELETION GOES THROUGH ONE FUNCTION ───────────────────────────────────
+# Deleting a credential is IRREVERSIBLE and costs the operator a browser trip
+# and whatever was running on that account. So every deletion in this file goes
+# through `retire_keychain_item`, and it does three things in this order:
+#
+#   1. VERIFY, AT THE MOMENT OF DELETION, that nothing still references the
+#      item — never from a list gathered earlier. The tooling is live and a
+#      list is stale the instant it is printed.
+#   2. COPY the secret to a DORMANT service name, keychain to keychain, and
+#      prove the copy landed by comparing hashes. Same mechanism, and the same
+#      reasoning, as the live-login backup below: the dormant name is one
+#      `claude` cannot derive (its own suffix grammar is `-<8 hex>`), so nothing
+#      will ever refresh it and it cannot rotate anything away.
+#   3. Only then delete.
+#
+# It never calls `claude auth logout` and never asks the server to revoke
+# anything — see refusal #1 in the header. A retired item is gone from THIS
+# MACHINE; the account is untouched and can be signed in again any time.
+#
+# IT FAILS CLOSED. If the verification cannot be RUN — no sqlite3, an
+# unreadable database — that is not "unreferenced", it is "unknown", and the
+# item is left alone. An extra dormant keychain item costs nothing. A wrongly
+# deleted live one costs him an account.
+RETIRED_SERVICE_PREFIX="Claude Code-retired"
+
+# ── THE RETENTION RULE FOR LIVE-LOGIN BACKUPS ────────────────────────────────
+#
+# The backups `cmd_set_live_login` takes are not sediment — they exist for a
+# real reason (an undoable machine-login switch) and the mechanism stays. What
+# was missing is that nothing ever bounded them. The rule, in two halves:
+#
+#   A BACKUP IS KEPT IF AND ONLY IF ITS RESTORE DIRECTORY EXISTS.
+#
+# This half is STRUCTURAL, not temporal, and it follows from what the thing is
+# for. The keychain item is only HALF of a restore pair; the other half is
+# `backups/live-login/<stamp>/`, which holds the `restore` script, the identity
+# block, and the record of which login it even was. An item whose directory is
+# gone cannot restore anything — there is no script to run and no way to know
+# what it is. It is not a weaker backup, it is a NON-backup. (Four of the six on
+# this machine were in exactly that state.)
+#
+#   AND AT MOST `KEEP_LIVE_LOGIN_BACKUPS` MOST RECENT SUCH PAIRS SURVIVE.
+#
+# The structural half alone never bounds growth, because nothing removes the
+# directories either. Three, because this undo is used within minutes to hours
+# of a switch that went wrong, and the ORDINARY undo — `set-live-login <the old
+# one>` — needs no backup at all. Three covers a two-hop switch chain (A→B→C,
+# get me back to A) with one spare, and bounds the store at three however often
+# he switches.
+#
+# BOTH HALVES ARE RETIRED TOGETHER, directory and keychain item, so the two can
+# never drift apart again. That drift IS the defect that produced the six.
+KEEP_LIVE_LOGIN_BACKUPS=3
+
+# Every Claude Code credential service currently in this keychain. Retired
+# copies are deliberately NOT matched: their prefix is outside this grammar,
+# which is what makes them dormant to every other pass in this file.
+#
+# UNDER TEST it reads a fixture list instead, and that is a SAFETY seam, not a
+# convenience one. Every pass below is driven by this enumeration, so bounding
+# it bounds what any pass can even consider. A test that redirected only
+# ACCOUNTS_DIR would see the real keychain through this function, find that
+# none of the real items had a matching slot in its temp dir, and try to retire
+# the operator's actual logins. Scoping the enumeration makes that impossible
+# rather than merely unlikely.
+all_credential_services() {
+  local fixture; fixture="$(seam CLAUDE_ACCOUNTS_KEYCHAIN_LIST)"
+  if [ -n "$fixture" ]; then cat "$fixture"; return; fi
+  # UNDER TEST WITH A REDIRECTED POOL, REFUSE TO ENUMERATE THE REAL KEYCHAIN.
+  #
+  # Every pass below judges an item by whether anything in ACCOUNTS_DIR accounts
+  # for it. If ACCOUNTS_DIR is a temp dir and this is the REAL keychain, then
+  # every real item looks unreferenced and the operator's own logins become the
+  # targets. The two must be redirected together or not at all.
+  #
+  # This is not hypothetical. The pre-existing set-live-login conformance test
+  # (§9b) drives the whole flow with CLAUDE_ACCOUNTS_DIR pointed at a temp dir,
+  # and retention now runs INSIDE that flow — so without this guard, running
+  # the old test would have retired the two live-login backups that still have
+  # restore directories. Returning nothing makes the passes no-ops instead.
+  if [ "$TEST_MODE" = "1" ] && [ -n "${CLAUDE_ACCOUNTS_DIR:-}" ]; then
+    warn "claude-accounts: not enumerating the real keychain — the slot pool is"
+    warn "  redirected for a test but CLAUDE_ACCOUNTS_KEYCHAIN_LIST is not set."
+    warn "  Retirement is skipped. Set that fixture to exercise it."
+    return 0
+  fi
+  security dump-keychain 2>/dev/null \
+    | grep -o "\"$KEYCHAIN_SERVICE_BASE[^\"]*\"" | tr -d '"' | sort -u
+}
+
+# Every account label anything on this machine still names. This is the set the
+# reference check inverts against.
+#
+# The service name is a ONE-WAY hash of the slot path, so an orphaned item
+# cannot be turned back into a label. The check therefore runs the other way:
+# collect every label that is still named ANYWHERE, derive what service each one
+# would have, and see whether the target is among them. That is a real proof of
+# non-reference rather than an assertion, and it stays correct as the tooling
+# moves, because it re-derives instead of remembering.
+#
+# Returns non-zero — with nothing usable on stdout — if the database could not
+# be read. The caller must treat that as "unknown", never as "no references".
+referencing_labels() {
+  local db="$THREADS_DIR/threads.db" toml="$THREADS_DIR/accounts.toml" out d
+  # The registry file: every `[accounts.<label>]` stanza.
+  [ -f "$toml" ] && sed -n 's/^\[accounts\.\([^]]*\)\]$/\1/p' "$toml"
+  # Live slot directories. A `.claude.json` OR a `manifest.toml` counts —
+  # matching the Rust enumerator (`accounts::collect_slot_reports`) exactly.
+  #
+  # THE HOLE THIS CLOSES. This used to require `.claude.json`. An INTERRUPTED
+  # `--login` leaves a slot with a manifest and no config json, and Rust
+  # deliberately keeps such a slot VISIBLE so it can be finished. But this
+  # predicate did not know about it, so that slot's keychain item read as
+  # unreferenced and `reap_orphan_slot_items` — which runs automatically after
+  # every successful login — would retire it. A half-finished login is exactly
+  # the state a man is in when he is fighting to get signed in, and it is the
+  # worst possible moment to quietly retire his token.
+  for d in "$ACCOUNTS_DIR"/*/; do
+    [ -f "${d}.claude.json" ] || [ -f "${d}manifest.toml" ] || continue
+    basename "${d%/}"
+  done
+  # The database. EVERY table that names an account, including the historical
+  # ones: history is exactly what makes a credential still worth having.
+  command -v sqlite3 >/dev/null 2>&1 || return 1
+  [ -f "$db" ] || return 1
+  out="$(sqlite3 "file:$db?mode=ro" "
+      SELECT name FROM accounts
+      UNION SELECT account FROM threads
+      UNION SELECT account FROM thread_accounts
+      UNION SELECT account FROM usage_ledger
+      UNION SELECT account FROM usage_observations
+      UNION SELECT account FROM limit_estimates
+      UNION SELECT DISTINCT account FROM budget_charges
+      UNION SELECT account_label FROM limit_estimate_periods
+      UNION SELECT from_account FROM thread_interrupts
+      UNION SELECT to_account FROM thread_interrupts
+      UNION SELECT value FROM budgets, json_each(budgets.accounts_json);" 2>/dev/null)" \
+    || return 1
+  printf '%s\n' "$out"
+}
+
+# Is this service still referenced? Prints the REASON and returns 0 when it is
+# (or when that cannot be determined); returns 1 only when it is provably
+# unreferenced and therefore safe to retire.
+service_is_referenced() {
+  local svc="$1" d label labels stamp
+  [ -n "$svc" ] || { printf 'empty service name'; return 0; }
+
+  # The machine login. Never, under any circumstance, by any path.
+  if [ "$svc" = "$KEYCHAIN_SERVICE_BASE" ]; then
+    printf 'it IS the machine login (%s)' "$KEYCHAIN_SERVICE_BASE"; return 0
+  fi
+  # Something this tool does not own.
+  case "$svc" in
+    "$KEYCHAIN_SERVICE_BASE"*) : ;;
+    *) printf 'not a Claude Code credential service'; return 0 ;;
+  esac
+
+  # A live-login backup whose restore directory still exists. The retention
+  # rule dismantles the restore path FIRST when it means to retire a pair, so
+  # this guard cannot be tripped by the rule — only by a mistake.
+  case "$svc" in
+    "$KEYCHAIN_SERVICE_BASE".backup.*)
+      stamp="${svc##*.backup.}"
+      if [ -d "$ACCOUNTS_DIR/backups/live-login/$stamp" ]; then
+        printf 'its restore directory backups/live-login/%s still exists' "$stamp"; return 0
+      fi
+      # An unrestorable backup is not derived from any label, so the label
+      # inversion below cannot speak to it. It is unreferenced by construction.
+      return 1 ;;
+  esac
+
+  # A live slot directory derives it. `.claude.json` OR `manifest.toml`, for
+  # the reason spelled out in `referencing_labels`: a manifest-only slot is an
+  # interrupted login, not an orphan, and its credential must be kept.
+  for d in "$ACCOUNTS_DIR"/*/; do
+    [ -f "${d}.claude.json" ] || [ -f "${d}manifest.toml" ] || continue
+    if [ "$(kc_service "${d%/}")" = "$svc" ]; then
+      printf 'the live slot %s derives it' "$(basename "${d%/}")"; return 0
+    fi
+  done
+
+  # Any label still named anywhere derives it. FAIL CLOSED if the inventory
+  # cannot be read.
+  if ! labels="$(referencing_labels)"; then
+    printf 'the account inventory could not be read, so nothing can be proven unreferenced'
+    return 0
+  fi
+  while IFS= read -r label; do
+    [ -n "$label" ] || continue
+    if [ "$(kc_service "$ACCOUNTS_DIR/$label")" = "$svc" ]; then
+      printf 'the label %s is still referenced (registry or database) and derives it' "$label"
+      return 0
+    fi
+  done <<< "$labels"
+
+  return 1
+}
+
+# Retire one keychain item: verify, copy to a dormant name, prove the copy, then
+# delete. `dry` = 1 announces and changes nothing.
+#
+# `reverting_slot` (4th argument, R12.5) is set ONLY by `login_guard_revert`:
+# the slot whose own login was just refused. Its item IS derived by a live slot,
+# so the reference check would refuse — but the login is being reverted, the
+# item holds ANOTHER account's credential, and leaving it there is the defect.
+# The waiver covers exactly the one service that slot derives, nothing else;
+# the copy-verify-delete below still runs in full.
+retire_keychain_item() {
+  local svc="$1" reason="${2:-}" dry="${3:-0}" reverting_slot="${4:-}"
+  local acct="${USER:-claude-code-user}" why stamp dormant before after ledger
+
+  if [ -n "$reverting_slot" ] && [ "$svc" != "$KEYCHAIN_SERVICE_BASE" ] \
+     && [ "$(kc_service "$reverting_slot")" = "$svc" ]; then
+    :
+  elif why="$(service_is_referenced "$svc")"; then
+    warn "  REFUSED — ${svc@Q} is NOT safe to retire: $why"
+    warn "            nothing was copied and nothing was deleted."
+    return 1
+  fi
+
+  before="$(kc_secret_sha8 "$svc")"
+  if [ -z "$before" ]; then
+    warn "  skipped ${svc@Q}: there is no such keychain item."
+    return 1
+  fi
+
+  stamp="$(date -u +%Y%m%dT%H%M%SZ)"
+  dormant="$RETIRED_SERVICE_PREFIX.$stamp.$(printf %s "$svc" | shasum -a 256 | cut -c1-8)"
+
+  if [ "$dry" = "1" ]; then
+    say "  would retire  ${svc@Q}  (secret $before)"
+    say "             →  ${dormant@Q}"
+    say "                $reason"
+    return 0
+  fi
+
+  # Keychain → keychain. The secret goes from `security` straight into
+  # `security -i`'s stdin as hex: never a variable, never an argv, never disk.
+  {
+    printf 'add-generic-password -U -a "%s" -s "%s" -X ' "$acct" "$dormant"
+    security find-generic-password -a "$acct" -s "$svc" -w 2>/dev/null \
+      | tr -d '\n' | xxd -p | tr -d '\n'
+    printf '\n'
+  } | security -i >/dev/null 2>&1
+
+  after="$(kc_secret_sha8 "$dormant")"
+  if [ "$after" != "$before" ]; then
+    warn "  REFUSED — the dormant copy of ${svc@Q} did not verify"
+    warn "            (wanted $before, got ${after:-<none>}). NOTHING was deleted."
+    return 1
+  fi
+
+  if ! security delete-generic-password -a "$acct" -s "$svc" >/dev/null 2>&1; then
+    warn "  the copy verified but deleting ${svc@Q} failed. Nothing is lost —"
+    warn "  ${dormant@Q} is now a duplicate of it."
+    return 1
+  fi
+
+  # A paper trail, hashes only, so a retirement can be explained months later
+  # and the dormant name can be found again. Never a credential value.
+  ledger="$ACCOUNTS_DIR/retired-keychain-items.log"
+  mkdir -p "$ACCOUNTS_DIR" 2>/dev/null
+  printf '%s\tretired=%s\tsecret_sha8=%s\tdormant=%s\treason=%s\n' \
+    "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$svc" "$before" "$dormant" "$reason" >> "$ledger"
+  chmod 600 "$ledger" 2>/dev/null
+
+  say "  retired  ${svc@Q}  (secret $before)"
+  say "        →  ${dormant@Q}   [dormant: nothing derives or refreshes this]"
+  say "           $reason"
+  return 0
+}
+
+# REPLACE-ON-LOGIN, and slot-removal, as one pass: retire every derived
+# credential item that no live slot directory accounts for. Called after a
+# login lands and after a slot is deleted.
+reap_orphan_slot_items() {
+  local dry="${1:-0}" svc why
+  while IFS= read -r svc; do
+    [ -n "$svc" ] || continue
+    [ "$svc" = "$KEYCHAIN_SERVICE_BASE" ] && continue
+    case "$svc" in *.backup.*) continue ;; esac
+    if why="$(service_is_referenced "$svc")"; then
+      # A live slot deriving its own item is the normal, healthy case, and on
+      # every login it would be pure noise — say nothing.
+      #
+      # ANY OTHER reason is worth a line. It means this LOOKS like an orphan
+      # and is not safe to remove: a label still named in the database with no
+      # directory left, or an inventory that could not be read at all. Staying
+      # quiet about a credential decision is precisely how eleven keychain
+      # items accumulated behind three accounts without anyone noticing.
+      case "$why" in
+        "the live slot "*) : ;;
+        *) say "  kept  ${svc@Q}" ; say "        $why" ;;
+      esac
+      continue
+    fi
+    retire_keychain_item "$svc" \
+      "superseded store: no slot directory on this machine derives it" "$dry" || true
+  done < <(all_credential_services)
+}
+
+# THE RETENTION RULE, applied. See KEEP_LIVE_LOGIN_BACKUPS above for the
+# reasoning. Called from `cmd_set_live_login` right after a new backup verifies,
+# so the mechanism self-limits instead of needing a sweep.
+prune_live_login_backups() {
+  local dry="${1:-0}" svc stamp dir retired_dir i
+  local -a restorable=() unrestorable=()
+
+  while IFS= read -r svc; do
+    case "$svc" in "$KEYCHAIN_SERVICE_BASE".backup.*) : ;; *) continue ;; esac
+    stamp="${svc##*.backup.}"
+    if [ -d "$ACCOUNTS_DIR/backups/live-login/$stamp" ]; then
+      restorable+=("$stamp")
+    else
+      unrestorable+=("$stamp")
+    fi
+  done < <(all_credential_services)
+
+  # Half one: no restore path. These cannot restore anything.
+  for stamp in "${unrestorable[@]+"${unrestorable[@]}"}"; do
+    retire_keychain_item "$KEYCHAIN_SERVICE_BASE.backup.$stamp" \
+      "retention: no restore directory, so this item cannot restore anything" "$dry" || true
+  done
+
+  # Half two: keep the newest N restorable pairs. The stamps are
+  # `YYYYmmddTHHMMSSZ`, so a lexical sort IS chronological.
+  [ "${#restorable[@]}" -gt "$KEEP_LIVE_LOGIN_BACKUPS" ] || return 0
+  local -a sorted=()
+  while IFS= read -r stamp; do [ -n "$stamp" ] && sorted+=("$stamp"); done \
+    < <(printf '%s\n' "${restorable[@]}" | sort)
+  retired_dir="$ACCOUNTS_DIR/backups/live-login-retired"
+  for (( i = 0; i < ${#sorted[@]} - KEEP_LIVE_LOGIN_BACKUPS; i++ )); do
+    stamp="${sorted[$i]}"
+    dir="$ACCOUNTS_DIR/backups/live-login/$stamp"
+    if [ "$dry" = "1" ]; then
+      say "  would retire the backup PAIR $stamp (older than the newest $KEEP_LIVE_LOGIN_BACKUPS)"
+      continue
+    fi
+    # The directory moves aside FIRST — the guard refuses to retire an item
+    # whose restore path is live, and moving it is the deliberate act that
+    # dismantles the pair. It is moved, not deleted: it holds no secret, and a
+    # directory costs nothing.
+    mkdir -p "$retired_dir" && chmod 700 "$retired_dir" 2>/dev/null
+    mv "$dir" "$retired_dir/$stamp" 2>/dev/null || {
+      warn "  could not move $dir aside; leaving the $stamp backup pair alone."
+      continue
+    }
+    retire_keychain_item "$KEYCHAIN_SERVICE_BASE.backup.$stamp" \
+      "retention: older than the newest $KEEP_LIVE_LOGIN_BACKUPS restorable backups" "$dry" \
+      || warn "  the $stamp restore directory was moved to $retired_dir/$stamp but its keychain item was kept."
+  done
+}
+
+# ── prune ────────────────────────────────────────────────────────────────────
+#
+# The same two passes the login, delete and set-live-login paths run, exposed as
+# a command so the state of the keychain can be INSPECTED (`--dry-run`) rather
+# than inferred, and so an accumulation that predates the automatic passes can
+# be cleared once.
+cmd_prune() {
+  local dry=0 assume_yes=0
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --dry-run|-n) dry=1; shift ;;
+      --yes|-y) assume_yes=1; shift ;;
+      -*) die "unknown option $1" ;;
+      *) die "prune takes no arguments" ;;
+    esac
+  done
+
+  say ""
+  if [ "$dry" -eq 1 ]; then
+    say "  ════ prune --dry-run: nothing will be copied, deleted or changed ════"
+  else
+    say "  ════ prune ════"
+    say ""
+    say "    Retires credential stores that nothing on this machine references:"
+    say "      · derived items with no slot directory (superseded stores)"
+    say "      · live-login backups with no restore directory"
+    say "      · live-login backups older than the newest $KEEP_LIVE_LOGIN_BACKUPS restorable ones"
+    say ""
+    say "    Every one is COPIED to a dormant keychain name first, and every one"
+    say "    is re-verified as unreferenced at the moment it is retired."
+    say "    Nothing is logged out and nothing is revoked."
+    say ""
+    if [ "$assume_yes" -eq 0 ]; then
+      printf '  type "prune" to go ahead: '
+      local answer; read -r answer || true
+      if [ "$answer" != "prune" ]; then say "  nothing done."; say ""; return 1; fi
+    fi
+  fi
+  say ""
+  reap_orphan_slot_items "$dry"
+  prune_live_login_backups "$dry"
+  say ""
+  say "  done. Live slots and the machine login were not touched."
+  say ""
+}
+
+# ── list / status ────────────────────────────────────────────────────────────
+
+# The renderer, as a program in a variable. It CANNOT be a `python3 - <<PY`
+# heredoc: a heredoc redirects stdin, so it would collide with the JSON we pipe
+# in and python would try to execute the JSON as source. (That exact collision
+# is a live bug in add-account's post-login auth summary; fixed there too.)
+#
+# WHAT IT SHOWS, AND WHY IT NO LONGER SHOWS `default` (msg #928). The machine
+# login is not an account — it is the store `claude` reads when
+# CLAUDE_CONFIG_DIR is unset, and whatever is in it is always ONE OF THE REAL
+# ACCOUNTS. So the Rust side tags that row `folds_into: <label>` and tags the
+# account it actually is `is_live_login: true`; this renderer drops the folded
+# row and paints the marker. Nothing with a credential of its own is ever
+# hidden: when no named account carries the machine login's identity, the Rust
+# side leaves the row unfolded and it prints like any other.
+read -r -d '' RENDER_PY <<'PY' || true
+import json, os, sys
+numbered = sys.argv[1] == "--numbered"
+accounts_dir = sys.argv[2]
+try:
+    d = json.load(sys.stdin)
+except Exception:
+    print("  (could not read the account inventory — is the threads crate built?)")
+    raise SystemExit(1)
+all_slots = d.get("slots", [])
+# The machine-default row is folded into the account it is signed in as.
+slots = [s for s in all_slots if not s.get("folds_into")]
+if not slots:
+    print("  (no accounts registered)")
+    raise SystemExit
+# Older payloads (and fixtures) carry no live-login marking at all. Fall back to
+# the machine-default row rather than showing nothing, so an out-of-date crate
+# degrades to the previous behaviour instead of lying by omission.
+if not any(s.get("is_live_login") for s in slots):
+    for s in slots:
+        if s.get("is_machine_default"):
+            s["is_live_login"] = True
+            break
+NOTE = {
+    "no-login": "not signed in — nothing has ever logged in here",
+    "wiped":    "DEAD — claude cleared this store after a refresh it could not recover",
+    "stranded": "STRANDED CLONE — copied from another login, which has since rotated "
+                "away from it. It still reads 'logged in' locally, and is not.",
+    "expired":  "EXPIRED — the login itself has run out",
+}
+def days_str(days, state):
+    if state in ("clone-of", "stranded"):
+        return "n/a"            # the countdown belongs to someone else's login
+    if days is None:
+        return "?"
+    if days <= 0:
+        return "EXPIRED"
+    return f"{days:.1f}"
+pad = "     " if numbered else "  "
+print(f"{'  #  ' if numbered else '  '}{'ACCOUNT':<24} {'IDENTITY':<10} {'DAYS LEFT':>9}  STATE")
+for i, s in enumerate(slots, 1):
+    state = s["health"]["state"]
+    ident = (s.get("identity") or {}).get("acct") or "-"
+    live = bool(s.get("is_live_login"))
+    tag = "  ← LIVE LOGIN" if live else ""
+    lead = f"  {i:<2} " if numbered else "  "
+    print(f"{lead}{s['label']:<24} {ident:<10} {days_str(s.get('days_left'), state):>9}  {state}{tag}")
+    detail = []
+    hint_path = os.path.join(accounts_dir, s["label"], "login-hint")
+    try:
+        hint = open(hint_path).readline().strip()
+        if hint:
+            detail.append(f"signs in as {hint}")
+    except OSError:
+        pass
+    if s.get("subscription_type"):
+        detail.append(s["subscription_type"])
+    if detail:
+        print(f"{pad}   {' · '.join(detail)}")
+    if live and not s.get("is_machine_default"):
+        # Two independent grants for one account: the slot's own login (the
+        # number above, what the daemon spawns with) and the machine store
+        # (what plain `claude` reads). Different clocks; both are real.
+        ls_days = s.get("live_store_days_left")
+        ls_state = (s.get("live_store_health") or {}).get("state", "?")
+        if ls_state == "live":
+            print(f"{pad}   this is what plain `claude` signs in as "
+                  f"(its own machine store: {days_str(ls_days, ls_state)} days left)")
+        else:
+            print(f"{pad}   this is what plain `claude` signs in as — but the machine "
+                  f"store itself reads {ls_state!r}; sign it in again with "
+                  f"`claude-accounts set-live-login {s['label']}`")
+    elif live and s.get("is_machine_default"):
+        print(f"{pad}   this is your machine login, and no named account carries it yet —"
+              f" `claude-accounts login <name>` gives it a slot of its own")
+    if state == "clone-of":
+        print(f"{pad}   CLONE of {s['health'].get('of')} — one session in two places; "
+              f"whichever refreshes second dies")
+    elif state in NOTE:
+        print(f"{pad}   {NOTE[state]}")
+    if s.get("warning") and state == "live":
+        print(f"{pad}   ! {s['warning']}")
+PY
+
+render_list() {  # render_list <json> [--numbered]
+  printf '%s' "$1" | python3 -c "$RENDER_PY" "${2:-}" "$ACCOUNTS_DIR"
+}
+
+# The labels the renderer printed, in the SAME order and with the SAME
+# filtering, so a menu number always names the row the operator is looking at.
+list_labels() {  # list_labels <json>
+  printf '%s' "$1" | python3 -c \
+    'import json,sys; [print(s["label"]) for s in json.load(sys.stdin).get("slots",[]) if not s.get("folds_into")]'
+}
+
+cmd_list() {
+  local json; json="$(health_json)"
+  [ -n "$json" ] || die "could not read the account inventory (\`threads accounts health --json\` produced nothing).
+  Build the crate first:  cargo build -p threads --manifest-path $REPO_ROOT/Cargo.toml"
+  say ""
+  say "  Claude accounts on this machine"
+  say ""
+  render_list "$json"
+  say ""
+  say "  Add one:          claude-accounts login <name>"
+  say "  Switch the live login: claude-accounts set-live-login <name>"
+  say "  Rename / remove:  claude-accounts rename <old> <new>   ·   delete <name>"
+  say "  Keep them alive:  claude-accounts rotate      (see \`daily-setup\` to automate)"
+  say ""
+}
+
+cmd_status() {
+  if [ "${1:-}" = "--json" ]; then health_json; else cmd_list; fi
+}
+
+# ── login ────────────────────────────────────────────────────────────────────
+#
+# The mechanism itself lives in `add-account --login`, which is already the
+# hardened path: it announces the slot before touching anything, scopes the
+# login to the slot's own CLAUDE_CONFIG_DIR, verifies afterwards that the result
+# is a genuinely distinct account AND session, and re-checks the live login even
+# on failure. This wrapper's job is to pick the slot and remember the email.
+cmd_login() {
+  local label="" email="" extra=()
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --email) [ $# -ge 2 ] || die "--email needs an address"; email="$2"; shift 2 ;;
+      --chrome-profile|--no-browser|--force|--allow-same-account|--dry-run|--skip-usage-check)
+        if [ "$1" = "--chrome-profile" ]; then
+          [ $# -ge 2 ] || die "--chrome-profile needs a profile directory"
+          extra+=("$1" "$2"); shift 2
+        else extra+=("$1"); shift; fi ;;
+      -*) die "unknown option $1 (try: claude-accounts help)" ;;
+      *)  [ -z "$label" ] || die "one label at a time"; label="$1"; shift ;;
+    esac
+  done
+  [ -n "$label" ] || die "which slot? e.g. claude-accounts login work-2"
+  # `login <email>`: the account IS the address; the slot is found from it.
+  case "$label" in
+    *@*)
+      local by_email; by_email="$(normalize_email "$label")" \
+        || die "not an email address: ${label@Q}"
+      [ -z "$email" ] || [ "$(normalize_email "$email")" = "$by_email" ] \
+        || die "two different addresses: ${label@Q} and --email ${email@Q}"
+      email="$by_email"; label="$(label_for_email "$by_email")" ;;
+  esac
+  printf '%s' "$label" | grep -Eq '^[A-Za-z0-9_-]{1,64}$' \
+    || die "invalid label ${label@Q}: use [A-Za-z0-9_-], max 64 chars"
+
+  [ -n "$email" ] || email="$(read_login_hint "$label")"
+
+  # SAY WHICH ACCOUNT, BEFORE ANYTHING OPENS. This is the operator's stated
+  # pain point — several browsers, no idea which account is being registered.
+  say ""
+  say "  ════ about to sign in the slot ${label@Q} ════"
+  if [ -n "$email" ]; then
+    say "    as: $email"
+    say "        (passed to claude as --email, so the consent page is pre-filled"
+    say "         with that address and there is no doubt which account it is)"
+  else
+    say "    as: WHOEVER YOU PICK on the consent page — no email hint is set for"
+    say "        this slot, so read the page carefully before authorizing."
+    say "        Set one for next time with:  --email you@example.com"
+  fi
+  say "    Your live login will NOT be logged out or touched."
+  say ""
+
+  local add_account; add_account="$(seam CLAUDE_ACCOUNTS_ADD_ACCOUNT)"
+  [ -n "$add_account" ] || add_account="$ADD_ACCOUNT"
+  [ -x "$add_account" ] || die "missing $add_account"
+  local args=(--login "$label")
+  [ -z "$email" ] || args+=(--email "$email")
+  args+=("${extra[@]+"${extra[@]}"}")
+
+  local dry=0 a
+  for a in "${extra[@]+"${extra[@]}"}"; do [ "$a" = "--dry-run" ] && dry=1; done
+
+  # ── THE IDENTITY GUARD, part 1: snapshot before anything can change ───────
+  # The account this login is FOR. An address given or remembered is it; with
+  # none, the identity the slot held before is (a re-login must not switch
+  # accounts silently either). With neither, the read must still succeed.
+  local slot="$ACCOUNTS_DIR/$label" want="" snap=""
+  if [ -n "$email" ]; then
+    want="$(normalize_email "$email")" || die "not an email address: ${email@Q}"
+  else
+    want="$(normalize_email "$(slot_email_from_config "$label")" 2>/dev/null)" || want=""
+  fi
+  if [ "$dry" -eq 0 ]; then
+    refuse_real_login_writes_under_test "claude-accounts login"
+    snap="$ACCOUNTS_DIR/backups/pre-login/$label.$(date -u +%Y%m%dT%H%M%SZ).$$"
+    mkdir -p "$ACCOUNTS_DIR/backups/pre-login" && chmod 700 "$ACCOUNTS_DIR/backups" \
+      "$ACCOUNTS_DIR/backups/pre-login" 2>/dev/null
+    login_guard_snapshot "$slot" "$snap" || { rm -rf "$snap"; die \
+      "could not snapshot ${label@Q} before signing in, so a wrong-account login could
+  not be undone. NOTHING was started; the slot is exactly as it was."; }
+  fi
+
+  # add-account signs in `<home>/accounts/<label>`. Hand it THIS home, so the
+  # slot it writes is the slot checked below (R12.5 inspect B2: with
+  # CLAUDE_ACCOUNTS_HOME set and not passed on, the login landed elsewhere and
+  # nothing checked it).
+  CLAUDE_ACCOUNTS_HOME="$THREADS_DIR" "$add_account" "${args[@]}"
+  local rc=$? verified=""
+
+  # ── THE IDENTITY GUARD, part 2: did the login land, and as WHOM ───────────
+  # A login landed iff the slot's keychain item changed. Whatever add-account
+  # returned, a landed login is checked against the server — a non-zero exit
+  # AFTER the credential was written (a clone verdict, a failed adopt) does not
+  # make a crossed credential safe to leave in place.
+  if [ "$dry" -eq 0 ]; then
+    local svc_now; svc_now="$(kc_secret_sha8 "$(kc_service "$slot")")"
+    if [ -z "$svc_now" ] || [ "$svc_now" = "$(snap_meta "$snap" secret_sha8)" ]; then
+      login_guard_discard "$snap"     # nothing landed HERE: nothing to verify or undo
+      # FAIL CLOSED. add-account said it signed in, yet the slot this guard
+      # checks holds no new credential: the login landed somewhere this tool
+      # did not look. That is unverified, never "nothing happened".
+      if [ "$rc" -eq 0 ]; then
+        warn ""
+        warn "claude-accounts: REFUSED — add-account reported a login for ${label@Q}, but no new"
+        warn "  credential is in the slot that was checked ($slot)."
+        warn "  The login landed where it was not checked; it is NOT verified. Nothing here changed."
+        return 5
+      fi
+    else
+      local verdict=0; identity_verdict "$(kc_service "$slot")" "$want" || verdict=$?
+      if [ "$verdict" -ne 0 ]; then
+        warn ""
+        warn "claude-accounts: REFUSED — the login for ${label@Q} authenticated as another account:"
+        warn "  wanted ${want:-<any readable identity>}, got $GUARD_GOT"
+        if login_guard_revert "$slot" "$snap" "wanted ${want:-?}, got $GUARD_GOT"; then
+          warn "  Reverted: the slot's files and keychain item are back to what they were"
+          warn "  before this login, and the other account's grant is parked (dormant), not used."
+        else
+          warn "  The revert was INCOMPLETE (see above); the snapshot is kept at $snap"
+        fi
+        warn "  ${label@Q} is NOT signed in by this run. Sign in again and pick ${want:-the right account}."
+        return "$verdict"
+      fi
+      login_guard_discard "$snap"
+      [ -n "$email" ] || email="$GUARD_GOT"
+      verified="$GUARD_GOT"
+    fi
+  fi
+  # Remember the address only once the flow got far enough to be worth
+  # remembering — a typo'd address should not become sticky state, and a
+  # --dry-run must leave nothing behind at all (it does not even create the
+  # slot dir, and writing a hint here would).
+  if [ "$rc" -eq 0 ] && [ "$dry" -eq 0 ]; then
+    # A slot cannot exist without a hint. `$email` may be empty — the operator
+    # did not pass one and none was remembered — and that is precisely the case
+    # this used to leave unfilled. `write_login_hint` now reads the address back
+    # out of the slot's own `.claude.json`, which the login it just completed
+    # wrote, so the only way to end up without a hint is for the login itself
+    # not to have landed.
+    if write_login_hint "$label" "$email"; then
+      say "  login hint for $label: $(read_login_hint "$label")"
+    else
+      warn "  note: no login hint could be written for $label — the completed"
+      warn "  login recorded no email address. Set one with:"
+      warn "      claude-accounts login $label --email you@example.com"
+    fi
+
+    # REPLACE-ON-LOGIN. A login has just landed, so this is the moment the set
+    # of credential stores is supposed to match the set of slots. Any derived
+    # item that no slot directory accounts for is a superseded store — the
+    # operator's *"it can replace the previous one"* — and it goes.
+    reap_orphan_slot_items 0
+    # The last act of a login that passed the identity guard (R12.10's hook).
+    [ -z "$verified" ] || on_login_verified login "$label" "$verified"
+  fi
+  return $rc
+}
+
+# ── the inventory, as a flat record ──────────────────────────────────────────
+#
+# One python program, one shape, so every mutating command below reasons about
+# the same facts the listing showed.
+read -r -d '' FACTS_PY <<'PY' || true
+import json, sys
+target = sys.argv[1]
+try:
+    slots = json.load(sys.stdin).get("slots", [])
+except Exception:
+    slots = []
+def find(pred):
+    return next((s for s in slots if pred(s)), None)
+tgt = find(lambda s: s.get("label") == target)
+live = find(lambda s: s.get("is_live_login"))
+dflt = find(lambda s: s.get("is_machine_default"))
+def ident(s, k):
+    return ((s or {}).get("identity") or {}).get(k) or ""
+def days(s):
+    d = (s or {}).get("days_left")
+    return "" if d is None else f"{d:.1f}"
+out = {
+    "target_found":     "yes" if tgt else "no",
+    "target_is_default": "yes" if (tgt or {}).get("is_machine_default") else "no",
+    "target_is_live":   "yes" if (tgt or {}).get("is_live_login") else "no",
+    "target_state":     ((tgt or {}).get("health") or {}).get("state", ""),
+    "target_mode":      (tgt or {}).get("credential_mode") or "",
+    "target_dir":       (tgt or {}).get("config_dir") or "",
+    "target_secret":    (tgt or {}).get("secret_sha8") or "",
+    "target_acct":      ident(tgt, "acct"),
+    "target_email":     ident(tgt, "email"),
+    "target_days":      days(tgt),
+    # `live_is_named` = the machine login IS one of the named accounts. When it
+    # is "no", the account in the machine store has no slot of its own, so that
+    # store is the ONLY copy of its credential.
+    "live_label":       (live or {}).get("label", ""),
+    "live_is_named":    "no" if (live or {}).get("is_machine_default", True) else "yes",
+    "live_acct":        ident(live, "acct"),
+    "live_email":       ident(live, "email"),
+    "default_days":     days(dflt),
+    "default_secret":   (dflt or {}).get("secret_sha8") or "",
+}
+for k, v in out.items():
+    print(f"{k}{v}")
+PY
+
+# read_facts <json> <label> — fills the caller's `F` associative array. Every
+# key is pre-seeded so a `set -u` shell can read any of them, and an unparseable
+# inventory fails loudly HERE rather than reading as "no such account" three
+# lines later — which, in a command that changes credentials, would be the worst
+# possible way to be wrong.
+read_facts() {
+  local json="$1" label="$2" k v
+  for k in target_found target_is_default target_is_live target_state target_mode \
+           target_dir target_secret target_acct target_email target_days \
+           live_label live_is_named live_acct live_email default_days default_secret; do
+    F["$k"]=""
+  done
+  while IFS=$'\x1f' read -r k v; do
+    [ -n "${k:-}" ] && F["$k"]="${v:-}"
+  done < <(printf '%s' "$json" | python3 -c "$FACTS_PY" "$label")
+  [ -n "${F[target_found]}" ] || die "could not read the account inventory
+  (\`threads accounts health --json\` produced nothing usable). Build the crate:
+      cargo build -p threads --manifest-path $REPO_ROOT/Cargo.toml"
+}
+
+valid_label() { printf '%s' "$1" | grep -Eq '^[A-Za-z0-9_-]{1,64}$'; }
+
+# ── set-live-login ───────────────────────────────────────────────────────────
+#
+# WHAT "THE LIVE LOGIN" IS. The machine login is the credential store `claude`
+# reads when CLAUDE_CONFIG_DIR is unset: `~/.claude.json` for the identity and
+# the bare `Claude Code-credentials` keychain item for the tokens. Pointing it
+# at a different account means putting a grant for that account into THAT store.
+#
+# ── WHY THIS DOES A FRESH BROWSER LOGIN RATHER THAN COPYING A STORED ONE ─────
+#
+# The obvious implementation is to copy the chosen slot's keychain secret onto
+# `Claude Code-credentials` and splice its `oauthAccount` into `~/.claude.json`.
+# It is instant, it needs no browser — and it MANUFACTURES THE EXACT FAILURE
+# THAT KILLED `secondary-live`. Two stores would then hold one refresh token;
+# Claude Code rotates the refresh token on every refresh and reconciles only
+# WITHIN a store, so the copy that refreshes second is rejected and self-wipes.
+# The operator would get a machine login that reads "logged in" and is dead,
+# with no warning and no undo. Measured, on this machine, 2026-07-30.
+#
+# Moving instead of copying (delete the slot's item afterwards) avoids the clone
+# but empties the slot — which is the config dir the daemon spawns that account
+# with. It would trade a live login for a broken account pool.
+#
+# So the only implementation that leaves every account with exactly one healthy,
+# independently-rotatable grant is a REAL `claude auth login` into the machine
+# store. It costs one consent page. It creates a NEW grant, so nothing shares a
+# token with anything, and it revokes nothing: `logout` is never invoked, and
+# the outgoing account keeps its own slot's grant untouched.
+#
+# ── WHAT IS BACKED UP, AND HOW TO UNDO IT ────────────────────────────────────
+#
+# Before claude is invoked at all:
+#   * `~/.claude.json` is copied into the backup dir (mode 600, inside the 0700
+#     `*`-gitignored accounts dir). On macOS it holds the identity block and the
+#     operator's settings — no tokens.
+#   * the machine keychain item is copied KEYCHAIN-TO-KEYCHAIN into a dormant
+#     service named `<base>.backup.<stamp>`. Never to disk, never on an argv,
+#     and never a name `claude` can derive (its own suffixes are `-<8 hex>`), so
+#     nothing will ever refresh it and it cannot rotate anything away.
+#   * a `restore` script is written next to them that puts both back.
+#
+# So the undo is `<backup dir>/restore`, and the ordinary undo — the one that
+# needs no backup at all — is `claude-accounts set-live-login <the old one>`.
+cmd_set_live_login() {
+  local label="" email="" chrome="" no_browser=0 dry=0 assume_yes=0 force=0
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --email) [ $# -ge 2 ] || die "--email needs an address"; email="$2"; shift 2 ;;
+      --chrome-profile) [ $# -ge 2 ] || die "--chrome-profile needs a profile directory"
+        chrome="$2"; shift 2 ;;
+      --no-browser) no_browser=1; shift ;;
+      --dry-run) dry=1; shift ;;
+      --yes|-y) assume_yes=1; shift ;;
+      --force) force=1; shift ;;
+      -*) die "unknown option $1 (try: claude-accounts help)" ;;
+      *) [ -z "$label" ] || die "one account at a time"; label="$1"; shift ;;
+    esac
+  done
+  [ -n "$label" ] || die "which account? e.g. claude-accounts set-live-login work-2"
+  # `set-live-login <email>`: the account IS the address; the slot is found from it.
+  case "$label" in
+    *@*)
+      local by_email; by_email="$(normalize_email "$label")" \
+        || die "not an email address: ${label@Q}"
+      [ -z "$email" ] || [ "$(normalize_email "$email")" = "$by_email" ] \
+        || die "two different addresses: ${label@Q} and --email ${email@Q}"
+      email="$by_email"; label="$(label_for_email "$by_email")" ;;
+  esac
+  valid_label "$label" || die "invalid name ${label@Q}: use [A-Za-z0-9_-], max 64 chars"
+
+  # ── CLAUDE_CONFIG_DIR: A WARNING, NOT A REFUSAL ────────────────────────────
+  #
+  # This used to `die` with *"REFUSING: CLAUDE_CONFIG_DIR is set in this shell …
+  # Run `unset CLAUDE_CONFIG_DIR` and try again."* — and it fires constantly,
+  # because any shell spawned from inside an account slot inherits the variable.
+  # That is a refusal standing between the operator and a login.
+  #
+  # It was also guarding nothing. The whole operation IS defined by
+  # CLAUDE_CONFIG_DIR being unset — and the login below already enforces that
+  # itself, explicitly, with `env -u CLAUDE_CONFIG_DIR` (see the invocation
+  # further down, where the unset is the thing that makes it the machine store).
+  # The value in this shell never reached the child. So the check refused a run
+  # for a condition the run already handled.
+  #
+  # Say it plainly and carry on.
+  if [ "${CLAUDE_CONFIG_DIR+set}" = set ]; then
+    say ""
+    say "  ! note: CLAUDE_CONFIG_DIR is set in this shell (${CLAUDE_CONFIG_DIR@Q})."
+    say "    It is IGNORED. Setting the live login means signing in to the store"
+    say "    claude reads when that variable is UNSET, and the login below is run"
+    say "    with it explicitly unset — so this shell's value cannot reach it."
+    say ""
+  fi
+
+  local json; json="$(health_json)"
+  [ -n "$json" ] || die "could not read the account inventory"
+  local -A F=(); read_facts "$json" "$label"
+
+  [ "${F[target_found]}" = "yes" ] || die "there is no account ${label@Q}.
+  \`claude-accounts list\` shows the ones you have."
+  [ "${F[target_is_default]}" = "no" ] || die \
+    "${label@Q} IS the machine login — there is nothing to switch it to.
+  Give it a name of its own first: claude-accounts login <name>"
+
+  # Already there? Compare the ACCOUNT, not the label: two slots can hold one
+  # account, and a browser trip that changes nothing is not free.
+  if [ -n "${F[target_acct]}" ] && [ "${F[target_acct]}" = "${F[live_acct]}" ] \
+     && [ "${F[target_email]}" = "${F[live_email]}" ]; then
+    say ""
+    say "  Your machine login is already signed in as that account."
+    # A STABLE MARKER, read by the board (threads_tui/local.py,
+    # ALREADY_LIVE_MARKER). Without it a --dry-run here exits 0 without the
+    # dry-run stop line, and the board read that as "never checked anything"
+    # and refused. Printed on dry and real runs alike; change it in both places.
+    say "  already-live: nothing to sign in, no browser needed."
+    if [ "${F[target_is_live]}" != "yes" ] && [ "$dry" -eq 0 ]; then
+      write_live_login_pointer "$label"
+      say "  (noted ${label@Q} as the name for it.)"
+    fi
+    say ""
+    return 0
+  fi
+
+  # What the target must have is a KNOWN IDENTITY, not a working login.
+  #
+  # This used to refuse any target whose slot was not live/own-login ("Setting
+  # the machine login is not a way to repair a slot"), on two stated grounds:
+  # the identity is the only thing the result can be checked against, and with
+  # no other grant the machine store would be the ONLY copy. Neither holds once
+  # the identity is recorded. The machine store is signed in FRESH, in a
+  # browser, and verified against target_acct/target_email below; the slot's
+  # credential is never read or copied, so whether it is wiped is irrelevant to
+  # this operation. And an account whose only grant is the machine store is
+  # exactly as recoverable as any other: `claude-accounts login <label>`.
+  # That refusal blocked the operator on a WIPED slot whose identity was known
+  # (H179); he had to sign the machine login in by hand.
+  #
+  # So: refuse only when the identity is unknown — then there is nothing to
+  # verify the browser's result against.
+  local target_own_ok=1
+  if [ "${F[target_state]}" != "live" ] || [ "${F[target_mode]}" != "own-login" ]; then
+    target_own_ok=0
+    if [ -z "${F[target_acct]}" ] || [ -z "${F[target_email]}" ]; then
+      die "REFUSING: ${label@Q} has no working login of its own (state ${F[target_state]:-unknown}),
+  and no recorded identity — so there is nothing to check the browser's result
+  against. Sign it in first:
+      claude-accounts login $label
+  and then come back."
+    fi
+    say ""
+    say "  note: ${label@Q}'s own slot has no working login (state ${F[target_state]:-unknown})."
+    say "    Its identity is recorded, so the machine login can still be signed in"
+    say "    as it and checked. The slot's OWN login stays as it is — work placed on"
+    say "    ${label@Q} needs:  claude-accounts login $label"
+  fi
+
+  # The outgoing side. If the account currently in the machine store has no slot
+  # of its own, that store is its ONLY credential, and overwriting it means a
+  # browser sign-in to get that account back.
+  if [ "${F[live_is_named]}" != "yes" ] && [ "$force" -eq 0 ]; then
+    die "REFUSING: your machine login is signed in as an account that has no slot of
+  its own, so that store is the only copy of its credential. Overwriting it
+  would mean signing that account in again from a browser to get it back.
+
+  Give it a slot first (one consent page, and then it is safe forever):
+      claude-accounts login <a-name-for-it>
+
+  If you genuinely do not want that account back, pass --force."
+  fi
+
+  [ -n "$email" ] || email="$(read_login_hint "$label")"
+  # THE IDENTITY GUARD needs the address this switch is FOR, in plain: the one
+  # given, else the slot's login hint, else the address its own config records.
+  # With none of them there is nothing to check the server's answer against.
+  # With no address known, the server's answer is checked against the identity
+  # RECORDED for the target instead (its email sha8, which set-live-login has
+  # always required) — still the server's word, never the cached file's.
+  local want=""
+  want="$(normalize_email "${email:-$(slot_email_from_config "$label")}" 2>/dev/null)" || want=""
+  [ -n "$email" ] || email="$want"
+  command -v claude >/dev/null 2>&1 || die "claude is not on PATH"
+
+  local stamp; stamp="$(date -u +%Y%m%dT%H%M%SZ)"
+  local backup_dir="$ACCOUNTS_DIR/backups/live-login/$stamp"
+  local backup_service="$KEYCHAIN_SERVICE_BASE.backup.$stamp"
+  local live_ident_before live_secret_before
+  live_ident_before="$(fingerprint "$HOME/.claude.json")"
+  live_secret_before="$(kc_secret_sha8 "$KEYCHAIN_SERVICE_BASE")"
+
+  say ""
+  say "  ════ about to change your MACHINE login ════"
+  say ""
+  say "    to      : ${label@Q}${email:+   (as $email)}"
+  say "    from    : ${F[live_label]:-your current machine login}"
+  say ""
+  say "    This is the login plain \`claude\` uses in any terminal, and what"
+  say "    anything that does not set CLAUDE_CONFIG_DIR will run as."
+  say ""
+  say "    It signs in FRESH, in a browser. It does not copy the stored session"
+  say "    that account already has — a copy would put one refresh token in two"
+  say "    stores, and the copy that refreshes second dies. Nothing is logged out,"
+  say "    and nothing is revoked."
+  say ""
+  if [ "$target_own_ok" -eq 1 ]; then
+    say "    ${label@Q} keeps its own separate login (${F[target_days]:-?} days left)."
+  else
+    say "    ${label@Q}'s own slot is NOT signed in (state ${F[target_state]:-unknown}) and"
+    say "    this does not change that: claude-accounts login $label"
+  fi
+  if [ "${F[live_is_named]}" = "yes" ]; then
+    say "    ${F[live_label]@Q} keeps its own separate login too — it stays usable."
+  else
+    say "    --force: the account now in the machine store has no slot; its"
+    say "    credential is being replaced and only the backup below has it."
+  fi
+  say ""
+  say "    Backed up first (nothing is touched until this succeeds):"
+  say "      $backup_dir/"
+  say "      + the machine keychain item, copied to a dormant service name"
+  say "    Undo with:  $backup_dir/restore"
+  say "    or simply:  claude-accounts set-live-login ${F[live_label]:-<the old one>}"
+  say ""
+
+  if [ "$dry" -eq 1 ]; then
+    say "  --dry-run: stopping here. Nothing was backed up, written or invoked."
+    say ""
+    return 0
+  fi
+  refuse_real_login_writes_under_test "set-live-login"
+
+  if [ "$assume_yes" -eq 0 ]; then
+    printf '  type "yes" to go ahead: '
+    local answer; read -r answer || true
+    if [ "$answer" != "yes" ]; then say "  nothing done."; return 1; fi
+  fi
+
+  # ── backups, before claude is invoked ──────────────────────────────────────
+  mkdir -p "$backup_dir" || die "could not create $backup_dir"
+  chmod 700 "$ACCOUNTS_DIR/backups" "$ACCOUNTS_DIR/backups/live-login" "$backup_dir" 2>/dev/null
+  [ -f "$ACCOUNTS_DIR/.gitignore" ] || printf '*\n' > "$ACCOUNTS_DIR/.gitignore"
+  if [ -f "$HOME/.claude.json" ]; then
+    cp "$HOME/.claude.json" "$backup_dir/claude.json" || die "backing up ~/.claude.json failed"
+    chmod 600 "$backup_dir/claude.json"
+  fi
+
+  # Keychain → keychain. The secret goes from `security` straight into
+  # `security -i`'s stdin as hex: never a variable, never an argv, never disk.
+  local kc_acct="${USER:-claude-code-user}"
+  if [ -n "$live_secret_before" ]; then
+    {
+      printf 'add-generic-password -U -a "%s" -s "%s" -X ' "$kc_acct" "$backup_service"
+      security find-generic-password -a "$kc_acct" -s "$KEYCHAIN_SERVICE_BASE" -w 2>/dev/null \
+        | tr -d '\n' | xxd -p | tr -d '\n'
+      printf '\n'
+    } | security -i >/dev/null 2>&1
+    local backed_up; backed_up="$(kc_secret_sha8 "$backup_service")"
+    [ "$backed_up" = "$live_secret_before" ] || die \
+      "the keychain backup did not verify (wanted $live_secret_before, got ${backed_up:-<none>}).
+  NOTHING has been changed. Your machine login is exactly as it was."
+  fi
+
+  # A restore script, so the undo is one command rather than a recipe.
+  cat > "$backup_dir/restore" <<RESTORE
+#!/usr/bin/env bash
+# Put the machine login back to what it was at $stamp.
+#
+# This writes the keychain item \`$KEYCHAIN_SERVICE_BASE\` and the identity
+# block in ~/.claude.json back to the values captured immediately before
+# \`claude-accounts set-live-login $label\` ran. It revokes nothing and logs
+# nothing out.
+#
+# CAVEAT, and it matters: a refresh token is single-use. If the account this
+# restores had refreshed ANYWHERE since $stamp, the token in here is the
+# rotated-away one and claude will ask you to sign in again. That is a browser
+# trip, not a lost account. The undo with no caveat at all is:
+#     claude-accounts set-live-login <that account's name>
+set -euo pipefail
+acct="\${USER:-claude-code-user}"
+here="\$(cd "\$(dirname "\${BASH_SOURCE[0]}")" && pwd)"
+[ -z "\${CLAUDE_SECURESTORAGE_CONFIG_DIR+set}" ] || {
+  echo "unset CLAUDE_SECURESTORAGE_CONFIG_DIR first" >&2; exit 1; }
+echo "restoring the machine keychain item from the $stamp backup…"
+{
+  printf 'add-generic-password -U -a "%s" -s "%s" -X ' "\$acct" "$KEYCHAIN_SERVICE_BASE"
+  security find-generic-password -a "\$acct" -s "$backup_service" -w | tr -d '\n' | xxd -p | tr -d '\n'
+  printf '\n'
+} | security -i
+if [ -f "\$here/claude.json" ]; then
+  cp "\$HOME/.claude.json" "\$HOME/.claude.json.before-restore-$stamp" 2>/dev/null || true
+  cp "\$here/claude.json" "\$HOME/.claude.json"
+  chmod 600 "\$HOME/.claude.json"
+  echo "restored ~/.claude.json (the one being replaced is at ~/.claude.json.before-restore-$stamp)"
+fi
+echo "done. Check with: claude-accounts list"
+RESTORE
+  chmod 700 "$backup_dir/restore"
+  cat > "$backup_dir/what-this-is.txt" <<META
+machine-login backup taken $stamp, immediately before
+  claude-accounts set-live-login $label
+
+outgoing identity : ${live_ident_before:-<none>}
+outgoing secret   : ${live_secret_before:-<none>}   (sha8 only)
+backup keychain   : $backup_service
+undo              : ./restore
+better undo       : claude-accounts set-live-login ${F[live_label]:-<the old account>}
+META
+  chmod 600 "$backup_dir/what-this-is.txt"
+  say "  backed up. $backup_dir/"
+  say ""
+
+  # ── retention, applied HERE so the mechanism self-limits ───────────────────
+  #
+  # This is the point, and the only point, at which a new backup exists. It has
+  # been written, its keychain copy has been VERIFIED against the live secret,
+  # and its restore script is on disk — so there are now N+1 good backups and
+  # the rule can be applied without ever being the reason a backup is missing.
+  #
+  # Deliberately BEFORE `claude auth login` rather than after. If the login
+  # fails or is abandoned, the newest backup — the verified one, describing the
+  # state the machine is actually still in — is the one that matters, and it is
+  # kept. Running this after the login would make retention depend on a browser
+  # trip completing, which is exactly the kind of coupling that leaves sediment
+  # when it does not.
+  prune_live_login_backups 0
+
+  # ── the login itself ──────────────────────────────────────────────────────
+  local browser_cmd browser_note
+  if [ "$no_browser" -eq 1 ]; then
+    browser_cmd="/usr/bin/true"; browser_note="nothing opens; paste the code#state back"
+  elif [ -n "$chrome" ]; then
+    browser_cmd="$SCRIPT_DIR/claude-login-browser"
+    export CLAUDE_LOGIN_CHROME_PROFILE="$chrome"; browser_note="Chrome profile ${chrome@Q}"
+  else
+    browser_cmd="$SCRIPT_DIR/claude-login-browser"
+    export CLAUDE_LOGIN_PRIVATE=1
+    browser_note="a fresh private window (so no signed-in cookie decides for you)"
+  fi
+  [ "$browser_cmd" = "/usr/bin/true" ] || [ -x "$browser_cmd" ] \
+    || die "missing helper: $browser_cmd"
+  say "  browser: $browser_note"
+  say "  ── if a code appears in the browser, paste it at the prompt ──"
+  say ""
+
+  local -a login_args=(auth login --claudeai)
+  [ -z "$email" ] || login_args+=(--email "$email")
+  local rc=0 cbin; cbin="$(claude_bin)"
+  [ -n "$cbin" ] || die "claude is not on PATH"
+  # CLAUDE_CONFIG_DIR is UNSET, not empty — that is what makes this the machine
+  # store. `-u` removes it from the child rather than passing "". (An EMPTY
+  # value is not the same thing anywhere else in this file, and it is not here
+  # either: it is the value `CLAUDE_SECURESTORAGE_CONFIG_DIR` is refused for.)
+  env -u CLAUDE_CODE_OAUTH_TOKEN -u ANTHROPIC_API_KEY \
+      -u CLAUDE_SECURESTORAGE_CONFIG_DIR -u CLAUDE_CONFIG_DIR \
+      BROWSER="$browser_cmd" "$cbin" "${login_args[@]}" || rc=$?
+  say ""
+
+  # ── verification ──────────────────────────────────────────────────────────
+  local after_ident after_secret after_acct after_email
+  after_ident="$(fingerprint "$HOME/.claude.json")"
+  after_secret="$(kc_secret_sha8 "$KEYCHAIN_SERVICE_BASE")"
+  after_acct="$(printf '%s' "$after_ident" | tr ' ' '\n' | sed -n 's/^acct=//p')"
+  after_email="$(printf '%s' "$after_ident" | tr ' ' '\n' | sed -n 's/^email=//p')"
+
+  if [ "$rc" -ne 0 ]; then
+    say "  claude auth login exited $rc."
+    if [ "$after_ident" = "$live_ident_before" ]; then
+      say "  Your machine login is UNCHANGED — still ${F[live_label]:-what it was}."
+      say "  Re-run when you are ready. Nothing needs undoing."
+    else
+      say "  BUT the machine identity moved. Undo with:  $backup_dir/restore" >&2
+    fi
+    say ""
+    return "$rc"
+  fi
+
+  # ── THE IDENTITY GUARD: ask the SERVER who the machine store now is ──────
+  # The cached `~/.claude.json` fingerprint used to decide this; it is a file,
+  # and it is not evidence. The trusted read is the machine keychain item's own
+  # token answered by /api/oauth/profile. Crossed or unreadable ⇒ the backup's
+  # `restore` is RUN (not pointed at), and this exits non-zero.
+  local verdict=0; identity_verdict "$KEYCHAIN_SERVICE_BASE" "$want" || verdict=$?
+  if [ "$verdict" -eq 0 ] && [ -z "$want" ] \
+     && [ "$(printf %s "$GUARD_RAW" | shasum -a 256 | cut -c1-8)" != "${F[target_email]}" ]; then
+    verdict=3
+  fi
+  [ -n "$want" ] || want="<the identity recorded for ${label@Q}>"
+  if [ "$verdict" -eq 0 ]; then
+    write_live_login_pointer "$label"
+    say "  ✓ your machine login is now ${label@Q}"
+    say "    identity  : $after_ident"
+    if [ -n "$after_secret" ] && [ "$after_secret" = "${F[target_secret]}" ]; then
+      say ""
+      say "  !! WARNING: the machine store and ${label@Q}'s own store now hold the SAME" >&2
+      say "     secret. That is one session in two places and one of them will die on" >&2
+      say "     the next refresh. This should be impossible from a fresh login." >&2
+      say "     Do not use both until you have re-signed one of them in." >&2
+    else
+      say "    a fresh, independent grant — it shares no token with ${label@Q}'s own slot"
+    fi
+    say ""
+    say "  To switch back:  claude-accounts set-live-login ${F[live_label]:-<the other one>}"
+    say "  The pre-switch machine login is backed up at $backup_dir/"
+    say ""
+    # The last act of a login that passed the identity guard (R12.10's hook).
+    on_login_verified set-live-login "$label" "$GUARD_GOT"
+    return 0
+  fi
+
+  warn ""
+  warn "claude-accounts: REFUSED — the new machine login is not ${label@Q}:"
+  warn "  wanted $want, got $GUARD_GOT"
+  # MOVED means the IDENTITY moved, not the file. Running claude sessions
+  # rewrite ~/.claude.json constantly (settings, caches); a whole-file compare
+  # read their writes as ours and ran `restore` over them (R12.5 inspect B1).
+  local reverted=1 home_moved=0
+  [ "$after_ident" = "$live_ident_before" ] || home_moved=1
+  if [ -n "$live_secret_before" ] && [ "$after_secret" = "$live_secret_before" ] \
+     && [ "$home_moved" -eq 0 ]; then
+    # Nothing this run wrote is in place (the login changed neither store), so
+    # there is nothing to put back — and rewriting the live login with its own
+    # bytes would only race whatever session is refreshing it right now.
+    warn "  Nothing changed: the machine keychain item and ~/.claude.json are as they were."
+  elif [ -n "$live_secret_before" ]; then
+    "$backup_dir/restore" >&2 || reverted=0
+  else
+    # There was no machine credential before, so there is none to put back,
+    # and this tool never deletes the machine login (refusal #3). Say so.
+    reverted=0
+    warn "  There was no machine login before this run, so there is nothing to put back;"
+    warn "  the machine keychain item now holds $GUARD_GOT's grant. Nothing deleted it."
+    if [ "$home_moved" -eq 1 ] && [ -f "$backup_dir/claude.json" ]; then
+      cp "$backup_dir/claude.json" "$HOME/.claude.json" && chmod 600 "$HOME/.claude.json"
+    fi
+  fi
+  if [ "$reverted" -eq 1 ]; then
+    warn "  Reverted: your machine login is back to ${F[live_label]:-what it was} (from $backup_dir/)."
+  else
+    warn "  The revert was INCOMPLETE. The backup is at $backup_dir/."
+  fi
+  warn "  Sign in again and pick $want on the consent page:"
+  warn "      claude-accounts set-live-login $label"
+  return "$verdict"
+}
+
+# The pointer the Rust side reads (`accounts::read_live_login_pointer`). It is a
+# TIE-BREAK only — used when two slots hold one account — and is ignored there
+# unless the identity still matches, so a stale one cannot make the list lie.
+write_live_login_pointer() {
+  mkdir -p "$ACCOUNTS_DIR" 2>/dev/null
+  printf '%s\n' "$1" > "$ACCOUNTS_DIR/live-login" && chmod 600 "$ACCOUNTS_DIR/live-login"
+}
+
+# ── rename ───────────────────────────────────────────────────────────────────
+#
+# The mechanism is in Rust (`accounts::rename_account`) because the keychain
+# service name is DERIVED FROM THE SLOT'S PATH: a rename that moved only the
+# registry would leave a perfectly good grant under a service name nothing
+# reads, and the account would read "not signed in" forever.
+cmd_rename() {
+  local old="${1:-}" new="${2:-}"
+  [ -n "$old" ] && [ -n "$new" ] || die "usage: claude-accounts rename <old> <new>"
+  shift 2 2>/dev/null || true
+  [ $# -eq 0 ] || die "rename takes exactly two names"
+  valid_label "$old" || die "invalid name ${old@Q}: use [A-Za-z0-9_-], max 64 chars"
+  valid_label "$new" || die "invalid name ${new@Q}: use [A-Za-z0-9_-], max 64 chars"
+  local bin; bin="$(threads_cli)"
+  [ -n "$bin" ] || die "the threads binary is not built. Run:
+  cargo build -p threads --manifest-path $REPO_ROOT/Cargo.toml"
+  say ""
+  THREADS_HOME="$THREADS_DIR" "$bin" accounts rename "$old" "$new" || return $?
+  # The login hint lives inside the slot dir, so it moved with it. Nothing else
+  # to do — but say the one thing the operator cannot see.
+  say ""
+  say "  Renamed. Its login was not touched, and nothing was logged out."
+  say ""
+}
+
+# ── delete ───────────────────────────────────────────────────────────────────
+#
+# Local only. This removes THIS MACHINE'S copy of a grant; it never asks the
+# server to revoke anything, which is the whole reason `logout` does not exist
+# here. The account itself is untouched and can be signed in again any time.
+cmd_delete() {
+  local label="" assume_yes=0 force=0
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --yes|-y) assume_yes=1; shift ;;
+      --force) force=1; shift ;;
+      -*) die "unknown option $1" ;;
+      *) [ -z "$label" ] || die "one account at a time"; label="$1"; shift ;;
+    esac
+  done
+  [ -n "$label" ] || die "which account? e.g. claude-accounts delete work-2"
+  valid_label "$label" || die "invalid name ${label@Q}: use [A-Za-z0-9_-], max 64 chars"
+
+  local json; json="$(health_json)"
+  [ -n "$json" ] || die "could not read the account inventory"
+  local -A F=(); read_facts "$json" "$label"
+  [ "${F[target_found]}" = "yes" ] || die "there is no account ${label@Q}."
+  [ "${F[target_is_default]}" = "no" ] || die \
+    "${label@Q} is your machine login, not a slot — there is nothing here that can
+  delete it, and nothing that should. Point it somewhere else instead:
+      claude-accounts set-live-login <another account>"
+
+  # Refuse BEFORE describing the destruction. A refusal that arrives underneath
+  # a list of everything about to be destroyed reads like a warning, not a stop.
+  if [ "${F[target_is_live]}" = "yes" ] && [ "$force" -eq 0 ]; then
+    die "REFUSING: ${label@Q} is the account your machine login is signed in as.
+  Deleting its slot leaves that account with only the machine store — and no
+  config dir for the daemon to spawn it with. Point the machine login at
+  another account first:
+      claude-accounts set-live-login <another account>
+  or pass --force if you really mean to keep only the machine copy."
+  fi
+
+  say ""
+  say "  ════ about to DELETE the account ${label@Q} ════"
+  say ""
+  say "    · its slot directory and everything in it"
+  say "    · its keychain item (this machine's copy of its login)"
+  say "    · its entry in the account registry"
+  say ""
+  say "    Nothing is revoked. This account is NOT logged out — you can sign it"
+  say "    in again any time with:  claude-accounts login $label"
+  say "    Your machine login's own credential is not touched."
+  if [ "${F[target_is_live]}" = "yes" ]; then
+    say ""
+    say "    --force: this is your LIVE account. Your machine login keeps working"
+    say "    (its own credential is separate and untouched), but nothing will be"
+    say "    able to spawn this account as a separate config dir any more."
+  fi
+  say ""
+  if [ "$assume_yes" -eq 0 ]; then
+    printf '  type the account name to confirm: '
+    local answer; read -r answer || true
+    if [ "$answer" != "$label" ]; then say "  nothing deleted."; return 1; fi
+  fi
+
+  local bin; bin="$(threads_cli)"
+  [ -n "$bin" ] || die "the threads binary is not built. Run:
+  cargo build -p threads --manifest-path $REPO_ROOT/Cargo.toml"
+  local -a args=(accounts delete "$label")
+  [ "$force" -eq 0 ] || args+=(--force)
+  say ""
+  THREADS_HOME="$THREADS_DIR" "$bin" "${args[@]}" || return $?
+
+  # THE SLOT DIRECTORY IS GONE, SO ITS KEYCHAIN ITEM GOES WITH IT.
+  #
+  # `threads accounts delete` already removes the item for the slot it deleted.
+  # This pass is for the case that produced the `primary` orphan and that the
+  # Rust side cannot see: a slot directory removed OUT OF BAND — an `rm -rf`, a
+  # moved repo, an abandoned experiment — which leaves a credential store that
+  # nothing on this machine can name, because the service name is a one-way
+  # hash of the path that no longer exists. Running it here means the operator
+  # never has to know that deleting a directory was only half the job.
+  reap_orphan_slot_items 0
+  say ""
+}
+
+# ── expiry ───────────────────────────────────────────────────────────────────
+#
+# THE READ-ONLY PASS, and the one this machine was missing. It enumerates the
+# pool, reads `refreshTokenExpiresAt` out of every store through the SAME
+# `slot_days_left` the rotation pass uses, and prints JSON. It never invokes
+# claude, never writes or copies a keychain item, never takes the rotation
+# lock, and cannot change a credential — which is exactly why it is safe to run
+# unattended on a daily schedule.
+#
+# WHY IT IS NOT PART OF `rotate`. Rotation keeps ACCESS tokens fresh and it
+# works; the access token has always refreshed itself headlessly. The REFRESH
+# token is a second, independent clock, and measured on five credentials on
+# this machine its deadline is fixed at the browser login and does NOT move
+# when the token refreshes. So a slot can rotate flawlessly every single day
+# and still die exactly on time. Rotation cannot see that coming — it is the
+# wrong instrument — and folding the alarm into it would also make the alarm
+# depend on a pass that invokes `claude` against five credential stores.
+#
+# IT NEVER ASSUMES A LIFETIME. The ~28-day figure is inferred from a handful of
+# credentials on one machine, not a documented contract. Every number below is
+# READ from the stored value, so if Anthropic changes the grant this keeps
+# telling the truth instead of confidently lying.
+#
+# STATE IS A WORD, NOT A NUMBER. A slot that ran out yesterday is `dead`, not
+# "expiring in -0.56 days" — a different fact, needing a different sentence.
+expiry_probe() {  # expiry_probe <label> <config dir|""> <keychain service>
+  local label="$1" cfg="$2" svc="$3" acct="${USER:-claude-code-user}"
+  local out days exp
+  if ! security find-generic-password -a "$acct" -s "$svc" >/dev/null 2>&1; then
+    printf '%s\n' "$label${SEP}$cfg${SEP}$svc${SEP}0${SEP}${SEP}"; return 0
+  fi
+  out="$(slot_days_left "$svc" --with-expiry)"
+  if [ -z "$out" ]; then
+    # The item is there but the field is not readable. That is NOT healthy and
+    # must never be silently rounded to "fine" — an alarm that goes quiet when
+    # it cannot see is worse than no alarm.
+    printf '%s\n' "$label${SEP}$cfg${SEP}$svc${SEP}1${SEP}${SEP}"; return 0
+  fi
+  days="${out%% *}"; exp="${out##* }"
+  printf '%s\n' "$label${SEP}$cfg${SEP}$svc${SEP}1${SEP}$days${SEP}$exp"
+}
+
+cmd_expiry() {
+  local threshold=7
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --json) shift ;;                       # JSON is the only output shape
+      --threshold) threshold="${2:-}"; [ -n "$threshold" ] || die "--threshold needs a number"; shift 2 ;;
+      -*) die "unknown option $1" ;;
+      *) die "expiry takes no arguments" ;;
+    esac
+  done
+
+  # NO STORE IS AN ERROR, NOT AN EMPTY POOL (R5.S4). A copy run from where
+  # there is no `accounts/` (cauldron's version store, without
+  # CLAUDE_ACCOUNTS_HOME) would otherwise report only the machine default and
+  # read as "every slot is fine" — an alarm that goes quiet when it cannot see.
+  [ -d "$ACCOUNTS_DIR" ] || die "no account store at $ACCOUNTS_DIR
+  (this copy derives its store from its own path; set CLAUDE_ACCOUNTS_HOME to
+  the threads home whose accounts/ is the store)"
+
+  local rows="" d cfg label
+  # THE POOL. An account directory is one holding a `.claude.json` — that is
+  # what makes it a config dir, and it is what keeps `backups/` out of the
+  # listing without hardcoding a name to skip.
+  for d in "$ACCOUNTS_DIR"/*/; do
+    [ -f "${d}.claude.json" ] || continue
+    cfg="${d%/}"; label="$(basename "$cfg")"
+    rows="$rows$(expiry_probe "$label" "$cfg" "$(kc_service "$cfg")")"$'\n'
+  done
+  # The machine default is not an account (see the header) but it IS a store
+  # with a deadline of its own, and it is the operator's live login. An alarm
+  # that skipped it would go quiet on the one slot that matters most.
+  rows="$rows$(expiry_probe "machine-default" "" "$KEYCHAIN_SERVICE_BASE")"$'\n'
+
+  # Stores whose config dir is GONE. These are the residue of a deleted slot;
+  # they are reported so they are not invisible, and deliberately kept apart
+  # from the pool, because there is no account left to sign in.
+  local orphans="" svc sfx known
+  # `kc_service` prints WITHOUT a trailing newline, so the newline is added
+  # here. Without it every service name runs onto one line and the -x match
+  # below never fires — which reads as "every store is an orphan".
+  known="$(for d in "$ACCOUNTS_DIR"/*/; do
+             [ -f "${d}.claude.json" ] || continue
+             kc_service "${d%/}"; printf '\n'; done)"
+  while IFS= read -r svc; do
+    [ -n "$svc" ] || continue
+    case "$svc" in *.backup.*) continue ;; esac
+    sfx="${svc#$KEYCHAIN_SERVICE_BASE}"
+    [ -n "$sfx" ] || continue                       # the machine default itself
+    printf '%s\n' "$known" | grep -qxF "$svc" && continue
+    orphans="$orphans$svc"$'\n'
+  done <<< "$(security dump-keychain 2>/dev/null \
+              | grep -o "\"$KEYCHAIN_SERVICE_BASE[^\"]*\"" | tr -d '"' | sort -u)"
+
+  local emit_py
+  read -r -d '' emit_py <<'PY' || true
+import json, sys, time, datetime
+threshold = float(sys.argv[1])
+now = time.time()
+def iso(ms):
+    return datetime.datetime.fromtimestamp(ms/1000, datetime.timezone.utc) \
+                   .strftime("%Y-%m-%dT%H:%M:%SZ")
+slots = []
+for line in sys.stdin.read().splitlines():
+    if not line.strip():
+        continue
+    label, cfg, svc, present, days, exp = line.split("\u001f", 5)
+    row = {"label": label, "config_dir": cfg or None, "keychain_service": svc,
+           "days_left": None, "expires_at_ms": None, "expires_at": None}
+    if present != "1":
+        row["state"] = "no-credential"
+    elif not exp:
+        row["state"] = "unreadable"
+    else:
+        row["days_left"] = float(days)
+        row["expires_at_ms"] = int(exp)
+        row["expires_at"] = iso(int(exp))
+        # `dead` is decided against the DEADLINE, not against the rounded
+        # countdown, so a slot that lapsed nine minutes ago still reads dead.
+        row["state"] = ("dead" if int(exp)/1000 <= now
+                        else "expiring" if float(days) <= threshold
+                        else "healthy")
+    slots.append(row)
+slots.sort(key=lambda r: (r["days_left"] is None, r["days_left"] or 0.0))
+print(json.dumps({
+    "at": datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+    "threshold_days": threshold,
+    "slots": slots,
+    "orphan_stores": [s for s in sys.argv[2].splitlines() if s.strip()],
+}, indent=2))
+PY
+  printf '%s' "$rows" | python3 -c "$emit_py" "$threshold" "$orphans"
+}
+
+# ── rotate ───────────────────────────────────────────────────────────────────
+#
+# A login lasts ~30 days (`refreshTokenExpiresAt`, default 2592000000ms in
+# claude v2.1.220). Each successful refresh MAY extend that — the token response
+# carries `refresh_token_expires_in`, and the store keeps the previous value
+# when it is absent. So this pass MEASURES the before/after rather than assuming
+# the extension, and reports what actually happened.
+#
+# The lever it has is narrow and worth stating: Claude Code refreshes LAZILY.
+# There is no `claude auth refresh`. A refresh happens when something needs an
+# access token and the stored one has expired — so the pass runs the free
+# `/usage` probe under the slot's own config dir, which uses that slot's own
+# store, its own lock and its own refresh token, and cannot reach any other.
+cmd_rotate() {
+  local dry=0 as_json=0
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --dry-run) dry=1; shift ;;
+      --json) as_json=1; shift ;;
+      -*) die "unknown option $1" ;;
+      *) die "rotate takes no arguments" ;;
+    esac
+  done
+
+  local log; log="$(seam CLAUDE_ACCOUNTS_LOG)"
+  [ -n "$log" ] || log="$ACCOUNTS_DIR/rotation.log"
+  mkdir -p "$(dirname "$log")" 2>/dev/null
+
+  # One pass at a time. macOS has no flock(1); mkdir is the atomic primitive
+  # that is always there. A lock older than an hour is stale by construction —
+  # the probe is capped at two minutes per slot.
+  ROTATE_LOCK="$ACCOUNTS_DIR/.rotate.lock"
+  local lock="$ROTATE_LOCK"
+  # The working dir may not exist yet (a fresh checkout, or a test seam). A
+  # missing parent makes `mkdir "$lock"` fail exactly like a held lock, which
+  # would report "another rotation pass is running" forever.
+  mkdir -p "$ACCOUNTS_DIR" 2>/dev/null
+  if ! mkdir "$lock" 2>/dev/null; then
+    if [ -n "$(find "$lock" -maxdepth 0 -mmin +60 2>/dev/null)" ]; then
+      rmdir "$lock" 2>/dev/null; mkdir "$lock" 2>/dev/null \
+        || die "another rotation pass holds $lock"
+    else
+      die "another rotation pass is running (lock: $lock). It is safe to wait."
+    fi
+  fi
+  # The trap fires after this function's locals are gone, so it reads the
+  # global. Losing the lock dir on a crash is the failure we can afford; a
+  # trap that dies on an unbound variable is not.
+  trap 'rmdir "${ROTATE_LOCK:-}" 2>/dev/null || true' EXIT
+
+  local stamp; stamp="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  local live_secret_before live_mdat_before live_ident_before
+  live_secret_before="$(kc_secret_sha8 "$KEYCHAIN_SERVICE_BASE")"
+  live_mdat_before="$(kc_mdat "$KEYCHAIN_SERVICE_BASE")"
+  live_ident_before="$(fingerprint "$HOME/.claude.json")"
+
+  local json; json="$(health_json)"
+  [ -n "$json" ] || die "could not read the account inventory"
+
+  # The plan comes from `accounts::rotation_plan` (Rust, unit-tested). This
+  # loop EXECUTES it and never second-guesses it: every refusal — the machine
+  # default, clones, stranded captures, anything without an own-login manifest
+  # — is decided there, in one place, with tests on it.
+  local plan_py
+  read -r -d '' plan_py <<'PY' || true
+import json, sys
+d = json.load(sys.stdin)
+for s in d.get("slots", []):
+    r = s.get("rotation", {})
+    print("\u001f".join([
+        s["label"],
+        s.get("config_dir") or "",
+        r.get("action", "skip"),
+        s.get("secret_sha8") or "",
+        "" if s.get("days_left") is None else f"{s['days_left']:.2f}",
+        r.get("reason", ""),
+    ]))
+PY
+  local plan
+  plan="$(printf '%s' "$json" | python3 -c "$plan_py")"
+
+  local n_rotated=0 n_skip=0 n_manual=0
+  local -a manual_slots=() results=()
+
+  logline() { printf '%s %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$*" >> "$log"; }
+  logline "rotate: start (dry-run=$dry)"
+
+  local label config_dir action before days reason
+  # US (\x1f), not TAB: see the note on the plan program above.
+  while IFS=$'\x1f' read -r label config_dir action before days reason; do
+    [ -n "${label:-}" ] || continue
+    case "$action" in
+      skip)
+        n_skip=$((n_skip+1))
+        results+=("$label${SEP}skip${SEP}${days:-?}${SEP}$reason")
+        logline "skip   $label — $reason"
+        continue ;;
+      manual-login-required)
+        n_manual=$((n_manual+1)); manual_slots+=("$label")
+        results+=("$label${SEP}manual${SEP}${days:-?}${SEP}$reason")
+        logline "MANUAL $label — $reason"
+        continue ;;
+      refresh) : ;;
+      *)
+        # An action the Rust side grew that this script does not know. Do
+        # nothing — an unrecognised instruction is never a licence to probe.
+        results+=("$label${SEP}unknown${SEP}${days:-?}${SEP}unrecognised rotation action ${action@Q}; did nothing")
+        logline "?      $label — unrecognised action ${action@Q}"
+        continue ;;
+    esac
+
+    if [ "$dry" -eq 1 ]; then
+      results+=("$label${SEP}would-refresh${SEP}${days:-?}${SEP}--dry-run: claude was not invoked")
+      logline "dry    $label — would refresh (${days:-?}d left)"
+      continue
+    fi
+
+    # Belt and braces on top of the Rust refusal. If this ever fires, the
+    # inventory and the plan disagreed, and the right move is to touch nothing:
+    # an empty CLAUDE_CONFIG_DIR is the machine default, i.e. the live login.
+    if [ -z "$config_dir" ]; then
+      results+=("$label${SEP}error${SEP}${days:-?}${SEP}no config dir — refused rather than probe the machine default")
+      logline "ERROR  $label — refresh planned with no config dir; REFUSED"
+      continue
+    fi
+    local cbin; cbin="$(claude_bin)"
+    if [ -z "$cbin" ]; then
+      results+=("$label${SEP}error${SEP}${days:-?}${SEP}claude is not on PATH")
+      logline "ERROR  $label — claude is not on PATH"
+      continue
+    fi
+
+    # The refresh itself: the free /usage probe, scoped to this slot's own
+    # config dir. Claude Code refreshes lazily, so this is what makes it read
+    # its own store, take its own lock, and roll its own refresh token. The
+    # child env is scrubbed of the two variables that could redirect it.
+    local rc=0
+    run_capped "$PROBE_TIMEOUT_SECS" \
+      env -u CLAUDE_CODE_OAUTH_TOKEN -u ANTHROPIC_API_KEY \
+          -u CLAUDE_SECURESTORAGE_CONFIG_DIR \
+          CLAUDE_CONFIG_DIR="$config_dir" \
+          "$cbin" "${USAGE_PROBE[@]}" >/dev/null 2>&1 || rc=$?
+
+    local after after_days
+    after="$(kc_secret_sha8 "$(kc_service "$config_dir")")"
+    after_days="$(slot_days_left "$(kc_service "$config_dir")")"
+    if [ -n "$after" ] && [ "$after" != "$before" ]; then
+      n_rotated=$((n_rotated+1))
+      results+=("$label${SEP}rotated${SEP}${after_days:-?}${SEP}refresh token rolled forward (${days:-?}d → ${after_days:-?}d left)")
+      logline "ROLLED $label — ${days:-?}d -> ${after_days:-?}d left"
+    elif [ "$rc" -ne 0 ]; then
+      results+=("$label${SEP}error${SEP}${days:-?}${SEP}the probe failed (exit $rc); nothing changed")
+      logline "ERROR  $label — probe exit $rc, credential unchanged"
+    else
+      results+=("$label${SEP}unchanged${SEP}${after_days:-?}${SEP}probe succeeded but the stored token did not change")
+      logline "same   $label — probe ok, token unchanged"
+    fi
+  done <<< "$plan"
+
+  # THE INVARIANT. Nothing above ran without an explicit slot config dir, so
+  # nothing here can have written the default entry. Prove it anyway.
+  local live_secret_after live_mdat_after live_ident_after live_note=""
+  live_secret_after="$(kc_secret_sha8 "$KEYCHAIN_SERVICE_BASE")"
+  live_mdat_after="$(kc_mdat "$KEYCHAIN_SERVICE_BASE")"
+  live_ident_after="$(fingerprint "$HOME/.claude.json")"
+  if [ "$live_ident_after" != "$live_ident_before" ]; then
+    live_note="IDENTITY CHANGED — this must never happen; do not re-run"
+    logline "!! live login IDENTITY changed ($live_ident_before -> $live_ident_after)"
+  elif [ "$live_secret_after" != "$live_secret_before" ] \
+    || [ "$live_mdat_after" != "$live_mdat_before" ]; then
+    # Expected and harmless: one of the operator's OWN sessions refreshed while
+    # we ran. Identity is the witness that matters, and it is unchanged.
+    live_note="secret/mdat moved, identity unchanged (one of your own sessions refreshed — normal)"
+    logline "live login refreshed on its own; identity unchanged"
+  else
+    live_note="untouched (secret, mdat and identity all unchanged)"
+    logline "live login untouched"
+  fi
+  logline "rotate: done — $n_rotated rolled, $n_skip skipped, $n_manual need a sign-in"
+
+  if [ "$as_json" -eq 1 ]; then
+    local out_py
+    read -r -d '' out_py <<'PY' || true
+import json, sys
+rows = []
+for line in sys.stdin.read().splitlines():
+    if not line.strip(): continue
+    label, outcome, days, note = line.split("\u001f", 3)
+    rows.append({"label": label, "outcome": outcome,
+                 "days_left": None if days in ("", "?") else float(days),
+                 "note": note})
+print(json.dumps({"at": sys.argv[1], "live_login": sys.argv[2], "slots": rows}, indent=2))
+PY
+    printf '%s\n' "${results[@]+"${results[@]}"}" | python3 -c "$out_py" "$stamp" "$live_note"
+    return 0
+  fi
+
+  say ""
+  say "  ════ key rotation — $stamp ════"
+  say ""
+  local row
+  for row in "${results[@]+"${results[@]}"}"; do
+    IFS=$'\x1f' read -r label outcome days note <<< "$row"
+    local days_col; days_col="$( [ -z "${days:-}" ] || [ "$days" = "?" ] \
+      && printf '%s' '—' || printf '%sd' "$days" )"
+    printf '  %-18s %-14s %8s  %s\n' "$label" "$outcome" "$days_col" "$note"
+  done
+  say ""
+  say "  your live login: $live_note"
+  if [ "${#manual_slots[@]}" -gt 0 ]; then
+    say ""
+    say "  NEEDS YOU — these cannot be fixed automatically. Sign each one in:"
+    for label in "${manual_slots[@]}"; do
+      say "      claude-accounts login $label"
+    done
+  fi
+  say ""
+  say "  log: $log"
+  say ""
+  [ -z "${live_note##IDENTITY CHANGED*}" ] && return 1
+  return 0
+}
+
+# ── daily-setup ──────────────────────────────────────────────────────────────
+
+cmd_daily_setup() {
+  local plist="$HOME/Library/LaunchAgents/ai.broomstick.claude-accounts-rotate.plist"
+  local self="$SCRIPT_DIR/claude-accounts"
+  cat <<EOF
+
+  Daily key rotation — one file and one command. Nothing is installed for you.
+
+  1. Write the job:
+
+     mkdir -p "\$HOME/Library/LaunchAgents"
+     cat > "$plist" <<'PLIST'
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key><string>ai.broomstick.claude-accounts-rotate</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>$self</string>
+    <string>rotate</string>
+  </array>
+  <!-- Every day at 09:15 local. Access tokens last ~8h, so by this hour the
+       previous day's token has lapsed and the probe will actually roll the
+       refresh token forward. -->
+  <key>StartCalendarInterval</key>
+  <dict><key>Hour</key><integer>9</integer><key>Minute</key><integer>15</integer></dict>
+  <!-- launchd starts with a bare PATH; cargo and claude both live here. -->
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>PATH</key>
+    <string>/opt/homebrew/bin:/usr/local/bin:$HOME/.cargo/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+  </dict>
+  <key>StandardOutPath</key><string>$ACCOUNTS_DIR/rotation.out</string>
+  <key>StandardErrorPath</key><string>$ACCOUNTS_DIR/rotation.err</string>
+  <key>RunAtLoad</key><false/>
+</dict>
+</plist>
+PLIST
+
+  2. Turn it on — this is the one command you run:
+
+     launchctl bootstrap gui/\$(id -u) "$plist"
+
+  To check it:      launchctl print gui/\$(id -u)/ai.broomstick.claude-accounts-rotate
+  To run it now:    claude-accounts rotate
+  To turn it off:   launchctl bootout gui/\$(id -u)/ai.broomstick.claude-accounts-rotate
+
+  What it will and will not do, every day:
+    · refresh ONLY slots that completed their own \`claude auth login\`
+    · never touch your live login, never touch a clone, never log anything out
+    · append one line per slot to $ACCOUNTS_DIR/rotation.log
+    · name any slot that needs you to sign it in by hand
+
+  NOTE ON THE KEYCHAIN. The job reads keychain items as your user. If macOS ever
+  prompts for keychain access on a background run, click "Always Allow" once —
+  or just run \`claude-accounts rotate\` by hand that day.
+
+EOF
+}
+
+# ── interactive menu ─────────────────────────────────────────────────────────
+
+cmd_menu() {
+  local json; json="$(health_json)"
+  [ -n "$json" ] || die "could not read the account inventory (\`threads accounts health --json\` produced nothing).
+  Build the crate first:  cargo build -p threads --manifest-path $REPO_ROOT/Cargo.toml"
+
+  say ""
+  say "  ════════════════════════════════════════════════════════════════"
+  say "   Claude accounts"
+  say "  ════════════════════════════════════════════════════════════════"
+  say ""
+  render_list "$json" --numbered
+  say ""
+
+  local -a labels
+  mapfile -t labels < <(list_labels "$json")
+
+  say "  Pick an account by number to sign it in again,"
+  say "  or:  n = add an account          s = set which one is your live login"
+  say "       m = rename an account       d = delete an account"
+  say "       r = rotate keys now         q = quit"
+  say ""
+  printf '  > '
+  local choice; read -r choice || { say ""; return 0; }
+
+  # Turn a typed name-or-number into a label, so every prompt below accepts
+  # both. (Spoken aloud, "number two" and the account's name are equally
+  # natural; refusing one of them is just friction.)
+  pick_label() {
+    local want="$1" i=1 l
+    case "$want" in
+      ''|*[!0-9]*)
+        for l in "${labels[@]}"; do [ "$l" = "$want" ] && { printf '%s' "$l"; return 0; }; done
+        return 1 ;;
+      *)
+        [ "$want" -ge 1 ] && [ "$want" -le "${#labels[@]}" ] || return 1
+        printf '%s' "${labels[$((want-1))]}" ;;
+    esac
+  }
+
+  case "$choice" in
+    q|Q|"") say ""; return 0 ;;
+    r|R) say ""; cmd_rotate; return $? ;;
+    n|N)
+      printf '  a name for the new account (letters, digits, - and _): '
+      local label; read -r label || return 0
+      [ -n "$label" ] || { say "  nothing entered."; return 0; }
+      menu_login "$label" ""
+      ;;
+    s|S)
+      printf '  which account should your machine login be? (name or number): '
+      local want; read -r want || return 0
+      local label; label="$(pick_label "${want:-}")" \
+        || { say "  there is no account ${want@Q}."; return 1; }
+      cmd_set_live_login "$label"
+      ;;
+    m|M)
+      printf '  rename which account? (name or number): '
+      local want; read -r want || return 0
+      local label; label="$(pick_label "${want:-}")" \
+        || { say "  there is no account ${want@Q}."; return 1; }
+      printf '  its new name: '
+      local new; read -r new || return 0
+      [ -n "$new" ] || { say "  nothing entered."; return 0; }
+      cmd_rename "$label" "$new"
+      ;;
+    d|D)
+      printf '  delete which account? (name or number): '
+      local want; read -r want || return 0
+      local label; label="$(pick_label "${want:-}")" \
+        || { say "  there is no account ${want@Q}."; return 1; }
+      cmd_delete "$label"
+      ;;
+    ''|*[!0-9]*) say "  I did not understand ${choice@Q}."; return 1 ;;
+    *)
+      local idx=$((choice))
+      if [ "$idx" -lt 1 ] || [ "$idx" -gt "${#labels[@]}" ]; then
+        say "  there is no account $idx."; return 1
+      fi
+      local label="${labels[$((idx-1))]}"
+      # An unfolded machine-default row means the live login has no slot of its
+      # own. Signing THAT in through here would re-register the operator's live
+      # credential, which is the one thing this tool never does.
+      local -A F=(); read_facts "$json" "$label"
+      if [ "${F[target_is_default]}" = "yes" ]; then
+        say ""
+        say "  ${label@Q} is your machine login itself — the store \`claude\` reads when"
+        say "  nothing sets CLAUDE_CONFIG_DIR. This tool never re-registers it."
+        say "  To give that account a slot of its own, pick 'n' and name it."
+        say "  To point the machine login at a different account, pick 's'."
+        say ""
+        return 0
+      fi
+      menu_login "$label" "$(read_login_hint "$label")"
+      ;;
+  esac
+}
+
+menu_login() {
+  local label="$1" email="$2"
+  say ""
+  if [ -n "$email" ]; then
+    say "  slot ${label@Q} signs in as: $email"
+    printf '  press enter to keep that, or type a different address: '
+    local typed; read -r typed || true
+    [ -z "$typed" ] || email="$typed"
+  else
+    say "  Which Claude account is slot ${label@Q} for?"
+    say "  Typing the email address pre-fills the consent page, so there is no"
+    say "  doubt which account you are registering. Leave it blank to choose on"
+    say "  the page instead."
+    printf '  email (optional): '
+    read -r email || true
+  fi
+
+  say ""
+  say "  How should the consent page open?"
+  say "    1) a fresh private window          (default — no signed-in cookie decides)"
+  say "    2) a named Chrome profile          (best if you keep one profile per account)"
+  say "    3) don't open anything             (print the link; you paste the code back)"
+  printf '  > '
+  local how; read -r how || true
+
+  local -a opts=()
+  case "${how:-1}" in
+    2)
+      say ""
+      say "  Your Chrome profile directories:"
+      ls "$HOME/Library/Application Support/Google/Chrome" 2>/dev/null \
+        | grep -E '^(Default|Profile [0-9]+)$' | sed 's/^/      /' || say "      (none found)"
+      printf '  profile directory: '
+      local prof; read -r prof || true
+      [ -z "$prof" ] || opts+=(--chrome-profile "$prof") ;;
+    3) opts+=(--no-browser) ;;
+    *) : ;;
+  esac
+
+  local -a args=("$label")
+  [ -z "$email" ] || args+=(--email "$email")
+  args+=("${opts[@]+"${opts[@]}"}")
+  cmd_login "${args[@]}"
+}
+
+# ── usage ────────────────────────────────────────────────────────────────────
+
+cmd_help() {
+  cat <<'EOF'
+
+  claude-accounts — which Claude accounts this machine is signed into.
+
+    claude-accounts                          interactive: list, pick, act
+    claude-accounts list                     your accounts and their login health
+    claude-accounts status [--json]          same, machine-readable
+    claude-accounts login <name> [options]   sign an account in (creates it if new)
+    claude-accounts set-live-login <name>    make it the login plain `claude` uses
+    claude-accounts rename <old> <new>       rename an account
+    claude-accounts delete <name> [--force]  remove an account from this machine
+    claude-accounts expiry --json            when each login's REFRESH token
+                                             runs out (read-only; touches
+                                             nothing, invokes nothing)
+    claude-accounts prune [--dry-run]        retire credential stores nothing
+                                             references any more: superseded
+                                             ones, and live-login backups past
+                                             the retention rule. Each is copied
+                                             to a dormant keychain name first,
+                                             and re-verified as unreferenced at
+                                             the moment it is retired. Login
+                                             and delete already do this; prune
+                                             is for inspecting and for clearing
+                                             what predates them.
+    claude-accounts rotate [--dry-run]       refresh logins before they expire
+    claude-accounts rotate --json            machine-readable rotation result
+    claude-accounts daily-setup              print the daily job (installs nothing)
+    claude-accounts help
+
+  login options:
+    --email <addr>          pre-fill the consent page, and remember the address
+                            for this account
+    --chrome-profile <dir>  open in that Chrome profile (e.g. "Profile 2")
+    --no-browser            open nothing; print the link, paste the code back
+    --force                 sign in over an account that already has a login
+    --allow-same-account    register even if you land on the SAME account as the
+                            live login. Two grants, one rate-limit pool — and
+                            the server may invalidate the older one. Refused
+                            without this flag. Clones are still refused, always.
+    --dry-run               announce and stop; claude is never invoked
+
+  set-live-login options: the same browser options, plus --dry-run, --yes.
+    It signs in FRESH in a browser rather than copying the account's stored
+    session — a copy would put one refresh token in two stores, and the copy
+    that refreshes second dies. It backs up the machine login first (keychain
+    to keychain, never to disk) and prints a one-command undo. It never logs
+    anything out.
+
+  delete options: --force (allow deleting the live account), --yes (skip the
+    confirmation). Deleting is LOCAL: it removes this machine's copy of the
+    login. Nothing is revoked, and you can sign the account in again any time.
+
+  There is no `default` row any more. The machine login is not an account — it
+  is the store `claude` reads when CLAUDE_CONFIG_DIR is unset, and it is always
+  ONE OF your accounts. The list marks which one with `← LIVE LOGIN`.
+
+  There is no `logout`, deliberately. `claude auth logout` asks the SERVER to
+  revoke the refresh token, and slots here can share a credential with your live
+  login — so a logout in the wrong place kills your own session with no undo.
+  You never need it: every account has its own config dir and its own keychain
+  entry, so they are all signed in at the same time.
+
+  Make it global (once, from the repo root):
+    ln -sf "$PWD/services/threads/scripts/claude-accounts" /usr/local/bin/claude-accounts
+
+EOF
+}
+
+# ── entry point ──────────────────────────────────────────────────────────────
+
+main() {
+  case "${1:-}" in
+    logout|signout|sign-out|--logout) refuse_logout ;;
+  esac
+  assert_safe_env
+  case "${1:-}" in
+    "")            cmd_menu ;;
+    list)          shift; cmd_list ;;
+    status)        shift; cmd_status "$@" ;;
+    login|signin|sign-in|add) shift; cmd_login "$@" ;;
+    set-live-login|set-default|use|switch) shift; cmd_set_live_login "$@" ;;
+    rename|mv)     shift; cmd_rename "$@" ;;
+    delete|remove|rm) shift; cmd_delete "$@" ;;
+    expiry)        shift; cmd_expiry "$@" ;;
+    prune)         shift; cmd_prune "$@" ;;
+    rotate)        shift; cmd_rotate "$@" ;;
+    daily-setup)   shift; cmd_daily_setup ;;
+    help|-h|--help) cmd_help ;;
+    *) warn "claude-accounts: unknown command ${1@Q}"; cmd_help >&2; exit 2 ;;
+  esac
+}
+
+main "$@"

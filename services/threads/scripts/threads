@@ -1,0 +1,151 @@
+#!/usr/bin/env bash
+# `threads` — the system-wide entry point.
+#
+# THIS SHIM DISPATCHES; IT DOES NOT SHADOW.
+#
+# The name `threads` already means something: it is the Rust daemon's own CLI
+# (`threads accounts health`, `threads import`, `threads --self-check`), and a
+# bare `threads` with no arguments STARTS THE DAEMON IN THE FOREGROUND. Nothing
+# on this machine currently invokes it through PATH — it is called by absolute
+# path from the launchd supervisor, from AUI, and from the bash tools, and
+# `which threads` finds nothing. So the name is free to take.
+#
+# "Free to take" is not the same as "safe to overwrite", though. If this shim
+# simply became the board, then the day someone types `threads accounts health`
+# out of habit, or a future script does, they get a TUI instead of JSON. So:
+#
+#     threads                  -> the board (what was asked for)
+#     threads daemon [args]    -> the Rust binary with no subcommand, i.e. run
+#                                 the daemon in the foreground: the old meaning
+#                                 of a bare `threads`, kept but made explicit
+#     threads accounts ...     -> the Rust CLI, unchanged
+#     threads import|reconcile -> the Rust CLI, unchanged
+#     threads --self-check     -> the Rust CLI, unchanged
+#     threads <anything else>  -> the Rust CLI, so subcommands added to the
+#                                 daemon later keep working without touching
+#                                 this file
+#
+# Making the daemon-start explicit is a small safety win in its own right: a
+# stray bare `threads` used to launch a second, unsupervised daemon that then
+# lost a port-bind race and died. Now it draws a board.
+set -euo pipefail
+
+# Resolve this script's real location THROUGH symlinks — it is meant to be
+# reachable as /opt/homebrew/bin/threads.
+self="${BASH_SOURCE[0]}"
+while [ -L "$self" ]; do
+  target="$(readlink "$self")"
+  case "$target" in
+    /*) self="$target" ;;
+    *)  self="$(cd "$(dirname "$self")" && pwd)/$target" ;;
+  esac
+done
+SCRIPT_DIR="$(cd "$(dirname "$self")" && pwd)"
+THREADS_HOME_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
+# REPO_ROOT follows the PHYSICAL scripts dir (`cd -P`/`pwd -P`): under cauldron
+# this script is reached as <data-home>/scripts/<name>, where `scripts` is a
+# SYMLINKED DIR into services/threads/scripts and <data-home> is outside any repo.
+# The logical path put REPO_ROOT above the data home (H179: "not a git
+# repository" on every board sign-in). THREADS_DIR stays the invoking home on
+# purpose: it is the data dir (threads.db, accounts) the caller meant.
+REPO_ROOT="$(cd -P "$SCRIPT_DIR/../../.." && pwd -P)"
+APP_DIR="$SCRIPT_DIR/threads-app"
+
+# ── the Rust CLI half ────────────────────────────────────────────────────────
+
+rust_binary() {
+  # Release preferred over debug, matching every other tool here, so a release
+  # build appearing later just wins.
+  for candidate in "$REPO_ROOT/target/release/threads" "$REPO_ROOT/target/debug/threads"; do
+    if [ -x "$candidate" ]; then printf '%s' "$candidate"; return 0; fi
+  done
+  return 1
+}
+
+exec_rust() {
+  local bin
+  if bin="$(rust_binary)"; then
+    exec "$bin" "$@"
+  fi
+  echo "threads: no built daemon binary found under $REPO_ROOT/target." >&2
+  echo "  Build it with: cargo build -p threads" >&2
+  exit 127
+}
+
+case "${1-}" in
+  "")
+    : # no arguments -> the board, below
+    ;;
+  board|ui|tui)
+    shift
+    ;;
+  daemon)
+    shift
+    exec_rust "$@"
+    ;;
+  -h|--help|help)
+    cat >&2 <<'USAGE'
+threads — the account board, and the threads daemon CLI.
+
+  threads                 open the board
+  threads daemon [args]   run the daemon in the foreground
+  threads accounts ...    account subcommands (add, list, status, health, …)
+  threads import          import / reconcile transcripts
+  threads --self-check    binary preflight
+
+Board keys: r refresh · p pressure · l login · s set machine login
+            S share · ! why this app is Python · q quit
+USAGE
+    exit 2
+    ;;
+  *)
+    # Anything else belongs to the Rust CLI, including flags and any subcommand
+    # added to it after this file was written.
+    exec_rust "$@"
+    ;;
+esac
+
+# ── the board half ───────────────────────────────────────────────────────────
+
+PY="$APP_DIR/.venv/bin/python"
+STAMP="$APP_DIR/.venv/.deps-stamp"
+
+if [ ! -d "$APP_DIR" ]; then
+  echo "threads: missing $APP_DIR" >&2
+  exit 1
+fi
+
+# Re-sync only when the dependency manifest actually changes: the stamp beside
+# the venv holds a hash of pyproject.toml + uv.lock, so the usual cost of a
+# launch is one `shasum` and a string compare. There is no setup step to run.
+want=""
+if [ -f "$APP_DIR/pyproject.toml" ]; then
+  want="$(cat "$APP_DIR/pyproject.toml" "$APP_DIR/uv.lock" 2>/dev/null | shasum -a 256 | cut -c1-16)"
+fi
+
+if [ ! -x "$PY" ] || [ "$(cat "$STAMP" 2>/dev/null || true)" != "$want" ]; then
+  UV="$(command -v uv || true)"
+  [ -n "$UV" ] && [ -x "$UV" ] || UV=/opt/homebrew/bin/uv
+  if [ ! -x "$UV" ]; then
+    echo "threads: uv is not installed, and the board's virtualenv is not built." >&2
+    echo "  Install uv (brew install uv) and re-run; nothing else is needed." >&2
+    exit 1
+  fi
+  echo "threads: preparing the interpreter (one time)…" >&2
+  if [ -f "$APP_DIR/uv.lock" ]; then
+    "$UV" sync --project "$APP_DIR" --frozen >&2 || "$UV" sync --project "$APP_DIR" >&2
+  else
+    "$UV" sync --project "$APP_DIR" >&2
+  fi
+  printf '%s' "$want" > "$STAMP"
+fi
+
+# The Python side resolves the daemon endpoint from this path, so the board
+# behaves identically however the command was reached.
+export THREADS_TUI_SCRIPTS_DIR="$SCRIPT_DIR"
+
+# `-P` keeps the CURRENT DIRECTORY off sys.path. Without it, launching from a
+# directory that happens to contain e.g. `inspect.py`, `json.py` or `code.py`
+# shadows the standard library and the app dies before it draws anything — and
+# "from any directory" is exactly how this command is meant to be used.
+exec "$PY" -P -m threads_tui "$@"

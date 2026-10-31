@@ -1,0 +1,66 @@
+# Public tree: the public repository is cut from this one with `git archive`,
+# which leaves out every path marked `export-ignore` below. These files stay in
+# the private history; they are internal working notes (step reports, runbooks,
+# cutover notes, audits, measurements of one machine), not product docs.
+# `scripts/check-public-tree.sh` fails if any of them reaches an archive.
+
+# Root: step reports, and the build note for one machine's install.
+/R3.S2.0.hub-inspect.md export-ignore
+/R3.S2.0.hub-report.md export-ignore
+/BUILDING.md export-ignore
+
+# docs/: runbooks, cutover notes, logs, audits and reviews.
+/docs/ACCOUNT-EMAIL-ID.md export-ignore
+/docs/ASSUMPTIONS-LOG.md export-ignore
+/docs/build-target-size.md export-ignore
+/docs/cutover-2026-10-09.md export-ignore
+/docs/GAP-AUDIT.md export-ignore
+/docs/MESSAGING-ORCHESTRATION.md export-ignore
+/docs/PENDING-PROMISES.md export-ignore
+/docs/PROTOLEDGER-INTEGRATION.md export-ignore
+/docs/runbook-r5s3-hosts-all.md export-ignore
+/docs/SHIMS.md export-ignore
+/docs/STRUCTURED-OUTPUT.md export-ignore
+/docs/supervision-model.md export-ignore
+/docs/THREAD-LEDGER.md export-ignore
+/docs/THREAD-LOAD-LATENCY.md export-ignore
+/docs/THREADS-DASHBOARD-REVIEW.md export-ignore
+/docs/THREADS-DB-AUDIT.md export-ignore
+/docs/TUI-SUBAGENTS.md export-ignore
+/docs/SUBAGENT-WAKE.md export-ignore
+/docs/SHAPEWIRE-LIST-DELTAS.md export-ignore
+/docs/navigation.md export-ignore
+
+# A handoff note between agents, not documentation.
+/apps/tui/HANDOFF.md export-ignore
+
+# The personal-data guard's literal patterns (REL-4.S7h): read by
+# scripts/check-no-personal-data.sh, never shipped.
+/scripts/personal-patterns.private export-ignore
+
+# Operator-only tooling: prunes one machine's shared build targets against a
+# private keep-list (fails closed without it).
+/scripts/prune-target export-ignore
+/scripts/test-prune-target export-ignore
+
+# services/threads: design notes and TUI notes written during development,
+# which quote working sessions (CUT-A-FIX3 F1). Kept in private history only.
+/services/threads/docs/ export-ignore
+/services/threads/docs/** export-ignore
+/services/threads/scripts/threads-app/SHAPES-TUI.md export-ignore
+/services/threads/scripts/threads-app/LIVE-PUSH-TUI.md export-ignore
+
+# Crate provenance notes record moves out of a private repository; each
+# crate's Cargo.toml keeps the machine-readable provenance (CUT-A-FIX3).
+/libs/tui-render/PROVENANCE.md export-ignore
+/libs/projects/PROVENANCE.md export-ignore
+/libs/aui-wire/PROVENANCE.md export-ignore
+/libs/term-shell/PROVENANCE.md export-ignore
+
+# Operator-only proofs: each snapshots or restarts one machine's live services
+# and store (CUT-A-FIX3 F2).
+/scripts/prove-warnings export-ignore
+/scripts/prove-compile-gate export-ignore
+/scripts/prove-supervisor export-ignore
+/scripts/prove-wave1 export-ignore
+/scripts/prove-alarm-hosted export-ignore

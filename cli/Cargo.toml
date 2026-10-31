@@ -1,0 +1,45 @@
+[package]
+name = "cauldron"
+version.workspace = true
+edition.workspace = true
+# DG-5: one integration-test binary, tests/it/ (see [[test]] below).
+autotests = false
+# R9.CFG1: a second bin (the PATH launcher) exists, so `cargo run -p cauldron`
+# must still mean the CLI.
+default-run = "cauldron"
+description = "The cauldron entry point: `start`, `stop`, `status`, `build` per service per environment, and a bare `cauldron` that reaches the TUI. A CLI, not a daemon — it writes files and spawns processes, so there is no supervisor process that can itself die."
+
+[[bin]]
+name = "cauldron"
+path = "src/main.rs"
+
+# R9.CFG1 (implements E18-19): the binary meant to sit on PATH as `cauldron`.
+# Reads `[cli] interface` from `<cauldron root>/config.toml` and execs that
+# build with the same argv; default = the globs2 demo build.
+[[bin]]
+name = "cauldron-launcher"
+path = "src/bin/cauldron-launcher.rs"
+
+
+# DG-5: every integration test is a module of tests/it/main.rs; add new ones
+# there, never as a new top-level tests/*.rs (skill core:cargo-lease).
+[[test]]
+name = "it"
+path = "tests/it/main.rs"
+
+[dependencies]
+env = { path = "../libs/env" }
+# REL-3.S1: `env create cauldron-build` seeds the curated dataset it owns.
+soup = { path = "../libs/soup" }
+# R5.S2 (DEC-34): the MCP tool host the daemon owns.
+mcp-host = { path = "../libs/mcp-host" }
+serde = { workspace = true }
+serde_json = { workspace = true }
+anyhow = { workspace = true }
+# R6.S6b: the self-update compares the launch path's bytes when only its ctime moved.
+sha2 = { workspace = true }
+# R9.C7: reads a declaration's `[quiet]` section out of its text.
+toml = { workspace = true }
+
+[lints.rust]
+unsafe_code = "forbid"

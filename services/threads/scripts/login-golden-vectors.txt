@@ -1,0 +1,32 @@
+# Golden vectors for the keychain-service-name derivation Claude Code uses.
+#
+# ONE authority, TWO readers. Claude Code v2.1.220 derives the macOS keychain
+# service name for its OAuth credential as:
+#
+#     `Claude Code` + OAUTH_FILE_SUFFIX + `-credentials` + suffix
+#
+# where OAUTH_FILE_SUFFIX is "" in prod, and suffix is "" when
+# CLAUDE_CONFIG_DIR is unset, else `-` + first 8 hex chars of
+# sha256(NFC(CLAUDE_CONFIG_DIR)). (Read out of the shipped binary; a
+# CLAUDE_SECURESTORAGE_CONFIG_DIR env var, if set, replaces the hashed string
+# and — if set to the empty string — forces the bare default service. We never
+# set it.)
+#
+# Two implementations read these vectors and must agree:
+#   * Rust  — `accounts::keychain_service_for` / `accounts::sha8`
+#             (test `golden_vectors_match_the_shared_file`)
+#   * bash  — `scripts/add-account`'s `kc_service()` / `sha8()`
+#             (test `scripts/add-account-login_conformance_test.sh`)
+#
+# Format: <config dir><TAB><expected service name>
+# Keep paths ASCII: Claude Code NFC-normalizes before hashing, and we hash
+# bytes verbatim — identical for ASCII, divergent for composed accents.
+#
+# A drift here is a silent multi-account failure: the wrong service name means
+# "logged in" state that no spawn can find. Never edit a vector to make a test
+# pass; re-derive it with `printf %s <dir> | shasum -a 256`.
+
+/tmp/x	Claude Code-credentials-2e56aa36
+/Users/testuser/.threads/accounts/work	Claude Code-credentials-18316f4f
+/Users/testuser/code/substrate-interface-layer/lib/threads/accounts/primary	Claude Code-credentials-fdaed45d
+/Users/testuser/code/substrate-interface-layer/lib/threads/accounts/secondary-live	Claude Code-credentials-dd962114

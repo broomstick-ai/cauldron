@@ -1,0 +1,17 @@
+[package]
+name = "env"
+version.workspace = true
+edition.workspace = true
+description = "The environment triple (data root, service versions, seam table) and the seam file itself: resolution of HOME/ENV, the production guard, locked read-modify-write of seams.json, and the liveness handshake that tells a reader whether a seam is true."
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+anyhow = { workspace = true }
+toml = { workspace = true }
+# sha256 of a build directory's declaration snapshot, checked at every launch
+# (`decl::snapshot`). Already in the lock at 0.10 for `services/tts`.
+sha2 = "0.10"
+
+[lints.rust]
+unsafe_code = "forbid"

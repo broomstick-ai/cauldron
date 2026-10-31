@@ -1,0 +1,228 @@
+{
+  "projects": [
+    { "name": "harness", "path": "~/code/harness" },
+    { "name": "cauldron", "path": "~/code/cauldron-wt-globs2" },
+    { "name": "broomstick", "path": "~/code/broomstick" },
+    { "name": "orchard", "path": "~/code/orchard" },
+    { "name": "healthcare", "path": "~/code/healthcare" },
+    { "name": "chess", "path": "~/code/chess" },
+    { "name": "miscellaneous", "path": "~/miscellaneous" }
+  ],
+  "threads": [
+    {
+      "id": "8e4fca10",
+      "name": "Cauldron interface — msg 186 round",
+      "project": "cauldron",
+      "state": "active",
+      "unread": 12,
+      "age": "2m",
+      "pinned": true,
+      "blocks": [
+        { "kind": "compacted", "text": "compacted (auto) · swallowed #141–#179" },
+        { "kind": "user", "id": "180", "at": "05:58", "text": "Okay. Show me the artifacts tab again when it's built, and keep the cards consistent." },
+        { "kind": "assistant", "at": "05:59", "took": "41s", "text": "Folding that in.\n\nThe artifacts tab goes back to the builder with **one card type** for every artifact." },
+        { "kind": "tool", "tool": "⚙", "text": "Read docs/navigation.md", "meta": "721 lines", "detail": [["path", "~/code/cauldron-wt-globs2/docs/navigation.md"], ["lines", "721"], ["took", "0.1s"]] },
+        { "kind": "agent", "agent": "a1" },
+        { "kind": "user", "id": "186", "at": "06:42", "text": "Something big just occurred to me. So that word cauldron at the top left, we should make that a button. We can have it switch from saying cauldron to saying threads, and a whole different interface — the interface that I'm using to talk to you through right now.\n\nI do want you to continue to just use fake data." },
+        { "kind": "assistant", "at": "06:44", "took": "12m", "text": "Starting the round. Four builders, one at a time:\n\n1. B3 — the structure (Contents, the bucket, Config's two tabs)\n2. B2 — the visual system (cards, bands, selection)\n3. B1 — Threads mode, on its own data\n4. B4 — the design cauldron" },
+        { "kind": "tool", "tool": "⚙", "text": "Write .mind/workspaces/cauldron-interface/artifacts/0163-checklist-msg186.md", "meta": "54 lines", "detail": [["path", "~/code/harness/.mind/…/artifacts/0163-checklist-msg186.md"], ["lines", "54"], ["ids", "M1–M3 · A1–A5 · S1–S3 · N1–N3 · V1–V8 · T1–T7 · C1–C6 · B1–B4 · D1–D5"]] },
+        { "kind": "agent", "agent": "a2" },
+        { "kind": "agent", "agent": "a3" },
+        { "kind": "group", "text": "build and test · r9/globs-iteration-2", "count": 214, "items": ["⚙ Bash cargo test -p tui", "⚙ Bash cargo clippy -p tui", "⚙ Edit apps/tui/src/surfaces/look.rs", "⚙ Edit apps/tui/src/surfaces/view.rs", "⚙ Bash cargo build --release -p cauldron -p tui"] },
+        { "kind": "warn", "text": "retry #2 at 07:31 · overloaded" },
+        { "kind": "agent", "agent": "a4" },
+        { "kind": "agent", "agent": "a6" },
+        { "kind": "assistant", "at": "07:58", "took": "3m", "text": "B2 is back: one card, one band line, the selection is a background now.\n\nStarting B1 — the threads mode." }
+      ],
+      "agents": [
+        {
+          "id": "a1", "label": "core:curator · intake msg 180", "state": "done", "age": "3m", "tokens": 41000, "calls": 12,
+          "blocks": [
+            { "kind": "assistant", "at": "05:59", "took": "3m", "text": "Folding msg 180 onto the board." },
+            { "kind": "tool", "tool": "⚙", "text": "Bash mind-index-v5 node put cauldron-interface", "meta": "rc 0", "detail": [["command", "mind-index-v5 node put cauldron-interface --quick"], ["rc", "0"]] },
+            { "kind": "assistant", "at": "06:02", "text": "Disposed: 1 message · 2 nodes written · nothing deferred." }
+          ]
+        },
+        {
+          "id": "a2", "label": "core:builder · B3 structure", "state": "done", "age": "48m", "tokens": 1210000, "calls": 310,
+          "blocks": [
+            { "kind": "assistant", "at": "06:51", "text": "Reading msg 186 in full, then the checklist." },
+            { "kind": "group", "text": "cargo test -p tui", "count": 37, "items": ["⚙ Bash cargo test -p tui --test structure_186", "⚙ Bash cargo test -p tui"] },
+            { "kind": "assistant", "at": "07:39", "text": "Committed faaecbcd. Contents, the bucket, Config Cauldron/Global, sub-tabs, Soup merged." }
+          ]
+        },
+        {
+          "id": "a3", "label": "core:builder · B2 visual system", "state": "done", "age": "52m", "tokens": 980000, "calls": 288,
+          "blocks": [
+            { "kind": "assistant", "at": "07:40", "text": "The visual system goes into one module, look.rs." },
+            { "kind": "tool", "tool": "⚙", "text": "Write apps/tui/src/surfaces/look.rs", "meta": "378 lines", "detail": [["path", "apps/tui/src/surfaces/look.rs"], ["lines", "378"]] },
+            { "kind": "assistant", "at": "08:31", "text": "Committed 909d9a72." }
+          ]
+        },
+        {
+          "id": "a4", "label": "core:builder · B1 threads mode", "state": "running", "age": "14m", "tokens": 312000, "calls": 88,
+          "blocks": [
+            { "kind": "assistant", "at": "08:33", "text": "Studying the harness tui first: its header, the transcript, the composer, the subagent tree." },
+            { "kind": "agent", "agent": "a5" },
+            { "kind": "tool", "tool": "⚙", "text": "Read libs/tui-render/tests/golden.rs", "meta": "5,700 lines", "detail": [["path", "libs/tui-render/tests/golden.rs"], ["lines", "5,700"]] },
+            { "kind": "tool", "tool": "⚙", "text": "Write apps/tui/src/surfaces/threads.rs", "meta": "new" }
+          ]
+        },
+        {
+          "id": "a5", "parent": "a4", "label": "Explore · study the harness tui", "state": "done", "age": "2m", "tokens": 38000, "calls": 19,
+          "blocks": [
+            { "kind": "assistant", "at": "08:34", "text": "The chat face is five bands: header, transcript, the queue, the composer, the subagent tree." }
+          ]
+        },
+        {
+          "id": "a6", "label": "claude · research ⌥Space propagation", "state": "failed", "age": "6m", "tokens": 22000, "calls": 9,
+          "blocks": [
+            { "kind": "assistant", "at": "07:41", "text": "Looking at how iTerm delivers ⌥Space." },
+            { "kind": "warn", "text": "the session ended before a report was written" }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "3f9a01c2",
+      "name": "The threads daemon wire — living notes",
+      "project": "harness",
+      "state": "idle",
+      "unread": 0,
+      "age": "1h 18m",
+      "pinned": true,
+      "blocks": [
+        { "kind": "user", "id": "77", "at": "Fri", "text": "Keep this thread as the notes on the wire." },
+        { "kind": "assistant", "at": "Fri", "took": "20s", "text": "Kept. The chassis door is 3653; 3651 answers `/health` alone." }
+      ]
+    },
+    {
+      "id": "6dda9d84",
+      "name": "AUI coordinator — v5 regions cutover",
+      "project": "harness",
+      "state": "idle",
+      "unread": 214,
+      "age": "3h 02m",
+      "blocks": [
+        { "kind": "user", "id": "242", "at": "03:51", "text": "Approve the fence for curator-v5." },
+        { "kind": "assistant", "at": "03:52", "took": "2m", "text": "Approved and folded. The section starts empty." },
+        { "kind": "group", "text": "round close · cauldron-interface", "count": 46, "items": ["⚙ Bash mind-index-v5 round close", "⚙ Bash mind-index-v5 validate --final"] }
+      ]
+    },
+    {
+      "id": "b21c7e40",
+      "name": "Broomstick splash redesign",
+      "project": "broomstick",
+      "state": "idle",
+      "unread": 96,
+      "age": "5h",
+      "blocks": [
+        { "kind": "user", "id": "31", "at": "00:12", "text": "The hero has too much copy. Cut it in half." },
+        { "kind": "assistant", "at": "00:14", "took": "1m", "text": "Cut to two lines. The screenshot is in the artifacts." }
+      ]
+    },
+    {
+      "id": "c0ffee11",
+      "name": "Polymarket backtest — the fee model",
+      "project": "orchard",
+      "state": "idle",
+      "unread": 301,
+      "age": "9h",
+      "blocks": [
+        { "kind": "user", "id": "12", "at": "Sat", "text": "Run the backtest again with the maker rebate." },
+        { "kind": "assistant", "at": "Sat", "took": "38m", "text": "Done. The edge drops from **2.1%** to **1.4%** with the rebate in." }
+      ]
+    },
+    {
+      "id": "fe11a9b0",
+      "name": "FHIR mapping review",
+      "project": "healthcare",
+      "state": "idle",
+      "unread": 88,
+      "age": "1d",
+      "blocks": [
+        { "kind": "assistant", "at": "Fri", "took": "5m", "text": "Seven resources map cleanly. `Encounter` needs a decision." }
+      ]
+    },
+    {
+      "id": "9b1d2c3e",
+      "name": "Rebuild the index reader",
+      "project": "harness",
+      "state": "idle",
+      "unread": 41,
+      "age": "1d",
+      "blocks": [
+        { "kind": "assistant", "at": "Fri", "took": "11m", "text": "The reader takes the pool in one pass now." }
+      ]
+    },
+    {
+      "id": "77aa0c10",
+      "name": "cargo-lease — shared slots",
+      "project": "harness",
+      "state": "idle",
+      "unread": 14,
+      "age": "2d",
+      "blocks": [
+        { "kind": "assistant", "at": "Thu", "took": "4m", "text": "`build-out` copies under the lease. Passed 36, failed 0." }
+      ]
+    },
+    {
+      "id": "e5c1d0a4",
+      "name": "Relocation checklist",
+      "project": "miscellaneous",
+      "state": "idle",
+      "unread": 22,
+      "age": "3d",
+      "blocks": [
+        { "kind": "user", "id": "9", "at": "Wed", "text": "What's left before the move?" },
+        { "kind": "assistant", "at": "Wed", "took": "30s", "text": "Three things: the lease, the movers' deposit, the mail forward." }
+      ]
+    },
+    {
+      "id": "0a4ce551",
+      "name": "Opening repertoire drills",
+      "project": "chess",
+      "state": "idle",
+      "unread": 7,
+      "age": "4d",
+      "blocks": [
+        { "kind": "assistant", "at": "Tue", "took": "2m", "text": "Twelve lines of the Caro-Kann, drilled to move 10." }
+      ]
+    },
+    {
+      "id": "7a2bb4c2",
+      "name": "Answer the tax letter",
+      "project": "miscellaneous",
+      "state": "idle",
+      "unread": 3,
+      "age": "6d",
+      "blocks": [
+        { "kind": "assistant", "at": "Mon", "took": "1m", "text": "The draft reply is ready for your signature." }
+      ]
+    },
+    {
+      "id": "a0a0a0a1",
+      "name": "Axiom curation",
+      "project": "harness",
+      "state": "idle",
+      "unread": 0,
+      "age": "2mo",
+      "archived": true,
+      "blocks": [
+        { "kind": "assistant", "at": "Aug", "text": "Retired." }
+      ]
+    },
+    {
+      "id": "a0a0a0a2",
+      "name": "The v2 wire",
+      "project": "harness",
+      "state": "idle",
+      "unread": 0,
+      "age": "3mo",
+      "archived": true,
+      "blocks": [
+        { "kind": "assistant", "at": "Jul", "text": "Retired with the v2 wire." }
+      ]
+    }
+  ]
+}

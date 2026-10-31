@@ -1,0 +1,28 @@
+# **NOT A WORKSPACE MEMBER, DELIBERATELY.** An empty `[workspace]` table detaches
+# this crate from the one above it, so `cargo test --workspace` at the repo root
+# never builds it and never relinks anything. That matters more than tidiness
+# here: the daemon the probe talks to is launched from `target/debug/threads`,
+# and a probe that joined the workspace would share that target directory.
+[workspace]
+
+[package]
+name = "liveprobe"
+version = "0.1.0"
+edition = "2021"
+
+# READ-ONLY PROBE against the live `threads` daemon. It subscribes, folds and
+# compares; it sends no command, writes nothing, and restarts nothing.
+[[bin]]
+name = "liveprobe"
+path = "src/main.rs"
+
+[dependencies]
+# The VENDORED chassis, at the exact feature set a consumer links: the mirror
+# floor, no tokio inside it, no producer half.
+shapewire = { path = "../..", default-features = false }
+tokio = { version = "1", features = ["full"] }
+# The same version `apps/tui` and `apps/aui` already pin, so this probe exercises
+# the socket the faces will use rather than a different one.
+tokio-tungstenite = { version = "0.24", features = ["rustls-tls-native-roots"] }
+futures-util = "0.3"
+serde_json = "1"

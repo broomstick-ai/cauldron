@@ -1,0 +1,82 @@
+#!/usr/bin/env python3
+"""check-tree-paths — no package in this build resolves to a path outside the tree.
+
+The TUI move (R7.S1a/b) cut cauldron's last dependency on a sibling checkout
+(`apps/tui` used to take `tui-render` from `../../../harness/apps/tui/render`).
+This keeps it cut. It asks CARGO, not a grep: `cargo metadata` resolves every
+dependency of every workspace member, and a package whose `source` is null is
+a path package. Every path package's manifest must sit inside
+`workspace_root`. A grep over Cargo.toml files only finds the spellings it was
+written for; the resolver finds every path that is actually built.
+
+    scripts/check-tree-paths           list each path package, INSIDE/OUTSIDE
+    scripts/check-tree-paths --quiet   only the verdict and any OUTSIDE lines
+
+Exit 0: every path package is inside the tree.
+Exit 1: at least one path package resolves OUTSIDE it (each one is printed).
+Exit 2: cargo metadata failed, or found no path package at all (a search that
+        finds nothing has proved nothing -- the root crate is always one).
+Exit 3: this script crashed.
+
+`--locked --offline`: the check never rewrites Cargo.lock and never touches the
+network. A newly planted path dependency that is not yet in the lock makes
+cargo refuse (exit 2); once the lock carries it, this reports it (exit 1).
+Runs under any python3 >= 3.6, including macOS's /usr/bin/python3.
+"""
+
+import json
+import os
+import pathlib
+import subprocess
+import sys
+import traceback
+
+ROOT = pathlib.Path(__file__).resolve().parent.parent
+
+
+def main():
+    quiet = "--quiet" in sys.argv[1:]
+    r = subprocess.run(
+        ["cargo", "metadata", "--format-version", "1", "--locked", "--offline",
+         "--manifest-path", str(ROOT / "Cargo.toml")],
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE, universal_newlines=True,
+    )
+    if r.returncode != 0:
+        sys.stderr.write(r.stderr)
+        print(f"check-tree-paths: cargo metadata failed (rc={r.returncode})")
+        return 2
+    meta = json.loads(r.stdout)
+    root = os.path.realpath(meta["workspace_root"])
+    inside, outside = [], []
+    for pkg in meta["packages"]:
+        if pkg.get("source") is not None:  # registry / git: not a path package
+            continue
+        manifest = os.path.realpath(pkg["manifest_path"])
+        if os.path.commonpath([root, manifest]) == root:
+            inside.append((pkg["name"], manifest))
+        else:
+            outside.append((pkg["name"], manifest))
+    for name, manifest in sorted(inside):
+        if not quiet:
+            print(f"INSIDE  {name} {os.path.relpath(manifest, root)}")
+    for name, manifest in sorted(outside):
+        print(f"OUTSIDE {name} {manifest}")
+    if not inside and not outside:
+        print("check-tree-paths: no path package found at all -- refusing to call that clean")
+        return 2
+    if outside:
+        print(f"check-tree-paths: {len(outside)} path package(s) OUTSIDE {root}")
+        return 1
+    print(f"check-tree-paths: all {len(inside)} path packages inside {root}")
+    return 0
+
+
+if __name__ == "__main__":
+    try:
+        sys.exit(main())
+    except SystemExit:
+        raise
+    except BaseException:
+        traceback.print_exc()
+        print("check-tree-paths CRASHED (exit 3)", file=sys.stderr)
+        sys.exit(3)

@@ -1,0 +1,17 @@
+[package]
+name = "seam-probe"
+version.workspace = true
+edition.workspace = true
+description = "The reference cauldron service: binds 127.0.0.1:0, writes its REAL bound address into its environment's seam table, answers the HELLO identity handshake, and refuses to run at all if its environment is incomplete."
+
+[[bin]]
+name = "seam-probe"
+path = "src/main.rs"
+
+[dependencies]
+env = { path = "../../libs/env" }
+serde_json = { workspace = true }
+anyhow = { workspace = true }
+
+[lints.rust]
+unsafe_code = "forbid"

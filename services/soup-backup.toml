@@ -1,0 +1,96 @@
+# ═══════════════════════════════════════════════════════════════════════════
+#  soup-backup — the timestamped chronology of every soup database. A
+#  SCHEDULED JOB, hostable by cauldron (R5.S3); still launched by
+#  a per-user launchd job (`<prefix>.soup-backup`) until the cut-over in
+#  docs/runbook-r5s3-hosts-all.md is run.
+# ═══════════════════════════════════════════════════════════════════════════
+#
+# Scouted 2026-10-15 (R5.S3), read-only: the plist runs
+# `/bin/bash $HOME/code/harness/core-plugins/core/tools/soup-backup run`
+# with RunAtLoad=true, StartInterval=300, KeepAlive=false, HOME and a short
+# PATH, stdout+stderr to ~/.soup-backups/launchd.log. Each run is one short
+# pass that exits; the tool's own header argues why it POLLS (every pool is in
+# SQLite WAL mode, so a file watch cannot see a commit).
+#
+# So it is a `job`, and the holder runs it: every `every_secs`, one pass, each
+# start and end recorded in `supervisions` (`run`/`ran`). A pass that fails —
+# non-zero, killed, or past `timeout_secs` — is retried after `retry_secs`
+# because `restart = "always"`; that is the job form of "restarts any that
+# are down", and it is better than launchd's, which loses a whole interval.
+#
+# ── ITS DATA IS ENVIRONMENT-RELATIVE, AND A MISSING CONFIG BLOCKS IT ───────
+#
+# The tool reads `$SOUP_BACKUP_CONFIG` (a sourced bash file) and, absent one,
+# falls back to defaults that write `$HOME/.soup-backups` — the operator's
+# real chronology. A non-prod environment silently writing there is the
+# failure to prevent, so:
+#
+#   * the config is `${CAULDRON_SERVICE_DATA_DIR}/config`, per environment;
+#   * `requires` names that file, so with no config the pass is BLOCKED and
+#     `status` says so — it never runs on the defaults.
+#
+# In prod the runbook seeds that file with ONE line that sources the existing
+# `~/.soup-backups/config`, so the chronology, its heartbeat and the
+# `soup-backup-health.sh` hook (which reads the default config) stay exactly
+# where they are. A throwaway environment writes a config naming its own
+# BACKUP_ROOT under its own data dir.
+
+name        = "soup-backup"
+description = "Soup database chronology: one backup pass every 300 s. A scheduled job the holder runs; still launched by a per-user launchd job until the runbook's cut-over."
+kind        = "job"
+registers   = false
+probe       = "none"
+restart     = "always"
+stop_signal = "TERM"
+# A pass holds an sqlite online-backup and a lock with a 600 s TTL; a pass
+# that will not take TERM is killed.
+escalate    = true
+
+[schedule]
+every_secs  = 300
+args        = ["run"]
+# `soup-backup status` exits 4 when the heartbeat is older than three poll
+# intervals or the last run recorded an error — the tool's own health check.
+health_args = ["status"]
+requires    = ["${CAULDRON_SERVICE_DATA_DIR}/config"]
+retry_secs  = 30
+timeout_secs = 600
+run_at_load = true
+
+[env]
+SOUP_BACKUP_CONFIG = "${CAULDRON_SERVICE_DATA_DIR}/config"
+
+[build]
+# A bash script; it derives nothing from its own path (only `basename $0`),
+# so a copy in the version store runs exactly as the original. Run by its
+# `#!/usr/bin/env bash` shebang, i.e. the PATH's bash — not launchd's explicit
+# /bin/bash 3.2. The tool expands `**` with `find`, so it needs neither.
+#
+# ── STAMPED: THE INSTALLED IMAGE STATES ITS COMMIT (r42 SB-1) ─────────────
+#
+# Until r42 this named the live working-tree file of a shared harness
+# checkout and carried no `stamp_args`, so every build installed as
+# `unstamped-<content hash>` with an EMPTY commit: the health fix (harness
+# 0232d4f5) ran as `unstamped-98b47d1e2adfe5de` and nothing could say which
+# commit that was. A bash script has no build.rs to bake a commit in, so the
+# stamp is put in by whatever ships the image — `scripts/stamp-script` in this
+# repository, run against a harness worktree at the commit to ship:
+#
+#   git -C ~/code/harness worktree add --detach <wt> <commit>
+#   scripts/stamp-script <wt> core-plugins/core/tools/soup-backup \
+#       ~/.cache/cauldron-artifacts/soup-backup/soup-backup
+#   ~/.cauldron/bin/cauldron build soup-backup     # -> <commit12>-release
+#
+# It injects ONE verb after the shebang (`--build-stamp`, printing
+# `commit=<sha> provenance=git dirty=<0|1> ...` with dirty read off the whole
+# worktree, as cauldron reads a cargo source's); every other line is the
+# commit's. With `stamp_args` set, an image that cannot answer is REFUSED by
+# `cauldron build` rather than installed unstamped — so the raw, unstamped
+# tool can no longer reach a pin by accident.
+# `~` is the home of the user cauldron runs as, expanded once at load
+# (decl::expand_tilde, REL-4.S4b); REL-4.S7g dropped the literal home path.
+artifact   = "~/.cache/cauldron-artifacts/soup-backup/soup-backup"
+bin        = "soup-backup"
+stamp_args = ["--build-stamp"]
+profile    = "release"
+

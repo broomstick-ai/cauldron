@@ -1,0 +1,94 @@
+# ═══════════════════════════════════════════════════════════════════════════
+#  ui-server — the AUI voice interface's server. HOSTABLE by cauldron (R5.S3);
+#  still launched by launchd `com.harness.aui` until the cut-over in
+#  docs/runbook-r5s3-hosts-all.md is run.
+# ═══════════════════════════════════════════════════════════════════════════
+#
+# Scouted 2026-10-14 (R5.S1) and 2026-10-15 (R5.S3), read-only: the plist runs
+# `/bin/bash ~/.aui/supervise-ui-server.sh` (RunAtLoad, KeepAlive=false,
+# WorkingDirectory ~/code/harness). That script is a restart loop
+# around the signed bundle binary below. The process binds 127.0.0.1:9009 (a
+# singleton MUTEX — a second instance fails its bind and exits 1), 127.0.0.1:9010
+# (proto v2: `/health`), *:9001 (the phone's websocket) and the tailnet 9010.
+#
+# R5.S1 left four blockers. What closed each:
+#
+#   1. BUNDLE IMAGE. `[build] artifact` now accepts a `.app` DIRECTORY: it is
+#      installed whole with `ditto`, and the install is REFUSED if the source
+#      verifies under `codesign --verify --strict` and the copy does not. The
+#      designated requirement (`identifier "com.harness.ui-server" and
+#      certificate leaf = H"9a05af73…"`) names no path, so the installed copy
+#      in `data/shared/builds/ui-server/<label>/AUI.app` is the same macOS
+#      identity — and his TCC grants follow it.
+#   2. THE SUPERVISE SCRIPT'S SEMANTICS. Exit 7 ("I was rebuilt, re-exec me")
+#      is any other exit to cauldron: the daemon relaunches what the PIN names.
+#      The 3-failures-in-180 s fallback to the legacy `target/debug` binary is
+#      DROPPED, deliberately: that binary would be created by a cargo build in
+#      the harness tree, which is forbidden on this machine, and cauldron's
+#      own fallback is `auto_rollback` to the last version proven good here.
+#      A new image goes live by `cauldron build ui-server` + `cauldron pin`,
+#      not by the binary watcher (it watches its own directory, the version
+#      store, which never changes under it).
+#   3. ui-server SPAWNING ITS OWN THREADS. Gone in the binary itself: harness
+#      88d162fb ("AUI does not start the threads daemon any more") is an
+#      ancestor of the deployed b4510544, so `AUI_THREADS_HOME` is not read any
+#      more and is not set here.
+#   4. WORKING DIRECTORY. `[launch] cwd`.
+#
+# ── WHY `probe = "http"`, AND WHY NOT ON 9009 ──────────────────────────────
+#
+# `status` showed this service `outside:down` while it was up. Measured cause
+# (executor-7 side-quest, 2026-10-15; fixed in harness 990986e2/b4510544): 9009
+# is a bound listener nobody ever `accept()`ed, so every connect probe left
+# one connection in the accept queue; after 128 the kernel dropped SYNs and
+# every connect timed out. A connect check could not tell "healthy" from
+# "listening" from "wedged". Since b4510544 a plain thread drains 9009 and
+# answers 200 to anything — which proves the MUTEX is held, not that the app
+# is serving. So the health check is 9010's `/health`, answered by the tokio
+# runtime that serves the app; a wedged runtime fails it.
+#
+# ── DATA, AND ENVIRONMENTS: ONE PER MACHINE ────────────────────────────────
+#
+# Its state is `$HOME/.aui` and its ports are compiled in; no variable moves
+# either. So this service is machine-singular: only `prod` may pin it. That is
+# enforced by the binary's 9009 mutex AND by `launch_hosted`'s pre-fork check
+# (a listener on 9009 means DO NOT FORK). Nothing in its `[env]` names
+# another environment's data, because there is nothing to name.
+
+name        = "ui-server"
+description = "The AUI ui-server (voice interface backend). Hostable by cauldron: bundle artifact, health = 9010 /health; still launched by launchd com.harness.aui until the runbook's cut-over."
+kind        = "daemon"
+registers   = false
+probe       = "http"
+restart     = "always"
+stop_signal = "TERM"
+# The 2026-09-02 hard-kill ruling. ui-server holds no store a hard kill can
+# corrupt (its state is small JSON under ~/.aui), and a ui-server that will
+# not go down blocks the next one at the 9009 mutex.
+escalate    = true
+# Bind 9009 first, then load the registry, then serve 9010: the health URL is
+# what the launch waits for, inside this budget.
+start_timeout_ms = 30000
+
+[launch]
+addr   = "127.0.0.1:9009"
+health = "http://127.0.0.1:9010/health"
+# `~` is expanded at load to the supervisor's home (`decl::expand_tilde`).
+cwd    = "~/code/harness"
+
+[build]
+# NEVER a cargo source: a cargo build in the harness repo creates
+# ~/code/harness/target, which is forbidden. The image is the
+# signed bundle `scripts/install-ui-server-bundle.sh` produces.
+artifact   = "~/Applications/AUI.app"
+bin        = "AUI.app/Contents/MacOS/ui-server"
+# The binary states its commit (`commit=<sha> provenance=pin dirty=0 …`), so
+# the version is named after the commit read off the bytes.
+stamp_args = ["--build-stamp"]
+profile    = "release"
+
+[permissions]
+# Its OWN identity, read off the installed bundle — the reason it is a bundle.
+responsibility = "own"
+identity = "com.harness.ui-server"
+

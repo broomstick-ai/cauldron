@@ -1,0 +1,1776 @@
+{
+  "_note": "FAKE DATA for the Cauldron TUI — the `prod` environment's seed (other environments: data/soup/<env>.json). Edit freely. Every cluster is a cluster; root clusters play the role of projects. Question `serial` is the permanent per-cluster id (Q-<serial>, spoken 'question <serial>') and must never be reused within its cluster; task `serial` (T-<serial>) and human-action `serial` (HA-<serial>) follow the same rule. `value` (0-100) is the fake ranking signal; blocking questions rank first. Task states: ready | active | done | blocked; `depends_on` lists task serials IN THE SAME CLUSTER. Human-action status: open | resolved | retired. `cauldron` holds the fake dashboards behind the Pools and Mesh tabs and the pools the Settings tab configures (an account's share, enabled switch and note are settings: data/settings/<env>.toml); each mesh device carries the services it runs. `corpus` is the environment's ONE workspace: its schema_version, its regions and its nodes. A task's ripple is its run: active = running, ready/blocked = parked; optional `doing` (what the ripple is doing / waits on) and `account` (where a running one runs) are fake. The `messages` table is FAKE too: invented words in his voice under real-looking ids, standing in for the daemon store a trace will read.",
+  "clusters": [
+    {
+      "id": "X-1",
+      "name": "Cauldron",
+      "description": "One input, many clusters, nobody in the middle. You dump anything into one line; ripples route it, apply it, and re-rank what needs your attention. Every cluster's page is one living state, not a chat.",
+      "objectives": [
+        {
+          "serial": 1,
+          "title": "A cluster's page is one living state he reads top-down",
+          "serves": "DIR-1"
+        },
+        {
+          "serial": 2,
+          "title": "A dump lands on every cluster it concerns without him routing it",
+          "serves": "DIR-1"
+        },
+        {
+          "serial": 3,
+          "title": "No legend, label or explanation survives on any tab",
+          "serves": "DIR-2"
+        }
+      ],
+      "milestones": [
+        {
+          "serial": 1,
+          "handle": "An interface sketch exists and he has answered its questions",
+          "objective": 1,
+          "tasks": [
+            1
+          ],
+          "from": "8e4fca10#1",
+          "depends_on": []
+        },
+        {
+          "serial": 2,
+          "handle": "The cluster tree and a page render",
+          "objective": 1,
+          "depends_on": [
+            "M-1"
+          ],
+          "tasks": [
+            2,
+            3
+          ],
+          "from": "8e4fca10#25",
+          "region": "R-1"
+        },
+        {
+          "serial": 3,
+          "handle": "A tagged send reaches every tagged cluster through a ripple",
+          "objective": 2,
+          "depends_on": [
+            "M-2"
+          ],
+          "tasks": [
+            4,
+            6
+          ],
+          "region": "R-2"
+        },
+        {
+          "serial": 4,
+          "handle": "He hears a tone and a one-line routing echo after a dump",
+          "objective": 2,
+          "depends_on": [
+            "M-3"
+          ],
+          "tasks": [
+            5
+          ],
+          "from": "8e4fca10#21",
+          "region": "R-2"
+        },
+        {
+          "serial": 5,
+          "handle": "Every cluster tab passes the LEGENDS test with its new content",
+          "objective": 3,
+          "tasks": [
+            8
+          ],
+          "from": "8e4fca10#82",
+          "region": "R-1",
+          "depends_on": []
+        }
+      ],
+      "tasks": [
+        {
+          "serial": 1,
+          "title": "Interface sketch (report 0017)",
+          "state": "done",
+          "report": "0017",
+          "from": "8e4fca10#1",
+          "depends_on": [],
+          "blocked_by": []
+        },
+        {
+          "serial": 2,
+          "title": "First TUI",
+          "state": "active",
+          "depends_on": [
+            1
+          ],
+          "doing": "rendering the Ripples tab against the seed; 14 of 34 frame tests green",
+          "account": "acct3",
+          "elapsed": "41m",
+          "from": "8e4fca10#25",
+          "region": "R-1",
+          "worktree": "/Users/demo/code/cauldron-wt-availability",
+          "blocked_by": []
+        },
+        {
+          "serial": 3,
+          "title": "Iteration two: navigation, tags, environments",
+          "state": "active",
+          "depends_on": [
+            2
+          ],
+          "doing": "reading the harness key table to lock one navigation philosophy",
+          "account": "sam-broomstick",
+          "elapsed": "12m",
+          "from": "8e4fca10#33",
+          "region": "R-1",
+          "worktree": "/Users/demo/code/cauldron-wt-globs2",
+          "blocked_by": []
+        },
+        {
+          "serial": 4,
+          "title": "Ripple-backed input path",
+          "waits_on": [
+            "T-13"
+          ],
+          "state": "ready",
+          "depends_on": [
+            3
+          ],
+          "region": "R-2",
+          "blocked_by": []
+        },
+        {
+          "serial": 5,
+          "title": "Voice echo after a dump",
+          "state": "blocked",
+          "depends_on": [
+            4
+          ],
+          "blocked_by": [
+            "Q-2"
+          ],
+          "from": "8e4fca10#21",
+          "region": "R-2"
+        },
+        {
+          "serial": 6,
+          "title": "Answer questions by tag from the input",
+          "state": "ready",
+          "depends_on": [
+            3
+          ],
+          "region": "R-2",
+          "blocked_by": []
+        },
+        {
+          "serial": 8,
+          "title": "Redesign the cluster tabs: Overview, Questions, Engine, HA, Regions",
+          "state": "ready",
+          "from": "8e4fca10#82",
+          "region": "R-1",
+          "parked": {
+            "cause": "threshold",
+            "phrase": "weekly 80% on every account",
+            "eligible": [
+              "Claude Code",
+              "Codex"
+            ],
+            "since": "41m"
+          },
+          "depends_on": [],
+          "blocked_by": []
+        }
+      ],
+      "questions": [
+        {
+          "serial": 1,
+          "value": 95,
+          "blocking": true,
+          "question": "When the system is nearly certain what you would say, or your answer would not change what happens next, may it decide and record instead of asking you?",
+          "why": "This gates everything downstream: how long every cluster's question list is, what the voice reads to you, what may ever interrupt you, and what the dream ripple learns from. It is the single largest lever on your attention.",
+          "options": [
+            "ASK EVERYTHING. Every open question reaches you, only ordered.",
+            "CONFIRM, DON'T DECIDE. Near-certain items arrive as 'assumed X, veto?'.",
+            "THREE WAYS. Near-certain items are 'assumed, veto?'; inconsequential ones are decided and listed under 'decided for you'; only real forks are asked.",
+            "THREE WAYS WITH A FLOOR. As above, but anything touching a directive or constraint you stated is always asked or confirmed."
+          ],
+          "recommendation": "THREE WAYS WITH A FLOOR. Most questions have one obvious answer; recording rather than hiding keeps everything reversible by id, and the floor means nothing you said is quietly overridden.",
+          "cite": "8e4fca10#1",
+          "region": "R-2",
+          "gates": "T-4"
+        },
+        {
+          "serial": 2,
+          "value": 80,
+          "blocking": false,
+          "question": "Right after you dump something in, what do you want to hear?",
+          "why": "This decides the voice ripple's job on the input path and the speed you perceive, since a spoken echo waits for routing and a tone does not. It also decides how fast you catch a misroute.",
+          "options": [
+            "TONE ONLY. A capture tone, then a stored tone.",
+            "TONE PLUS ROUTING ECHO. One short line after routing: 'three things: two to Cauldron, one to Broomstick'.",
+            "TONE PLUS CHANGES. The echo, plus any new top-ranked item your input created."
+          ],
+          "recommendation": "TONE PLUS ROUTING ECHO, suppressed when every atom stayed in the cluster you are looking at.",
+          "cite": "8e4fca10#21",
+          "region": "R-2",
+          "gates": "T-5"
+        },
+        {
+          "serial": 3,
+          "value": 70,
+          "blocking": false,
+          "question": "May Cauldron ever speak to you unprompted, or is everything pull?",
+          "why": "This sets whether a push path exists at all, and whether a zero-slack blocker can sit unheard for a day.",
+          "options": [
+            "PULL ONLY. Nothing interrupts you.",
+            "CRITICAL-PATH PUSH. Only a question blocking the critical path with no slack, at most once per item.",
+            "PUSH PLUS DIGEST. Critical-path push, plus a digest when you say 'what's new'."
+          ],
+          "recommendation": "CRITICAL-PATH PUSH, as a tone plus one line you can defer with a word.",
+          "cite": "8e4fca10#21",
+          "region": "R-2"
+        }
+      ],
+      "closed_questions": [
+        {
+          "serial": 4,
+          "question": "Should each row of the cluster tree carry its counts?",
+          "answer": "No. The tabs carry the counts; the tree carries names only.",
+          "resolved_by": "DEC-3",
+          "date": "2026-10-09"
+        },
+        {
+          "serial": 5,
+          "question": "Is a cluster's input line one per tab, or one for the whole face?",
+          "answer": "One for the whole face, on every tab.",
+          "resolved_by": "DEC-4",
+          "date": "2026-10-10"
+        },
+        {
+          "serial": 9,
+          "status": "superseded",
+          "question": "Should the batch be called a batch?",
+          "answer": "Replaced by the dump: they are brain dumps.",
+          "resolved_by": "Q-10",
+          "date": "2026-10-24"
+        },
+        {
+          "serial": 8,
+          "status": "archived",
+          "question": "Should a cluster be pausable on its own?",
+          "answer": "Put away: only the cauldron pauses.",
+          "resolved_by": "—",
+          "date": "2026-10-24"
+        },
+        {
+          "serial": 10,
+          "question": "Do clusters carry budgets of their own?",
+          "status": "assumed",
+          "answer": "No: budgets apply to the cauldron only, and a cluster's ripples are counted, never capped. Assumed until he says otherwise.",
+          "resolved_by": "8e4fca10#186",
+          "date": "2026-10-25"
+        }
+      ],
+      "human_actions": [
+        {
+          "serial": 1,
+          "ask": "Approve the Cauldron TUI's environment layout under ~/.cauldron/data/<env>/tui/soup/",
+          "status": "open",
+          "filed": "2026-10-15",
+          "raised_by": "T-2",
+          "blocks": [
+            "T-4"
+          ],
+          "cite": "8e4fca10#33",
+          "region": "R-6",
+          "body": "The face keeps four files per environment. Say whether they sit where they belong.\n\n## Step 1 — read the four files\n\nOpen the soup folder and read the four files in it: the bucket (bucket.json), the dumps (dumps.jsonl), the layout (layout.json) and the created clusters (clusters.json).\n\n```open\nurl: file://{soup}/\nlabel: Open the soup folder\n```\n\n**Deliverable:** you have read them.\n\n## Step 2 — say where they belong\n\nDump, on this cluster, whether they belong there, or where each one goes instead.\n\n**Deliverable:** your answer is in a dump."
+        },
+        {
+          "serial": 2,
+          "ask": "Read the interface sketch (report 0017) and answer its five questions",
+          "status": "resolved",
+          "filed": "2026-10-05",
+          "closed": "2026-10-07",
+          "raised_by": "T-1",
+          "cite": "8e4fca10#1",
+          "region": "R-1",
+          "body": "Read report 0017 and answer its five questions in one message.",
+          "blocks": []
+        }
+      ],
+      "ripples": [
+        {
+          "kind": "dump",
+          "line": "8e4fca10#96 → 6 atoms · 5 here · 1 Broomstick",
+          "when": "2s",
+          "state": "done",
+          "cite": "8e4fca10#96"
+        },
+        {
+          "kind": "curation",
+          "line": "re-ranked 3 questions · Q-1 stays first",
+          "when": "14m",
+          "state": "done"
+        },
+        {
+          "kind": "voice",
+          "line": "tts refused: service stopped",
+          "when": "1h",
+          "state": "failed"
+        }
+      ],
+      "regions": [
+        "R-6"
+      ],
+      "repos": [
+        {
+          "name": "cauldron"
+        },
+        {
+          "name": "harness"
+        }
+      ],
+      "directives": [
+        {
+          "id": "DIR-1",
+          "cite": "8e4fca10#1",
+          "region": "R-2",
+          "text": "One input, many surfaces, nobody in the middle."
+        },
+        {
+          "id": "DIR-2",
+          "cite": "8e4fca10#55",
+          "region": "R-1",
+          "text": "Assume the user knows how to use this thing. I'm going to explain the interface."
+        }
+      ],
+      "constraints": [
+        {
+          "id": "CON-1",
+          "cite": "8e4fca10#165",
+          "text": "No numbers on the cauldron's tabs; only Questions and Actions carry a count."
+        },
+        {
+          "id": "CON-2",
+          "cite": "8e4fca10#165",
+          "text": "Scrolling never changes any row's shape."
+        }
+      ],
+      "children": [
+        {
+          "id": "X-2",
+          "name": "Interface",
+          "description": "The face: cluster tree, living pages, the one input line, and the voice reading of a page top-down.",
+          "objectives": [
+            {
+              "serial": 4,
+              "title": "He reads and answers a cluster without leaving its page",
+              "serves": "DIR-1"
+            }
+          ],
+          "milestones": [
+            {
+              "serial": 6,
+              "handle": "The tree and the page render, own and aggregate",
+              "objective": 4,
+              "tasks": [
+                9,
+                10
+              ],
+              "region": "R-1",
+              "depends_on": []
+            },
+            {
+              "serial": 7,
+              "handle": "A page reads aloud top-down, and iteration seven lands",
+              "objective": 4,
+              "depends_on": [
+                "M-6"
+              ],
+              "tasks": [
+                11,
+                12
+              ],
+              "region": "R-1"
+            }
+          ],
+          "tasks": [
+            {
+              "serial": 9,
+              "title": "Cluster tree + page",
+              "state": "active",
+              "doing": "wiring the cluster tree's + new cluster row",
+              "account": "acct2",
+              "elapsed": "2h",
+              "from": "8e4fca10#25",
+              "worktree": "/Users/demo/code/cauldron-wt-pl-compat",
+              "depends_on": [],
+              "blocked_by": []
+            },
+            {
+              "serial": 10,
+              "title": "Aggregate toggle",
+              "state": "done",
+              "report": "0031",
+              "depends_on": [],
+              "blocked_by": []
+            },
+            {
+              "serial": 11,
+              "title": "Voice read of a page",
+              "state": "ready",
+              "depends_on": [
+                9
+              ],
+              "blocked_by": []
+            },
+            {
+              "serial": 12,
+              "title": "Build iteration seven",
+              "state": "ready",
+              "depends_on": [
+                9
+              ],
+              "from": "8e4fca10#82",
+              "since": "2026-10-16",
+              "edges": [
+                {
+                  "kind": "builds",
+                  "to": "MOD-tui-clusters-a4c1e8d2"
+                },
+                {
+                  "kind": "builds",
+                  "to": "MOD-tui-4f1c9a02"
+                }
+              ],
+              "blocked_by": []
+            }
+          ],
+          "questions": [
+            {
+              "serial": 11,
+              "value": 75,
+              "blocking": false,
+              "question": "Should a parent cluster's page show its child clusters' questions by default, or only its own?",
+              "why": "A root page that shows everything below it becomes the whole backlog; one that shows nothing hides blockers one level down.",
+              "options": [
+                "OWN ONLY, with an aggregate toggle.",
+                "AGGREGATE BY DEFAULT, with an own-only toggle.",
+                "OWN PLUS BLOCKING. Own questions, plus any blocking question from below."
+              ],
+              "recommendation": "OWN ONLY, with an aggregate toggle — your msg 21 ruling — and revisit OWN PLUS BLOCKING once blockers exist in real data.",
+              "artifacts": [
+                "ART-126"
+              ]
+            },
+            {
+              "serial": 12,
+              "value": 55,
+              "blocking": false,
+              "question": "Are spoken ids 'question forty-one' (type word + per-cluster serial) good enough over speech recognition?",
+              "why": "Every answer you give by id depends on it; 'fifteen' and 'fifty' are the classic confusion.",
+              "options": [
+                "TYPE WORD + SERIAL, repaired by nearest match among recently spoken ids.",
+                "WORD-PAIR IDS like 'amber falcon'.",
+                "LIST ORDINALS ('the third one')."
+              ],
+              "recommendation": "TYPE WORD + SERIAL. It is your existing scheme made speakable; the audio-position track narrows a misheard number to a handful."
+            }
+          ],
+          "regions": [
+            "R-1",
+            "R-2"
+          ],
+          "repos": [
+            {
+              "name": "cauldron",
+              "focus": [
+                "MOD-tui-clusters-a4c1e8d2"
+              ]
+            }
+          ],
+          "closed_questions": [
+            {
+              "serial": 13,
+              "question": "Does a new note anchor to the item the page has selected?",
+              "status": "assumed",
+              "answer": "Yes: the note opens with `> [tag]` of the selected item; one Backspace on the anchor frees it.",
+              "resolved_by": "0138 Q1 · 8e4fca10#186",
+              "date": "2026-10-25"
+            },
+            {
+              "serial": 14,
+              "question": "Is the Contents tab's input area one per cluster?",
+              "status": "assumed",
+              "answer": "Yes: each cluster has its own bucket, and the sidebar marks a cluster whose bucket holds notes.",
+              "resolved_by": "0138 C",
+              "date": "2026-10-24"
+            }
+          ],
+          "children": []
+        },
+        {
+          "id": "X-3",
+          "name": "Ripples",
+          "description": "The protocol that replaces the coordinator: an intake shell ripple splits a dump into atoms, routes each one, and applies it as a transaction.",
+          "objectives": [
+            {
+              "serial": 5,
+              "title": "A dump is split, routed and applied with no one in the middle",
+              "serves": "DIR-1"
+            }
+          ],
+          "milestones": [
+            {
+              "serial": 8,
+              "handle": "An intake ripple routes a dump by yes/no decisions",
+              "objective": 5,
+              "tasks": [
+                13,
+                14
+              ],
+              "region": "R-3",
+              "depends_on": []
+            }
+          ],
+          "tasks": [
+            {
+              "serial": 13,
+              "title": "Intake shell ripple",
+              "state": "ready",
+              "parked": {
+                "cause": "continuity",
+                "phrase": "history on acct2 · back 1h 05m",
+                "eligible": [
+                  "Claude Code"
+                ],
+                "since": "2h"
+              },
+              "depends_on": [],
+              "blocked_by": []
+            },
+            {
+              "serial": 14,
+              "title": "Routing by yes/no type-one decisions",
+              "state": "blocked",
+              "depends_on": [
+                13
+              ],
+              "blocked_by": [
+                "HA-4"
+              ]
+            }
+          ],
+          "questions": [
+            {
+              "serial": 15,
+              "value": 85,
+              "blocking": true,
+              "question": "May Cauldron discover a relationship between two clusters on its own and carry your input across it?",
+              "why": "This decides how far the router may reach, and so how often an input lands somewhere you did not expect.",
+              "options": [
+                "DECLARED ONLY. Inputs cross only edges that already exist.",
+                "INFERRED AS CONFIRM. The router proposes the edge and applies the atom; both arrive as one 'assumed, veto?' item.",
+                "INFERRED FREELY. New relationships are made silently and logged."
+              ],
+              "recommendation": "INFERRED AS CONFIRM. Finding cross-cluster data points is half the value of one input, and one veto reverses both the edge and the write."
+            }
+          ],
+          "human_actions": [
+            {
+              "serial": 4,
+              "ask": "Decide whether routing may act on yes/no type-one decisions without asking",
+              "status": "open",
+              "filed": "2026-10-12",
+              "raised_by": "T-14",
+              "blocks": [
+                "T-14"
+              ],
+              "region": "R-3",
+              "body": "Answer yes or no: may routing act on a type-one decision without asking you first?"
+            }
+          ],
+          "ripples": [
+            {
+              "kind": "dump",
+              "line": "8e4fca10#64 → 2 atoms · 2 here",
+              "when": "3h",
+              "state": "done",
+              "cite": "8e4fca10#64"
+            }
+          ],
+          "regions": [
+            "R-3"
+          ],
+          "repos": [
+            {
+              "name": "cauldron"
+            }
+          ],
+          "children": [
+            {
+              "id": "X-4",
+              "name": "Dreaming",
+              "description": "Idle-time replay of the log to improve the question-ranking policy; a new policy ships only if it beats the current one.",
+              "objectives": [
+                {
+                  "serial": 6,
+                  "title": "The ranking policy improves overnight, gated by his veto rate",
+                  "serves": "DIR-1"
+                }
+              ],
+              "milestones": [
+                {
+                  "serial": 9,
+                  "handle": "A replay of the input log scores a policy",
+                  "objective": 6,
+                  "tasks": [
+                    15
+                  ],
+                  "region": "R-4",
+                  "depends_on": []
+                }
+              ],
+              "tasks": [
+                {
+                  "serial": 15,
+                  "title": "Replay harness over the input log",
+                  "state": "ready",
+                  "depends_on": [],
+                  "blocked_by": []
+                }
+              ],
+              "questions": [
+                {
+                  "serial": 16,
+                  "value": 40,
+                  "blocking": false,
+                  "question": "What counts as 'beating' the current ranking policy?",
+                  "why": "Without a held-out measure the dream loop can only agree with itself.",
+                  "options": [
+                    "YOUR VETO RATE on 'assumed' items goes down.",
+                    "TIME-TO-ANSWER for the top question goes down.",
+                    "BOTH, with veto rate as the gate."
+                  ],
+                  "recommendation": "BOTH, with veto rate as the gate: it is the one signal that is purely yours."
+                }
+              ],
+              "regions": [
+                "R-4"
+              ],
+              "repos": [
+                {
+                  "name": "cauldron"
+                }
+              ],
+              "children": []
+            }
+          ]
+        },
+        {
+          "id": "X-5",
+          "name": "Curation",
+          "description": "Ranking questions by value of the answer times criticality on the DAG, over the cost of your attention.",
+          "objectives": [
+            {
+              "serial": 7,
+              "title": "What needs him most is always first",
+              "serves": "DIR-1"
+            }
+          ],
+          "milestones": [
+            {
+              "serial": 10,
+              "handle": "A question that invalidates others ranks first",
+              "objective": 7,
+              "tasks": [
+                16
+              ],
+              "region": "R-5",
+              "depends_on": []
+            }
+          ],
+          "tasks": [
+            {
+              "serial": 16,
+              "title": "Conditions edges (a question that invalidates others goes first)",
+              "state": "ready",
+              "retry": "2/3",
+              "depends_on": [],
+              "blocked_by": []
+            }
+          ],
+          "questions": [
+            {
+              "serial": 17,
+              "value": 60,
+              "blocking": false,
+              "question": "Epics, phases and stages: three fixed levels, or one nestable 'arc' named by depth?",
+              "why": "This fixes the status model every page renders and whether a small cluster must invent an epic.",
+              "options": [
+                "THREE FIXED LEVELS.",
+                "ONE RECURSIVE ARC, labelled epic/phase/stage by depth.",
+                "ARCS PLUS MILESTONES."
+              ],
+              "recommendation": "Possibly moot: clusters may BE the arcs. If not, ARCS PLUS MILESTONES."
+            }
+          ],
+          "regions": [
+            "R-3",
+            "R-5"
+          ],
+          "repos": [
+            {
+              "name": "cauldron"
+            },
+            {
+              "name": "harness"
+            }
+          ],
+          "children": []
+        }
+      ]
+    },
+    {
+      "id": "X-6",
+      "name": "Broomstick",
+      "description": "The learning platform: landing page, curriculum, and the Supabase-backed app.",
+      "objectives": [
+        {
+          "serial": 8,
+          "title": "A visitor can join the waitlist from a page that sells it",
+          "serves": "DIR-3"
+        }
+      ],
+      "milestones": [
+        {
+          "serial": 11,
+          "handle": "The landing redesign is live",
+          "objective": 8,
+          "tasks": [
+            17
+          ],
+          "depends_on": []
+        },
+        {
+          "serial": 12,
+          "handle": "Every worktree runs against its own database",
+          "objective": 8,
+          "depends_on": [
+            "M-11"
+          ],
+          "tasks": [
+            18
+          ]
+        }
+      ],
+      "tasks": [
+        {
+          "serial": 17,
+          "title": "Landing redesign",
+          "state": "active",
+          "account": "jev",
+          "elapsed": "25m",
+          "depends_on": [],
+          "blocked_by": []
+        },
+        {
+          "serial": 18,
+          "title": "Worktree DB refactor",
+          "state": "blocked",
+          "blocked_by": [
+            "Q-7"
+          ],
+          "depends_on": []
+        }
+      ],
+      "questions": [
+        {
+          "serial": 7,
+          "value": 65,
+          "blocking": false,
+          "question": "Should the landing page lead with the curriculum or with the live demo?",
+          "why": "It decides what the first ten seconds of a visit sell, and which of the two gets polish first.",
+          "options": [
+            "CURRICULUM FIRST.",
+            "LIVE DEMO FIRST.",
+            "A/B both for two weeks."
+          ],
+          "recommendation": "LIVE DEMO FIRST: the demo is the differentiator, and the curriculum reads better once the visitor has seen it work."
+        }
+      ],
+      "repos": [
+        {
+          "name": "broomstick"
+        }
+      ],
+      "directives": [
+        {
+          "id": "DIR-3",
+          "cite": "b7d2c4e1#12",
+          "region": "R-20",
+          "text": "Ship the landing page before the platform."
+        }
+      ],
+      "children": [
+        {
+          "id": "X-7",
+          "name": "Landing",
+          "description": "The public landing page and its colour options.",
+          "objectives": [
+            {
+              "serial": 9,
+              "title": "The page says what Broomstick is in one screen",
+              "serves": "DIR-3"
+            }
+          ],
+          "milestones": [
+            {
+              "serial": 13,
+              "handle": "A palette and the hero copy are chosen",
+              "objective": 9,
+              "tasks": [
+                19,
+                20
+              ],
+              "region": "R-20",
+              "depends_on": []
+            }
+          ],
+          "tasks": [
+            {
+              "serial": 19,
+              "title": "Pick palette",
+              "state": "done",
+              "report": "0008",
+              "edges": [
+                {
+                  "kind": "builds",
+                  "to": "MOD-landing-c7e2a9d4"
+                }
+              ],
+              "depends_on": [],
+              "blocked_by": []
+            },
+            {
+              "serial": 20,
+              "title": "Hero copy",
+              "state": "active",
+              "depends_on": [
+                19
+              ],
+              "doing": "rewriting the hero copy, second pass",
+              "account": "sam-broomstick",
+              "elapsed": "8m",
+              "blocked_by": []
+            }
+          ],
+          "questions": [
+            {
+              "serial": 18,
+              "value": 30,
+              "blocking": false,
+              "question": "Keep the dark hero or switch to the light variant from the colour options doc?",
+              "why": "The user feedback split evenly; this blocks final screenshots.",
+              "options": [
+                "DARK HERO.",
+                "LIGHT HERO."
+              ],
+              "recommendation": "DARK HERO, matching the app's own chrome."
+            }
+          ],
+          "regions": [
+            "R-20"
+          ],
+          "repos": [
+            {
+              "name": "broomstick",
+              "focus": [
+                "MOD-landing-c7e2a9d4"
+              ]
+            }
+          ],
+          "closed_questions": [
+            {
+              "serial": 19,
+              "question": "Does the waitlist form ask for a company name?",
+              "status": "assumed",
+              "answer": "No: an email alone, until the pricing page is decided.",
+              "resolved_by": "DEC-31",
+              "date": "2026-10-23"
+            }
+          ],
+          "children": []
+        },
+        {
+          "id": "X-8",
+          "name": "Platform",
+          "description": "The app, its Supabase schema and edge functions.",
+          "objectives": [
+            {
+              "serial": 10,
+              "title": "The platform deploys from a worktree with nobody's hands on it",
+              "serves": "DIR-3"
+            }
+          ],
+          "milestones": [
+            {
+              "serial": 14,
+              "handle": "Migrations and billing run on the new database",
+              "objective": 10,
+              "tasks": [
+                21,
+                22
+              ],
+              "region": "R-21",
+              "edges": [
+                {
+                  "kind": "builds",
+                  "to": "MOD-platform-api-3f8b1e67"
+                }
+              ],
+              "depends_on": []
+            }
+          ],
+          "tasks": [
+            {
+              "serial": 21,
+              "title": "Port migrations to the new worktree DB",
+              "state": "blocked",
+              "blocked_by": [
+                "HA-5"
+              ],
+              "depends_on": []
+            },
+            {
+              "serial": 22,
+              "title": "Move Stripe event writes into billing",
+              "state": "blocked",
+              "blocked_by": [
+                "CONTRA-billing-owner-8e6d2a14"
+              ],
+              "since": "2026-10-11",
+              "edges": [
+                {
+                  "kind": "builds",
+                  "to": "MOD-billing-8d1c5e92"
+                }
+              ],
+              "depends_on": []
+            }
+          ],
+          "questions": [
+            {
+              "serial": 20,
+              "value": 90,
+              "blocking": true,
+              "question": "Do the worktree databases share one Supabase project or get one each?",
+              "why": "The migration port cannot start until this is settled, and it decides the monthly cost.",
+              "options": [
+                "ONE SHARED PROJECT, schema per worktree.",
+                "ONE PROJECT PER WORKTREE."
+              ],
+              "recommendation": "ONE SHARED PROJECT, schema per worktree: cheaper, and migrations stay testable in isolation."
+            }
+          ],
+          "human_actions": [
+            {
+              "serial": 5,
+              "ask": "Create the shared Supabase project and give its URL",
+              "status": "open",
+              "filed": "2026-10-09",
+              "raised_by": "T-21",
+              "blocks": [
+                "T-21"
+              ],
+              "region": "R-21",
+              "body": "The platform needs one shared Supabase project. Only you can make it: it is on your account.\n\n## Step 1 — create the project\n\nCreate a project named `broomstick-shared` in the organisation, any region near you.\n\n```open\nurl: https://supabase.com/dashboard/new\nlabel: Open Supabase — new project\n```\n\n**Deliverable:** the project exists.\n\n## Step 2 — its URL and anon key\n\nOpen the project's API settings, then give its URL and its anon key in the human-actions app.\n\n```open\nurl: https://supabase.com/dashboard/project/_/settings/api\nlabel: Open its API settings\n```\n\n```field\nname: SUPABASE_URL\nlabel: Project URL (https://….supabase.co)\nsecret: false\n```\n\n```field\nname: SUPABASE_ANON_KEY\nlabel: anon public key\nnote: the long key under Project API keys\n```"
+            },
+            {
+              "serial": 6,
+              "ask": "Rotate the old anon key",
+              "status": "retired",
+              "filed": "2026-09-30",
+              "closed": "2026-10-02",
+              "blocks": []
+            },
+            {
+              "serial": 3,
+              "ask": "Give the Stripe live secret key",
+              "status": "draft",
+              "filed": "2026-10-23",
+              "raised_by": "T-21",
+              "body": "Waiting on the platform to name the account it is for.\n\n## Step 1 — the secret key\n\nReveal the live secret key (`sk_live_…`) and give it in the human-actions app.\n\n```open\nurl: https://dashboard.stripe.com/apikeys\nlabel: Open Stripe API keys\n```\n\n```field\nname: STRIPE_SECRET_KEY\nlabel: Stripe secret key (sk_live_…)\n```",
+              "blocks": []
+            }
+          ],
+          "regions": [
+            "R-21"
+          ],
+          "repos": [
+            {
+              "name": "broomstick",
+              "focus": [
+                "MOD-platform-api-3f8b1e67",
+                "MOD-billing-8d1c5e92"
+              ]
+            }
+          ],
+          "children": []
+        }
+      ]
+    },
+    {
+      "id": "X-9",
+      "name": "Harness",
+      "description": "The machine underneath: the threads daemon, the AUI, the TUI and the plugins.",
+      "objectives": [
+        {
+          "serial": 11,
+          "title": "Every coordinator runs on v5 regions, one at a time",
+          "serves": "DIR-4"
+        }
+      ],
+      "milestones": [
+        {
+          "serial": 15,
+          "handle": "The composer is done and the cutover is under way",
+          "objective": 11,
+          "tasks": [
+            23,
+            24
+          ],
+          "region": "R-31",
+          "depends_on": []
+        }
+      ],
+      "tasks": [
+        {
+          "serial": 23,
+          "title": "TUI composer",
+          "state": "done",
+          "report": "0044",
+          "depends_on": [],
+          "blocked_by": []
+        },
+        {
+          "serial": 24,
+          "title": "Workspace v5 (regions) cutover",
+          "state": "active",
+          "depends_on": [
+            23
+          ],
+          "doing": "compacting the curator's cluster: 212 of 240 nodes placed",
+          "account": "acct2",
+          "elapsed": "3h",
+          "blocked_by": []
+        }
+      ],
+      "questions": [],
+      "regions": [
+        "R-21"
+      ],
+      "repos": [
+        {
+          "name": "harness",
+          "focus": [
+            "MOD-tui-4f1c9a02",
+            "MOD-mind-index-v5-c83a5d17"
+          ]
+        },
+        {
+          "name": "cauldron"
+        }
+      ],
+      "directives": [
+        {
+          "id": "DIR-4",
+          "cite": "6dda9d84#217",
+          "region": "R-31",
+          "text": "The v5 cutover is per coordinator, never a sweep."
+        }
+      ],
+      "children": [
+        {
+          "id": "X-10",
+          "name": "TUI",
+          "description": "The Rust terminal face in apps/tui.",
+          "objectives": [
+            {
+              "serial": 12,
+              "title": "Every face answers to one key table",
+              "serves": "DIR-5"
+            }
+          ],
+          "milestones": [
+            {
+              "serial": 16,
+              "handle": "The composer and the mic land",
+              "objective": 12,
+              "tasks": [
+                25,
+                26
+              ],
+              "region": "R-30",
+              "depends_on": []
+            },
+            {
+              "serial": 17,
+              "handle": "The cauldron face obeys the harness key table",
+              "objective": 12,
+              "depends_on": [
+                "M-16"
+              ],
+              "tasks": [
+                27
+              ],
+              "since": "2026-10-14",
+              "from": "8e4fca10#53",
+              "region": "R-30",
+              "edges": [
+                {
+                  "kind": "builds",
+                  "to": "MOD-tui-4f1c9a02"
+                },
+                {
+                  "kind": "builds",
+                  "to": "IF-tui-0d7e55a1"
+                },
+                {
+                  "kind": "builds",
+                  "to": "R-key-table-9e44b7c3"
+                },
+                {
+                  "kind": "depends_on",
+                  "to": "MIG-cluster-face-keys-c3e0a1f4"
+                }
+              ]
+            },
+            {
+              "serial": 18,
+              "handle": "The cauldron face's own KEYMAP is cleared",
+              "objective": 12,
+              "depends_on": [
+                "M-17"
+              ],
+              "region": "R-30",
+              "edges": [
+                {
+                  "kind": "builds",
+                  "to": "MOD-tui-clusters-a4c1e8d2"
+                },
+                {
+                  "kind": "clears",
+                  "to": "DRAG-keys-duplicated-7a0e3f91"
+                }
+              ],
+              "tasks": []
+            }
+          ],
+          "tasks": [
+            {
+              "serial": 25,
+              "title": "Drag selection",
+              "state": "done",
+              "report": "0038",
+              "depends_on": [],
+              "blocked_by": []
+            },
+            {
+              "serial": 26,
+              "title": "Mic capture",
+              "state": "done",
+              "depends_on": [
+                25
+              ],
+              "report": "0041",
+              "blocked_by": []
+            },
+            {
+              "serial": 27,
+              "title": "Cauldron face reads BINDINGS, not its own KEYMAP",
+              "state": "active",
+              "account": "acct3",
+              "elapsed": "19m",
+              "since": "2026-10-14",
+              "edges": [
+                {
+                  "kind": "builds",
+                  "to": "R-key-table-9e44b7c3"
+                }
+              ],
+              "depends_on": [],
+              "blocked_by": []
+            }
+          ],
+          "questions": [],
+          "regions": [
+            "R-30"
+          ],
+          "repos": [
+            {
+              "name": "harness",
+              "focus": [
+                "MOD-tui-4f1c9a02"
+              ]
+            },
+            {
+              "name": "cauldron",
+              "focus": [
+                "MOD-tui-render-5e81c0a4"
+              ]
+            }
+          ],
+          "directives": [
+            {
+              "id": "DIR-5",
+              "cite": "8e4fca10#64",
+              "region": "R-30",
+              "text": "Lock one navigation philosophy that matches the tui I use."
+            }
+          ],
+          "children": []
+        },
+        {
+          "id": "X-11",
+          "name": "Workspaces",
+          "description": "The .mind workspace protocol, v3 and the v5 regions board.",
+          "objectives": [
+            {
+              "serial": 13,
+              "title": "A board cuts over to v5 when its coordinator says so",
+              "serves": "DIR-4"
+            }
+          ],
+          "milestones": [
+            {
+              "serial": 19,
+              "handle": "v5 round close refuses on a regionless node",
+              "objective": 13,
+              "tasks": [
+                28
+              ],
+              "since": "2026-10-10",
+              "region": "R-31",
+              "edges": [
+                {
+                  "kind": "builds",
+                  "to": "MOD-mind-index-v5-c83a5d17"
+                },
+                {
+                  "kind": "builds",
+                  "to": "IF-mind-index-v5-f1a0c7e3"
+                }
+              ],
+              "depends_on": []
+            }
+          ],
+          "tasks": [
+            {
+              "serial": 28,
+              "title": "Per-coordinator v5 migration",
+              "state": "active",
+              "doing": "migrating board R-9 to regions; validator at 3 HARD",
+              "account": "sam-broomstick",
+              "elapsed": "6h",
+              "since": "2026-10-10",
+              "depends_on": [],
+              "blocked_by": []
+            }
+          ],
+          "questions": [
+            {
+              "serial": 21,
+              "value": 50,
+              "blocking": false,
+              "question": "Does Cauldron adopt v5 regions directly, or keep projects as nodes inside regions?",
+              "why": "A region is navigation only and is re-carved often; a cluster needs a stable identity.",
+              "options": [
+                "CLUSTERS ARE REGIONS.",
+                "CLUSTERS ARE NODES INSIDE REGIONS."
+              ],
+              "recommendation": "CLUSTERS ARE NODES INSIDE REGIONS, so re-carving never breaks a cluster's identity or its spoken ids."
+            }
+          ],
+          "human_actions": [
+            {
+              "serial": 7,
+              "ask": "Say the word for this coordinator's v5 cutover",
+              "status": "open",
+              "filed": "2026-10-14",
+              "raised_by": "T-28",
+              "blocks": [
+                "M-19"
+              ],
+              "cite": "6dda9d84#217",
+              "region": "R-31",
+              "body": "Say the word, in this coordinator's thread, for its v5 cutover."
+            }
+          ],
+          "regions": [
+            "R-31",
+            "SUB-4"
+          ],
+          "repos": [
+            {
+              "name": "harness",
+              "focus": [
+                "MOD-mind-index-v5-c83a5d17",
+                "MOD-mind-index-9f3e1c6a"
+              ]
+            }
+          ],
+          "children": []
+        }
+      ]
+    }
+  ],
+  "cauldron": {
+    "threads": {
+      "link": "live",
+      "warnings": 1,
+      "age": "42s"
+    },
+    "mesh": [
+      {
+        "node": "example-mac",
+        "role": "this machine",
+        "status": "online",
+        "load": [
+          2.31,
+          1.98,
+          1.77
+        ],
+        "cpu_pct": 34,
+        "mem_pct": 61,
+        "services": [
+          {
+            "name": "threads",
+            "status": "running",
+            "pid": 48211,
+            "uptime": "6d 2h",
+            "addr": "127.0.0.1:3653",
+            "version": "8299dcc1",
+            "proven": [
+              {
+                "version": "8299dcc1",
+                "at": "2026-10-18"
+              },
+              {
+                "version": "5c1e07aa",
+                "at": "2026-10-11"
+              }
+            ],
+            "warnings": 1,
+            "errors": 0,
+            "log": "/Users/demo/.cauldron/data/prod/logs/threads.log"
+          },
+          {
+            "name": "tts",
+            "status": "running",
+            "pid": 48302,
+            "uptime": "6d 2h",
+            "addr": "127.0.0.1:51874",
+            "version": "a35dad41",
+            "proven": [
+              {
+                "version": "a35dad41",
+                "at": "2026-10-02"
+              }
+            ],
+            "warnings": 0,
+            "errors": 0,
+            "log": "/Users/demo/.cauldron/data/prod/logs/tts.log"
+          },
+          {
+            "name": "cauldron daemon",
+            "status": "running",
+            "pid": 48190,
+            "uptime": "6d 2h",
+            "addr": "127.0.0.1:51870",
+            "version": "06cada2b",
+            "proven": [
+              {
+                "version": "06cada2b",
+                "at": "2026-10-19"
+              },
+              {
+                "version": "e9a97a22",
+                "at": "2026-10-12"
+              }
+            ],
+            "warnings": 2,
+            "errors": 0,
+            "log": "/Users/demo/.cauldron/data/prod/logs/cauldron-daemon.log"
+          },
+          {
+            "name": "echo",
+            "status": "stopped",
+            "pid": null,
+            "uptime": "—",
+            "addr": "—",
+            "version": "e9a97a22",
+            "warnings": 0,
+            "errors": 0,
+            "log": "/Users/demo/.cauldron/data/prod/logs/echo.log"
+          },
+          {
+            "name": "tally",
+            "status": "failed",
+            "pid": null,
+            "uptime": "—",
+            "addr": "—",
+            "version": "e9a97a22",
+            "note": "exited 101 at boot: warnings shape missing",
+            "warnings": 3,
+            "errors": 2,
+            "log": "/Users/demo/.cauldron/data/prod/logs/tally.log"
+          }
+        ],
+        "last_seen": "now"
+      }
+    ],
+    "status": {
+      "background": [
+        {
+          "ripple": "curation",
+          "line": "re-rank",
+          "state": "parked",
+          "parked": {
+            "cause": "share",
+            "phrase": "share spent on every account",
+            "eligible": [
+              "Claude Code"
+            ],
+            "since": "14m"
+          }
+        },
+        {
+          "ripple": "voice",
+          "line": "read Interface",
+          "state": "pending"
+        }
+      ]
+    }
+  },
+  "corpus": {
+    "schema_version": 5,
+    "regions": [
+      {
+        "id": "R-1",
+        "handle": "THE CLUSTER TREE - how he navigates the cauldron: clusters as nodes, strictly hierarchical, the q:a:p counts, collapse and step-in.",
+        "boundary": "Inside: how the cluster tree is shaped and walked - parent and child clusters, what a tree row shows, how the arrows and the mouse move through it. Outside: what a cluster REMEMBERS (its regions) goes to R-6's neighbours and the soup; the dump-anything line goes to R-2."
+      },
+      {
+        "id": "R-2",
+        "handle": "THE DUMP-ANYTHING LINE - one input on every tab, tags that say what he is answering, sends that land on every tagged cluster.",
+        "boundary": "Inside: the input, the tag grammar ([cluster/Q-1], [region:R-3], [node:IS-12]), the shared draft and the send log. Outside: what a send causes downstream (nothing yet) is not this region's."
+      },
+      {
+        "id": "R-3",
+        "handle": "RIPPLES - scheduled background work the cauldron runs between his turns: what a ripple is, when it fires, what it may touch.",
+        "boundary": "Inside: the ripple as a unit of scheduled work, its triggers, its budget and its write scope. Outside: the overnight dream cycle narrows this region (R-4); how a curator folds a turn is R-5's, even when a ripple runs it."
+      },
+      {
+        "id": "R-4",
+        "handle": "DREAMING - the overnight consolidation ripple: what it reads, what it may rewrite, how its output is reviewed.",
+        "boundary": "Inside: the dream ripple specifically - its corpus window, its rewrite rights over regions, its morning report. Outside: ripples in general (R-3).",
+        "narrows": [
+          "R-3"
+        ]
+      },
+      {
+        "id": "R-5",
+        "handle": "CURATION CRAFT - how a turn is folded into the soup: intake, fold-after, attesting a region by quoting its boundary.",
+        "boundary": "Inside: the curator's acts and their order, the admission quote, the regionless node and its placement. Outside: the shape of a region itself is the protocol's; scheduled curation runs are R-3's."
+      },
+      {
+        "id": "R-6",
+        "handle": "ENVIRONMENTS - one cauldron per environment: prod, dev, staging; where each keeps its data and its draft.",
+        "boundary": "Inside: environment resolution (--env, CAULDRON_ENV, ENV, prod), the data root, what a face may create. Outside: the mesh of devices a cauldron runs across (R-9)."
+      },
+      {
+        "id": "R-9",
+        "handle": "MESH DEVICES - machines joining and leaving the cauldron's mesh, and what each one runs.",
+        "boundary": "Inside: device membership, heartbeat, which services a device hosts. Outside: environments (R-6); the services themselves are their own repos' business."
+      },
+      {
+        "id": "R-20",
+        "handle": "LANDING - the public page: copy, pricing, the waitlist form.",
+        "boundary": "Inside: what a stranger sees before signing up. Outside: the signed-in platform (R-21)."
+      },
+      {
+        "id": "R-21",
+        "handle": "PLATFORM DEPLOY - the signed service, its supervisor, and the quiet-moment restart.",
+        "boundary": "Inside: building, signing and promoting the platform binary; launchd; is-the-running-process-our-commit. Outside: the landing page (R-20)."
+      },
+      {
+        "id": "R-30",
+        "handle": "THE HARNESS CHAT FACE - the tui that talks to threads: composer, transcript, the mic.",
+        "boundary": "Inside: the chat face's own behaviour. Outside: the cauldron face built beside it (the cauldron workspace's R-1, R-2)."
+      },
+      {
+        "id": "R-31",
+        "handle": "THE v5 REGIONS PROTOCOL - regions, attestation, caps, and the pen that enforces them.",
+        "boundary": "Inside: the protocol as written in core:workspaces-v5 and enforced by mind-index-v5. Outside: how one board is migrated (SUB-4 carries the older subject projection that came before it)."
+      },
+      {
+        "id": "SUB-4",
+        "handle": "SUBJECTS - the v3 subject projection that preceded regions: subject nodes, a capped global tier, expand_on_init.",
+        "boundary": "Inside: the subjects dogfood as it ran on v3 boards. Outside: v5 regions (R-31). Made under schema v3 and never migrated.",
+        "schema_version": 3
+      }
+    ],
+    "nodes": [
+      {
+        "id": "DEC-14",
+        "type": "decision",
+        "state": "decided",
+        "handle": "Globs are Clusters: the tree, the tab and every word in the face say cluster.",
+        "body": "Authored by the intake run r-8f3a from 8e4fca10#96: the operator renamed the Globs header to Cluster, and the cauldron tab with it.",
+        "in_region": [
+          "R-1"
+        ],
+        "cite": "8e4fca10#96"
+      },
+      {
+        "id": "DEC-15",
+        "type": "decision",
+        "state": "decided",
+        "handle": "Pools is Energy: the account pools and their threads are one tab, called Energy.",
+        "body": "Authored by the intake run r-8f3a from 8e4fca10#96.",
+        "in_region": [
+          "R-1"
+        ],
+        "cite": "8e4fca10#96"
+      },
+      {
+        "id": "T-9",
+        "type": "task",
+        "state": "ready",
+        "handle": "Build the Ripples menu: configure every ripple from the face.",
+        "body": "Authored by r-8f3a; made ready by the consequence run r-5b07 when Q-2 closed.",
+        "in_region": [
+          "R-3"
+        ],
+        "cite": "8e4fca10#96"
+      },
+      {
+        "id": "Q-2",
+        "type": "question",
+        "state": "closed",
+        "handle": "Is the Ripples menu a cauldron tab or a section of Settings?",
+        "body": "Closed by r-8f3a's adjudicate step: a cauldron tab.",
+        "in_region": [
+          "R-3"
+        ],
+        "cite": "8e4fca10#96"
+      },
+      {
+        "id": "DEC-11",
+        "type": "decision",
+        "state": "decided",
+        "handle": "Clusters are nodes and strictly hierarchical; regions map to clusters many-to-many.",
+        "body": "His msg 42: clusters are simple and strictly hierarchical, for navigation; a region may be claimed by several clusters, siblings included, and every region should belong to at least one cluster or it becomes undiscoverable.",
+        "in_region": [
+          "R-1"
+        ]
+      },
+      {
+        "id": "IS-14",
+        "type": "issue",
+        "state": "open",
+        "handle": "A tag hand-typed with a typo is plain text and is never parsed, so the send lands on the focused cluster instead.",
+        "body": "Seen in iteration two. The grammar is strict on purpose; the cost is a silent mis-route. A send with an unparsed bracket could be flagged before it is stored.",
+        "in_region": [
+          "R-2"
+        ]
+      },
+      {
+        "id": "Q-17",
+        "type": "question",
+        "state": "open",
+        "handle": "Should a send tagged only with a region land on every cluster that claims it?",
+        "body": "Built that way in iteration three: a region tag lands on its claimants, a node tag on the claimants of every region it attests. The alternative is the focused cluster only.",
+        "in_region": [
+          "R-2",
+          "R-1"
+        ]
+      },
+      {
+        "id": "T-21",
+        "type": "task",
+        "state": "active",
+        "handle": "Build the Soup Explorer: every region grouped by workspace, with search.",
+        "body": "Iteration three of the cauldron TUI. Search is entered with ^F because printable keys belong to the dump-anything line.",
+        "in_region": [
+          "R-1"
+        ]
+      },
+      {
+        "id": "IS-22",
+        "type": "issue",
+        "state": "open",
+        "handle": "A ripple that overruns its budget is killed without a record of what it had written.",
+        "body": "Observed twice in the trial runs. The ripple's partial writes stay in the soup with no provenance pointing back at the killed run.",
+        "in_region": [
+          "R-3"
+        ]
+      },
+      {
+        "id": "DEC-23",
+        "type": "decision",
+        "state": "decided",
+        "handle": "The dream ripple may re-cut a region boundary but never delete a node.",
+        "body": "Deletion is his. A re-cut re-quotes every member whose admission span it removes, in the same act.",
+        "in_region": [
+          "R-4",
+          "R-5"
+        ]
+      },
+      {
+        "id": "C-24",
+        "type": "idea",
+        "state": "exploring",
+        "handle": "Let the dream ripple propose region merges as questions in the morning instead of doing them.",
+        "body": "Merges are the riskiest re-cut; asking first costs one question per night.",
+        "in_region": [
+          "R-4"
+        ]
+      },
+      {
+        "id": "CON-25",
+        "type": "constraint",
+        "state": "active",
+        "handle": "Every node attests at least one region, quoting the boundary span that admits it.",
+        "body": "The v5 rule (R13, R27). A node no boundary admits is minted regionless and placed in the same round.",
+        "in_region": [
+          "R-5"
+        ]
+      },
+      {
+        "id": "IS-26",
+        "type": "issue",
+        "state": "resolved",
+        "handle": "The draft typed in a not-yet-existing environment silently created that environment.",
+        "body": "Resolved by making the environments menu say so: a seeded environment is created on its first draft write.",
+        "in_region": [
+          "R-6",
+          "R-2"
+        ]
+      },
+      {
+        "id": "M-27",
+        "type": "milestone",
+        "state": "pending",
+        "handle": "A second device joins the mesh and shows its load on the Mesh tab.",
+        "body": "Today the mesh is one machine. Nobody has claimed this region yet, so no cluster in the Surface sidebar reaches it.",
+        "in_region": [
+          "R-9"
+        ]
+      },
+      {
+        "id": "Q-40",
+        "type": "question",
+        "state": "open",
+        "handle": "Does pricing show per-seat or per-workspace on the landing page?",
+        "body": "Two drafts exist. Per-seat reads cheaper; per-workspace matches how the product is used.",
+        "in_region": [
+          "R-20"
+        ]
+      },
+      {
+        "id": "DEC-41",
+        "type": "decision",
+        "state": "decided",
+        "handle": "An agent never restarts a supervised service; the quiet-moment absorb path decides.",
+        "body": "Standing prohibition, cited from the signed-service doctrine.",
+        "in_region": [
+          "R-21"
+        ]
+      },
+      {
+        "id": "IS-42",
+        "type": "issue",
+        "state": "open",
+        "handle": "The promote tool leaves its scratch directory behind when codesign fails.",
+        "body": "The cleanup runs only on the success path. Seen once on 2026-10-02.",
+        "in_region": [
+          "R-21"
+        ]
+      },
+      {
+        "id": "DEC-50",
+        "type": "decision",
+        "state": "decided",
+        "handle": "The chat face moved into the cauldron repo; `cauldron tui --chat` opens it.",
+        "body": "The bare `cauldron tui` opens the cauldron face; the chat face keeps its own binary name `tui`.",
+        "in_region": [
+          "R-30"
+        ]
+      },
+      {
+        "id": "CON-51",
+        "type": "constraint",
+        "state": "active",
+        "handle": "Every cap is HARD by one character; the remedy is a carve, never a trim.",
+        "body": "From the v5 protocol. Measured, cap and overage are printed on every refusal.",
+        "in_region": [
+          "R-31"
+        ]
+      },
+      {
+        "id": "IS-52",
+        "type": "issue",
+        "state": "open",
+        "handle": "The subject projection still renders on two boards that never migrated to v5.",
+        "body": "SUB-4 is the record of it. Those boards show schema v3 regions beside v5 ones.",
+        "in_region": [
+          "SUB-4",
+          "R-31"
+        ]
+      }
+    ]
+  },
+  "messages": {
+    "8e4fca10#1": {
+      "date": "2026-09-27",
+      "text": "One input, many surfaces, nobody in the middle. I dump anything into one line and the thing figures out where it goes."
+    },
+    "8e4fca10#21": {
+      "date": "2026-10-07",
+      "text": "And right after I dump something in I want to hear a tone, and then one line that says where it went. Not a reply. Never a reply. If it went somewhere I didn't expect, that one line is how I catch it."
+    },
+    "8e4fca10#25": {
+      "date": "2026-10-06",
+      "text": "I want to make a different TUI on top of fake data. I want to see the surfaces, and the open questions on each one with recommendations."
+    },
+    "8e4fca10#33": {
+      "date": "2026-10-15",
+      "text": "If I click right, expand it. If I click left, collapse it. If it's already expanded and I click right again, take me into the content of the surface."
+    },
+    "8e4fca10#53": {
+      "date": "2026-10-15",
+      "text": "Clicking outside of any modal should close the modal and should not trigger an event on any item clicked."
+    },
+    "8e4fca10#55": {
+      "date": "2026-10-15",
+      "text": "Assume the user knows how to use this thing. I'm going to explain the interface. I don't want legends anywhere explaining what the key bindings are."
+    },
+    "8e4fca10#64": {
+      "date": "2026-10-16",
+      "text": "I want a navigation philosophy locked in to match that tui."
+    },
+    "8e4fca10#82": {
+      "date": "2026-10-16",
+      "text": "I want a new design for each of the surface tabs. The DAG one isn't really a DAG and it needs to show tracing back to context on each point."
+    },
+    "6dda9d84#217": {
+      "date": "2026-10-12",
+      "text": "Per coordinator. Never a sweep. I say the word for each one."
+    },
+    "b7d2c4e1#12": {
+      "date": "2026-09-30",
+      "text": "Landing page first. The platform can wait until people are on the list."
+    }
+  }
+}

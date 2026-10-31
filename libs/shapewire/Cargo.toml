@@ -1,0 +1,135 @@
+[package]
+name = "shapewire"
+version.workspace = true
+edition.workspace = true
+description = "The subscription-shape chassis: cells that converge, a hub that stamps every input once, a subscriber ledger, typed commands, the websocket/HTTP door, and the cauldron seam a producer registers through. Rewritten from substrate lib/shapewire (bc4ba24), not copied."
+
+# ── Features: drawn on ROLE, not on runtime dependency ──────────────────────
+#
+# The floor has no flag: `wire`, `mirror`, `envelope`, `operation`, `cell` and
+# `surface` are what a CONSUMER links (`default-features = false`), and none of
+# them pulls tokio, axum or cauldron's `env` crate. The faces vendor this crate
+# with a Cargo.toml of their own, so the floor must stay buildable from `src/`
+# alone — every producer-side dependency below is optional and behind a flag.
+#
+# The GRAPH BELOW IS SUBSTRATE'S, carried over, including the requires-edges
+# and the reason each one exists. `hub` requires `fold` and `ledger` (the task
+# folds through a `fold::Root` and `ShapeInfo.consumers` is typed on the
+# ledger). `server` requires `hub` and `command` (dispatch answers
+# `durable`/`barrier` itself). Neither is an independent axis; substrate's own
+# manifest records the measurement that four of its eight flag combinations did
+# not compile, which is why these edges are NAMED rather than discovered.
+# `check-features.sh` proves the combinations that remain.
+#
+# ── WHAT IS CAULDRON-SIDE AND NEW (R3.S2.0) ────────────────────────────────
+#
+# `seam` IS ITS OWN AXIS, AND `server` DOES NOT REQUIRE IT. This is the one
+# place the cauldron manifest departs from substrate's shape, and it is a
+# property rather than a comment:
+#
+#   * `server` is the network DOOR — axum, the per-connection bearer, the
+#     resource digest. It is wire-identical to substrate's and has no business
+#     knowing what supervises it.
+#   * `seam` is cauldron: `$CAULDRON_BIND`, the boot token, the registration
+#     line protocol, and the warnings attestation. In substrate the PRODUCER
+#     registered its own seam (threads' `chassis.rs` did it); the chassis never
+#     did it for them, and that is the arrangement kept here.
+#
+# Folding `dep:env` into `server` would have met the goal "nothing a face links
+# can reach cauldron's `env`" only by accident — it holds exactly while the
+# faces want the floor and nothing else, and stops holding the day one of them
+# wants the connected-consumer half of the door. Spelt as a separate flag, the
+# goal is a statement about the FEATURE GRAPH that `check-features.sh` can
+# assert: `--features server` must not pull `env`, and only `--features seam`
+# may. The cost is one flag and the registration call staying with the
+# producer, which is where substrate had it.
+[features]
+default = ["hub", "ledger", "command"]
+fold = []
+hub = ["dep:tokio", "fold", "ledger"]
+ledger = []
+command = []
+# The network door and the resource path. NO `env`, by construction.
+server = [
+    "dep:axum",
+    "dep:futures",
+    "dep:uuid",
+    "dep:sha2",
+    "hub",
+    "command",
+]
+# The cauldron side: the seam a producer registers through and the warnings it
+# attests. Needs the door, because what it publishes is the address the door
+# bound.
+seam = ["dep:env", "server"]
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+chrono = { workspace = true, features = ["serde"] }
+# `tracing` and NOT `tracing-subscriber`. A SUBSCRIBER IS THE BINARY'S CHOICE:
+# a library that installs one takes over the whole process's logging, and this
+# is the one library two faces and every migrated service will link. substrate's
+# shapewire depends on `tracing` alone, deliberately, and `services/tts` already
+# initialises its own subscriber. Emitting events is a library's business;
+# deciding where they go is not.
+tracing = { workspace = true }
+tokio = { workspace = true, features = ["rt-multi-thread", "macros", "sync", "time", "net"], optional = true }
+axum = { workspace = true, features = ["ws"], optional = true }
+futures = { workspace = true, optional = true }
+# The per-connection bearer: 122 bits of v4 randomness, minted per connect.
+uuid = { workspace = true, features = ["v4"], optional = true }
+# The resource door verifies an upload against the digest it was PUT under.
+sha2 = { workspace = true, optional = true }
+# Cauldron's environment crate: the seam, the boot token, `$CAULDRON_BIND`, the
+# warnings attestation. Behind `seam`, so a `--features server` build cannot
+# reach it and the floor cannot either.
+env = { path = "../env", optional = true }
+
+# NO `anyhow` AND NO `toml`, at any flag. substrate's manifest states the rule
+# in its own words — this crate depends on no other workspace crate because
+# "it is meant to LEAVE this workspace with a release", and "errors are local":
+# `ShapeError`, `Refusal` and `Outcome` are its own, and they are the types that
+# cross the WIRE, where an `anyhow::Error` has no representation anyway. `toml`
+# was carried for decision 2's fixed-port rule and decision 2 needs no file
+# format: the primitive's signature takes the configured value, it does not go
+# looking for it (see `seam::port`), and the producer parses its own
+# `store/config.toml` exactly as tts does. Putting a file format in the one
+# crate the faces vendor is the thing that cannot be taken back later.
+
+# ── Integration tests moved from substrate (R3.S2.0.finish) ─────────────────
+#
+# Four of the six drive a real `Hub`, so they REQUIRE `hub` and say so here.
+# Without this, `cargo test -p shapewire --no-default-features` cannot compile
+# the test targets at all — substrate never named these, and only ever ran
+# them at default features. `mirror_oracle` and `resubscribe_identity` are
+# floor-only and run in every configuration, which is the point of them: they
+# are the consumer half, measured with nothing of the producer linked.
+[[test]]
+name = "cell_manifest"
+required-features = ["hub"]
+
+[[test]]
+name = "paging"
+required-features = ["hub"]
+
+[[test]]
+name = "referent"
+required-features = ["hub"]
+
+[[test]]
+name = "version_link"
+required-features = ["hub"]
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["full"] }
+tempfile = "3"
+# `seam`'s tests implement `env::warnings::ServesWarnings`, whose signature is
+# `anyhow::Result`, and `warnings`' test drives a real `tracing` layer. DEV
+# only: `check-features.sh` reads `-e normal`, and the rule it asserts is that
+# the crate itself names neither (R3.S2.10).
+anyhow = { workspace = true }
+tracing-subscriber = { workspace = true }
+
+[lints.rust]
+unsafe_code = "forbid"

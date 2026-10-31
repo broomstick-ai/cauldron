@@ -1,0 +1,821 @@
+#!/usr/bin/env bash
+# test-check-no-personal-data — conformance test for scripts/check-no-personal-data.sh
+#
+#   scripts/test-check-no-personal-data [SCRIPT_UNDER_TEST [BUILDER_UNDER_TEST]]
+#
+# BUILDER_UNDER_TEST (default scripts/build-public-archive) is the archive
+# builder copied beside the guard; pass an older one to force A13 red.
+#
+# Runs a copy of the guard inside SCRATCH git repos (nothing in this repo is
+# planted or staged). Since REL-4.S7h the guard scans the `git archive`
+# artifact (scripts/build-public-archive), so every case below is a case
+# against the ARCHIVE path.
+#
+# The planted personal values are the `sample` lines of
+# scripts/personal-patterns.private (export-ignored, never shipped). This file
+# therefore carries no personal literal at all. Where that file is absent:
+#   - in a tree with export-ignored paths (the operator's) this test FAILS;
+#   - in a public tree it runs every mechanism case against a SYNTHETIC
+#     pattern file, and SKIPs (says so) the cases that need the real lines.
+# Secret canaries are generated at run time and never printed.
+#
+#   S1-S3   a secret-shaped canary caught, its value unprinted; opposed.
+#   S4-S6   README.md is scanned; the byline line keyed, not the file. [real]
+#   S7-S10  every former whole-file exemption as it stands: rc 0; then per
+#           file a home path, a secret, a home path riding a keyed line:
+#           rc 1 if the file SHIPS, rc 0 if it is export-ignored (it is not
+#           in the artifact). The ships/ignored oracle is check-public-tree's
+#           own INTERNAL_PATHS list, not the guard's reading. [real]
+#   S11-S13 NUL-byte file, `binary` attribute, symlink target (REL-4.S7ef-I B2).
+#   S14     a real-shaped key beside the word FAKE.
+#   S15     an exact second copy of a keyed line (keys count occurrences).
+#   S16     a git subcommand that errors (grep, archive): rc 2, never clean.
+#   S17     a line committed then removed from worktree+index: caught in HEAD.
+#   S18     no planted personal value appears in any output (every pattern).
+#   REL-4.S7h, each paired with an opposing harmless case:
+#   A1  (REL-4.S7g-I B1) personal data in a DIRECTORY name and a FILE name.
+#   A2  (REL-4.S7g-I B2) `export-subst` + `$Format:%ae$` with a personal
+#       author email: the attribute is refused; with the path allow-listed
+#       the EXPANDED content is still caught (the source blob has no hit, so
+#       only the archive can show it); an export-ignored .gitattributes is
+#       still seen.
+#   A3  (REL-4.S7g-I N1) UTF-16LE with BOM, UTF-16BE without, UTF-32LE.
+#   A4  (REL-4.S7g-I N1) gzip, zip (content and member name), tar.gz.
+#   A5  (REL-4.S7g-I N2) a keyed line moved into a file named `<file>|<head>`.
+#   A6  (REL-4.S7ef-I B1) a keyed HOME PATH in a shipped file: never exempt.
+#   A7  NFKC: the name in fullwidth letters, and split by a zero-width joiner.
+#   A8  two index entries differing only by case (lost by extraction on APFS).
+#   A9  the pattern file missing from a private tree: rc 2; a sample that does
+#       not match: rc 2.
+#   A10 (N3) the guard under test carries no personal literal.
+#   REL-4.S7i (REL-4.S7h-I N1-N3), each with its opposing case:
+#   A11 (N1) bad-CRC gzip, bad-check xz, truncated bz2, bad-CRC zip: the
+#       recovered content is caught AND the member fails closed; a harmless
+#       bad-CRC gzip fails closed; allow-listed by key+reason it passes; no
+#       reason: rc 2; the key binds the bytes.
+#   A12 (N2) gzip, bz2, xz, zlib, tar nested 10 deep: refused; 5 deep with a
+#       home path: caught by the scan; 7 deep harmless: rc 0.
+#   A13 (N3) a file export-ignored only by .git/info/attributes,
+#       core.attributesFile or the global attributes file: still caught;
+#       the builder's bytes equal a fresh clone's `git archive`; opposed: a
+#       COMMITTED export-ignore keeps it out (rc 0).
+#   REL-4.S7j (REL-4.S7i-I F1-F3), each with its opposing case:
+#   A14 (F1) gzip, xz, bz2: a corrupt first stream ALLOW-LISTED, then a
+#       complete stream holding a home path: still caught; harmless: rc 0.
+#       A gzip member after junk bytes is scanned; harmless: rc 0.
+#   A15 (F2) GIT_CONFIG_PARAMETERS, GIT_CONFIG_COUNT/KEY/VALUE,
+#       GIT_CONFIG_GLOBAL, GIT_CONFIG_SYSTEM, GIT_TEMPLATE_DIR: each changes a
+#       plain `git archive` (sentinel) and none changes build-public-archive's
+#       bytes (== a fresh clone's archive).
+#   A16 (F3) bz2 with a damaged block magic: fails closed, its intact later
+#       block is recovered and caught, also behind an allow entry; a corrupt
+#       first block: the second is caught; opposed: text starting `BZh5` and
+#       an intact two-block bz2: rc 0.
+#
+# Exits 0 only if every case held.
+set -euo pipefail
+
+HERE=$(cd "$(dirname "$0")" && pwd)
+SCRIPT=${1:-$HERE/check-no-personal-data.sh}
+BUILDER=${2:-$HERE/build-public-archive}
+W=$(mktemp -d "${TMPDIR:-/tmp}/test-check-no-personal-data.XXXXXX")
+# bash 3.2 exits 0 from a `set -u` abort when an EXIT trap is set: anything
+# but a deliberate `finish` is a failure of this test, never a pass.
+FINISHED=
+finish() { FINISHED=1; exit "$1"; }
+trap 'st=$?; rm -rf "$W"; if [ -z "$FINISHED" ]; then echo "test-check-no-personal-data: ABORTED (status $st)"; exit 1; fi' EXIT
+
+FAILS=0
+pass() { echo "[PASS] $1"; }
+fail() { echo "[FAIL] $1"; FAILS=$((FAILS + 1)); }
+skip() { echo "[SKIP] $1"; }
+
+# ---- the pattern file ----------------------------------------------------
+SRC_PATTERNS="$HERE/personal-patterns.private"
+src_private=0
+if git -C "$HERE/.." ls-files -z | git -C "$HERE/.." check-attr -z --stdin export-ignore \
+    | tr '\0' '\n' | paste - - - | awk -F'\t' '$3=="set"{f=1} END{exit !f}'; then src_private=1; fi
+REAL=0
+if [ -f "$SRC_PATTERNS" ]; then
+  REAL=1; cp "$SRC_PATTERNS" "$W/patterns"
+elif (( src_private )); then
+  fail "PRE scripts/personal-patterns.private is missing from a private tree"
+  echo "test-check-no-personal-data: 1 FAILED"; finish 1
+else
+  skip "PRE no personal-pattern file (public tree): synthetic patterns; [real] cases skipped"
+  printf 'personal\thome\t/Users/zqxop\npersonal\tname\tzqxop\npersonal\temail\t[A-Za-z0-9._%%+-]+@zqx-mail\\.example\n' > "$W/patterns"
+  printf 'sample\thome\t/Users/zqxop/fake-home/notes.txt\nsample\tname\tzqxop-canary\nsample\temail\tsomeone@zqx-mail.example\n' >> "$W/patterns"
+fi
+sample() { awk -F'\t' -v k="$1" '$1=="sample" && $2==k {print $3; exit}' "$W/patterns"; }
+HOMEPATH=$(sample home); NAMEV=$(sample name); EMAILV=$(sample email)
+[ -n "$HOMEPATH" ] && [ -n "$NAMEV" ] && [ -n "$EMAILV" ] \
+  && pass "PRE samples for home, name and email are present" \
+  || { fail "PRE a sample is missing (home/name/email)"; finish 1; }
+# pmatch: rc 0 iff stdin matches any personal pattern (case-insensitive).
+pmatch() {
+  python3 -c '
+import re, sys
+pats = [l.rstrip("\n").split("\t")[2] for l in open(sys.argv[1]) if l.startswith("personal\t")]
+d = sys.stdin.buffer.read().decode("utf-8", "replace")
+sys.exit(0 if any(re.search(p, d, re.I) for p in pats) else 1)' "$W/patterns"
+}
+printf '%s' "$NAMEV" | pmatch && printf '%s' "$HOMEPATH" | pmatch && printf '%s' "$EMAILV" | pmatch \
+  && pass "PRE pmatch finds every sample (positive sentinel)" || fail "PRE pmatch cannot find a sample"
+printf 'nothing personal here' | pmatch && fail "PRE pmatch matches a harmless string" || pass "PRE pmatch rejects a harmless string"
+
+# ---- scratch repo --------------------------------------------------------
+mkdir -p "$W/repo/scripts"
+cp "$SCRIPT" "$W/guard.orig"
+cp "$W/guard.orig" "$W/repo/scripts/check-no-personal-data.sh"
+cp "$BUILDER" "$W/repo/scripts/build-public-archive"
+cp "$W/patterns" "$W/repo/scripts/personal-patterns.private"   # untracked: never in the archive
+cd "$W/repo"
+git init -q; git config user.email proof@localhost; git config user.name proof
+git add scripts/check-no-personal-data.sh scripts/build-public-archive; git commit -qm base
+
+TAIL=$(openssl rand -hex 24)
+P1=sk; P2=ant
+CANARY="$P1-$P2-api03-$TAIL"
+
+run() { set +e; OUT=$(bash scripts/check-no-personal-data.sh 2>&1); RC=$?; set -e; }
+show() { printf '%s\n' "$OUT" | sed "s/$TAIL/<CANARY-TAIL>/g" | sed 's/^/    /'; }
+# No pipe (REL-4.S7j): under pipefail a `printf | grep -q` can report the
+# writer's SIGPIPE instead of grep's match, and `! has X` would then pass
+# with X present. A here-string has no writer to lose.
+has() { grep -qF -- "$1" <<< "$OUT"; }
+# S18: nothing the guard prints matches ANY personal pattern.
+masked() {
+  if printf '%s' "$OUT" | pmatch; then fail "S18 $1: THE GUARD PRINTED A PERSONAL VALUE"
+  else pass "S18 $1: no personal value in the output"; fi
+}
+drop() { for p in "$@"; do git rm -rq --cached -f --ignore-unmatch -- "$p"; rm -rf -- "$p"; done; }
+reset_guard() { cp "$W/guard.orig" scripts/check-no-personal-data.sh; }
+# addkey <path> <line>: key that exact line in the guard under test, in BOTH
+# the REL-4.S7h format sha256(path NUL line) and the older sha256(path|line),
+# so a case measures the same exemption against either guard.
+addkey() {
+  python3 - "$1" "$2" <<'PY'
+import hashlib, sys
+p, l = sys.argv[1].encode(), sys.argv[2].encode()
+keys = [hashlib.sha256(p + b"\0" + l).hexdigest(), hashlib.sha256(p + b"|" + l).hexdigest()]
+g = "scripts/check-no-personal-data.sh"
+s = open(g).read()
+anchor = "\nLINE_KEYS='\n"
+assert anchor in s, "no LINE_KEYS anchor"
+s = s.replace(anchor, anchor + "".join("%s %s\n" % (k, sys.argv[1]) for k in keys), 1)
+open(g, "w").write(s)
+PY
+}
+
+# S1 / S2
+printf 'token = "%s"\n' "$CANARY" > planted.txt
+git add planted.txt
+run; show
+[ "$RC" = 1 ] && pass "S1a rc=1 on a planted secret" || fail "S1a rc=$RC on a planted secret (want 1)"
+has 'SECRET-SHAPED: planted.txt:1: <redacted kind=anthropic-api-key>' \
+  && pass "S1b named by file:line and kind" || fail "S1b not named by file:line and kind"
+case "$OUT" in *"$TAIL"*) fail "S2a THE GUARD PRINTED THE SECRET'S VALUE" ;; *) pass "S2a the secret's value is not in the output" ;; esac
+case "$OUT" in
+  *"${TAIL:0:12}"*|*"${TAIL:12:12}"*|*"${TAIL:24:12}"*|*"${TAIL:36:12}"*) fail "S2b a 12-char piece of the secret's tail is in the output" ;;
+  *) pass "S2b no 12-char piece of it either" ;;
+esac
+# S3
+drop planted.txt
+printf 'token = "not a secret"\n' > planted.txt; git add planted.txt
+run
+[ "$RC" = 0 ] && pass "S3 rc=0 on a harmless line" || { fail "S3 rc=$RC on a harmless line (want 0)"; show; }
+drop planted.txt
+
+# ---- REL-4.S7h archive cases -------------------------------------------
+# A1 — names. The content is harmless; only the PATH carries the value.
+mkdir -p "docs/$NAMEV"; printf 'harmless\n' > "docs/$NAMEV/readme.txt"; git add "docs/$NAMEV/readme.txt"
+run; show
+[ "$RC" = 1 ] && has "PERSONAL-DATA: docs/<personal>" && has "/readme.txt: path" \
+  && pass "A1a a DIRECTORY name carrying the value is caught" || fail "A1a directory name: rc=$RC (want 1, path named)"
+masked A1a
+drop docs
+printf 'harmless\n' > "notes-$NAMEV.txt"; git add "notes-$NAMEV.txt"
+run
+[ "$RC" = 1 ] && has "PERSONAL-DATA: notes-<personal>" && has ".txt: path" \
+  && pass "A1b a FILE name carrying the value is caught" || fail "A1b file name: rc=$RC (want 1)"
+drop "notes-$NAMEV.txt"
+mkdir -p docs/plain; printf 'harmless\n' > docs/plain/readme.txt; git add docs/plain/readme.txt
+run
+[ "$RC" = 0 ] && pass "A1c opposed: harmless names: rc 0" || { fail "A1c harmless names: rc=$RC (want 0)"; show; }
+drop docs
+
+# A2 — export-subst: the leak exists only in the ARCHIVE, made from commit
+# metadata at archive time.
+printf 'built by $Format:%%ae$\n' > zz-subst.txt
+printf '/zz-subst.txt export-subst\n' > .gitattributes
+git add zz-subst.txt .gitattributes
+git -c user.email="$EMAILV" commit -qm subst
+if git show HEAD:zz-subst.txt | pmatch; then fail "A2-pre the SOURCE blob already matches (A2 would prove nothing)"
+else pass "A2-pre the source blob has no personal match"; fi
+if git archive HEAD zz-subst.txt | tar -xOf - zz-subst.txt | pmatch; then pass "A2-pre the ARCHIVE expands it to a personal value"
+else fail "A2-pre the archive does not expand to a personal value (A2 would prove nothing)"; fi
+run; show
+[ "$RC" = 1 ] && has "EXPORT-SUBST: zz-subst.txt" \
+  && pass "A2a export-subst is refused" || fail "A2a export-subst: rc=$RC (want 1, EXPORT-SUBST named)"
+masked A2a
+# A2b — allow-list the path, so only the content scan can fire.
+python3 - <<'PY'
+g = "scripts/check-no-personal-data.sh"; s = open(g).read()
+a = "\nEXPORT_SUBST_ALLOW='\n"
+s = s.replace(a, a + "zz-subst.txt\n", 1) if a in s else s
+open(g, "w").write(s)
+PY
+run; show
+[ "$RC" = 1 ] && has "PERSONAL-DATA: zz-subst.txt:1:" && ! has "EXPORT-SUBST" \
+  && pass "A2b allow-listed: the EXPANDED email is caught by the content scan" || fail "A2b expanded content: rc=$RC (want 1, zz-subst.txt:1, no EXPORT-SUBST)"
+masked A2b
+git commit -q --allow-empty -m 'harmless author'   # proof@localhost
+run
+[ "$RC" = 0 ] && pass "A2c opposed: allow-listed, harmless author: rc 0" || { fail "A2c allow-listed, harmless author: rc=$RC (want 0)"; show; }
+reset_guard
+# A2d — the .gitattributes that sets it is itself export-ignored.
+printf '/zz-subst.txt export-subst\n.gitattributes export-ignore\n' > .gitattributes; git add .gitattributes; git commit -qm hidden-attr
+run
+[ "$RC" = 1 ] && has "EXPORT-SUBST: zz-subst.txt has the export-subst attribute" \
+  && pass "A2d an export-ignored .gitattributes still cannot hide export-subst" || { fail "A2d hidden attribute: rc=$RC (want 1)"; show; }
+git rm -q zz-subst.txt .gitattributes; git commit -qm rm-subst
+run
+[ "$RC" = 0 ] && pass "A2e opposed: export-subst gone: rc 0" || { fail "A2e after removal: rc=$RC (want 0)"; show; }
+
+# A3 — UTF-16 / UTF-32.
+u16() { python3 -c 'import sys; sys.stdout.buffer.write(sys.argv[2].encode(sys.argv[1]))' "$1" "$2"; }
+{ printf '\xff\xfe'; u16 utf-16-le "see $HOMEPATH"; } > utf16le.txt; git add utf16le.txt
+run; show
+[ "$RC" = 1 ] && has "PERSONAL-DATA: utf16le.txt#utf-16-le" && pass "A3a UTF-16LE (BOM) caught" || fail "A3a UTF-16LE: rc=$RC (want 1)"
+masked A3a
+drop utf16le.txt
+u16 utf-16-be "see $HOMEPATH" > utf16be.txt; git add utf16be.txt
+run
+[ "$RC" = 1 ] && has "PERSONAL-DATA: utf16be.txt#utf-16-be" && pass "A3b UTF-16BE (no BOM) caught" || { fail "A3b UTF-16BE: rc=$RC (want 1)"; show; }
+drop utf16be.txt
+u16 utf-32-le "see $HOMEPATH" > utf32.txt; git add utf32.txt
+run
+[ "$RC" = 1 ] && has "PERSONAL-DATA: utf32.txt#utf-32-le" && pass "A3c UTF-32LE caught" || { fail "A3c UTF-32LE: rc=$RC (want 1)"; show; }
+drop utf32.txt
+{ printf '\xff\xfe'; u16 utf-16-le "see nothing personal"; } > utf16ok.txt; git add utf16ok.txt
+run
+[ "$RC" = 0 ] && pass "A3d opposed: harmless UTF-16: rc 0" || { fail "A3d harmless UTF-16: rc=$RC (want 0)"; show; }
+drop utf16ok.txt
+
+# A4 — compressed and container members.
+printf 'see %s\n' "$HOMEPATH" | gzip -c > blob.gz; git add blob.gz
+run; show
+[ "$RC" = 1 ] && has "PERSONAL-DATA: blob.gz!gunzip:1:" && pass "A4a gzip caught" || fail "A4a gzip: rc=$RC (want 1)"
+masked A4a
+drop blob.gz
+python3 - "$HOMEPATH" "$NAMEV" <<'PY'
+import io, sys, tarfile, zipfile, gzip
+home, name = sys.argv[1], sys.argv[2]
+with zipfile.ZipFile("content.zip", "w", zipfile.ZIP_DEFLATED) as z: z.writestr("inner/notes.txt", "see %s\n" % home)
+with zipfile.ZipFile("named.zip", "w", zipfile.ZIP_DEFLATED) as z: z.writestr("inner/%s.txt" % name, "harmless\n")
+b = io.BytesIO()
+with tarfile.open(fileobj=b, mode="w") as t:
+    data = ("see %s\n" % home).encode(); ti = tarfile.TarInfo("deep/notes.txt"); ti.size = len(data)
+    t.addfile(ti, io.BytesIO(data))
+open("nested.tar.gz", "wb").write(gzip.compress(b.getvalue()))
+with zipfile.ZipFile("ok.zip", "w", zipfile.ZIP_DEFLATED) as z: z.writestr("inner/notes.txt", "harmless\n")
+PY
+git add content.zip
+run
+[ "$RC" = 1 ] && has "PERSONAL-DATA: content.zip!inner/notes.txt:1:" && pass "A4b zip member content caught" || { fail "A4b zip content: rc=$RC (want 1)"; show; }
+drop content.zip; git add named.zip
+run
+[ "$RC" = 1 ] && has "PERSONAL-DATA: named.zip!inner/<personal>" && has ".txt: path" && pass "A4c zip member NAME caught" || { fail "A4c zip member name: rc=$RC (want 1)"; show; }
+drop named.zip; git add nested.tar.gz
+run
+[ "$RC" = 1 ] && has "PERSONAL-DATA: nested.tar.gz!gunzip!deep/notes.txt:1:" && pass "A4d tar inside gzip caught" || { fail "A4d tar.gz: rc=$RC (want 1)"; show; }
+drop nested.tar.gz; git add ok.zip
+printf 'harmless\n' | gzip -c > ok.gz; git add ok.gz
+run
+[ "$RC" = 0 ] && pass "A4e opposed: harmless zip and gzip: rc 0" || { fail "A4e harmless archives: rc=$RC (want 0)"; show; }
+drop ok.zip ok.gz
+
+# ---- REL-4.S7i: the guard's last three holes (REL-4.S7h-I N1, N2, N3) ----
+# allowdecode <key> <member> <reason>: add a DECODE_ALLOW entry to the guard
+# under test. A guard with no DECODE_ALLOW list cannot take one: rc 3.
+allowdecode() {
+  python3 - "$1" "$2" "$3" <<'PY'
+import sys
+g = "scripts/check-no-personal-data.sh"
+s = open(g).read()
+anchor = "\nDECODE_ALLOW='\n"
+if anchor not in s: sys.exit(3)
+s = s.replace(anchor, anchor + "%s\t%s\t%s\n" % tuple(sys.argv[1:4]), 1)
+open(g, "w").write(s)
+PY
+}
+decodekey() { printf '%s' "$OUT" | sed -n "s/.*UNSCANNABLE: $1: does not fully decode.*\[decode-key \([0-9a-f]\{64\}\)\].*/\1/p" | awk 'NR == 1'; }   # awk reads to the end: no SIGPIPE under pipefail
+
+# A11 (N1) a corrupt checksum or a truncated stream: what decodes is scanned,
+# and the member fails closed unless allow-listed, by key, with a reason.
+python3 - "$HOMEPATH" <<'PY'
+import sys, gzip, bz2, lzma, zipfile, io
+home = sys.argv[1]
+bad = ("see %s\n" % home).encode(); ok = b"harmless\n" * 4
+def badcrc_gz(b):
+    g = bytearray(gzip.compress(b)); g[-8] ^= 0xff; return bytes(g)
+def badcheck_xz(b):
+    x = bytearray(lzma.compress(b, check=lzma.CHECK_CRC64))
+    # the CRC64 sits after the block's compressed data: flip bytes until the
+    # stream decodes in full and only the check fails
+    for i in range(12, len(x) - 12):
+        y = bytearray(x); y[i] ^= 1; d = lzma.LZMADecompressor(); out = b""
+        try:
+            out = d.decompress(bytes(y[:i])); d.decompress(bytes(y[i:]))
+        except lzma.LZMAError as e:
+            if out == b and "Corrupt" in str(e): return bytes(y)
+    raise SystemExit("no check byte found")
+open("badcrc.gz", "wb").write(badcrc_gz(bad))
+open("okcrc.gz", "wb").write(badcrc_gz(ok))
+open("badcheck.xz", "wb").write(badcheck_xz(bad))
+open("trunc.bz2", "wb").write(bz2.compress(bad * 50)[:-10])
+z = io.BytesIO()
+with zipfile.ZipFile(z, "w", zipfile.ZIP_STORED) as zf: zf.writestr("inner/notes.txt", bad)
+zb = bytearray(z.getvalue()); i = zb.find(b"PK\x01\x02") + 16; zb[i] ^= 0xff   # central-directory CRC
+open("badcrc.zip", "wb").write(bytes(zb))
+PY
+for f in badcrc.gz:'!gunzip' badcheck.xz:'!unxz' trunc.bz2:'!bunzip2' badcrc.zip:'!inner/notes.txt'; do
+  file=${f%%:*}; m=${f#*:}
+  git add "$file"; run
+  if [ "$RC" = 1 ] && has "PERSONAL-DATA: $file$m:1:" && has "UNSCANNABLE: $file"; then
+    pass "A11 $file: the recovered content is caught AND the member fails closed"
+  else fail "A11 $file: rc=$RC (want 1, PERSONAL-DATA $file$m:1: and UNSCANNABLE)"; show; fi
+  masked "A11 $file"
+  drop "$file"
+done
+git add okcrc.gz; run
+[ "$RC" = 1 ] && has "UNSCANNABLE: okcrc.gz!gunzip: does not fully decode" \
+  && pass "A11o a harmless gzip with a bad CRC still fails closed: rc 1" \
+  || { fail "A11o harmless bad-CRC gzip: rc=$RC (want 1, UNSCANNABLE)"; show; }
+KEY=$(decodekey 'okcrc.gz!gunzip')
+if [ -n "$KEY" ] && allowdecode "$KEY" 'okcrc.gz!gunzip' 'fixture: a deliberately corrupt CRC'; then
+  run
+  [ "$RC" = 0 ] && pass "A11p allow-listed by key with a reason: rc 0" || { fail "A11p allow-listed okcrc.gz: rc=$RC (want 0)"; show; }
+  reset_guard; allowdecode "$KEY" 'okcrc.gz!gunzip' ' '; run
+  [ "$RC" = 2 ] && pass "A11q an allow entry with no reason: rc 2" || { fail "A11q allow entry without reason: rc=$RC (want 2)"; show; }
+  reset_guard; printf 'harmless\n' > other.txt; git add other.txt
+  python3 -c 'import gzip; g=bytearray(gzip.compress(b"harmless too\n")); g[-8]^=0xff; open("okcrc.gz","wb").write(bytes(g))'
+  git add okcrc.gz; allowdecode "$KEY" 'okcrc.gz!gunzip' 'fixture: a deliberately corrupt CRC'; run
+  [ "$RC" = 1 ] && has "UNSCANNABLE: okcrc.gz!gunzip" && pass "A11r the key binds the bytes: changed content, same path: rc 1" \
+    || { fail "A11r stale key still exempts changed bytes: rc=$RC (want 1)"; show; }
+  drop other.txt
+else
+  fail "A11p no decode-key printed, or the guard has no DECODE_ALLOW list"
+fi
+reset_guard; drop okcrc.gz
+
+# A12 (N2) past the depth cap every container kind refuses (rc 1); at a legal
+# depth the same nesting is scanned (caught) or passes (harmless).
+python3 - "$HOMEPATH" <<'PY'
+import sys, gzip, bz2, lzma, zlib, io, tarfile
+home = sys.argv[1]
+def tar1(name, data):
+    b = io.BytesIO()
+    with tarfile.open(fileobj=b, mode="w", format=tarfile.USTAR_FORMAT) as t:
+        ti = tarfile.TarInfo(name); ti.size = len(data); t.addfile(ti, io.BytesIO(data))
+    return b.getvalue()
+wrap = {"gz": gzip.compress, "bz2": bz2.compress, "xz": lzma.compress,
+        "zlib": zlib.compress, "tar": lambda d: tar1("x", d)}
+for k, f in wrap.items():
+    for n, body in ((10, "harmless\n"), (5, "see %s\n" % home), (7, "harmless\n")):
+        d = body.encode()
+        for _ in range(n): d = f(d)
+        open("deep%d.%s" % (n, k), "wb").write(d)
+PY
+for k in gz bz2 xz zlib tar; do
+  git add "deep10.$k"; run
+  [ "$RC" = 1 ] && has "UNSCANNABLE: deep10.$k" && has "nested deeper than 8 levels" \
+    && pass "A12 10-deep $k: refused, rc 1" || { fail "A12 10-deep $k: rc=$RC (want 1, nested deeper than 8)"; show; }
+  drop "deep10.$k"
+  git add "deep5.$k"; run
+  [ "$RC" = 1 ] && has "PERSONAL-DATA: deep5.$k" && ! has "UNSCANNABLE" \
+    && pass "A12o 5-deep $k with a home path: caught by the scan, not by the cap" || { fail "A12o 5-deep $k: rc=$RC (want 1, PERSONAL-DATA)"; show; }
+  masked "A12o $k"
+  drop "deep5.$k"
+  git add "deep7.$k"; run
+  [ "$RC" = 0 ] && pass "A12p 7-deep harmless $k: rc 0 (the cap does not fire below 8)" || { fail "A12p 7-deep $k: rc=$RC (want 0)"; show; }
+  drop "deep7.$k"
+done
+rm -f deep*.gz deep*.bz2 deep*.xz deep*.zlib deep*.tar
+
+# A13 (N3) local attribute sources do not change the artifact. A committed
+# file with a home path, export-ignored only by .git/info/attributes, by
+# core.attributesFile, and by the global attributes file: caught every time,
+# and build-public-archive's bytes equal a fresh clone's `git archive`.
+printf 'see %s\n' "$HOMEPATH" > zz-ia.txt; git add zz-ia.txt; git commit -qm zz-ia
+mkdir -p "$W/xdg/git"; printf '/zz-ia.txt export-ignore\n' > "$W/xdg/git/attributes"
+cp "$W/xdg/git/attributes" "$W/attrfile"
+gitdir=$(git rev-parse --git-dir)
+mkdir -p "$gitdir/info"; cp "$W/attrfile" "$gitdir/info/attributes"
+run
+[ "$RC" = 1 ] && has "PERSONAL-DATA: zz-ia.txt:1:" && pass "A13a .git/info/attributes export-ignore: still caught, rc 1" \
+  || { fail "A13a info/attributes hides the file: rc=$RC (want 1)"; show; }
+masked A13a
+rm -f "$gitdir/info/attributes"; git config core.attributesFile "$W/attrfile"
+run
+[ "$RC" = 1 ] && has "PERSONAL-DATA: zz-ia.txt:1:" && pass "A13b core.attributesFile export-ignore: still caught, rc 1" \
+  || { fail "A13b core.attributesFile hides the file: rc=$RC (want 1)"; show; }
+git config --unset core.attributesFile
+set +e; OUT=$(XDG_CONFIG_HOME="$W/xdg" bash scripts/check-no-personal-data.sh 2>&1); RC=$?; set -e
+[ "$RC" = 1 ] && has "PERSONAL-DATA: zz-ia.txt:1:" && pass "A13c global (XDG) attributes export-ignore: still caught, rc 1" \
+  || { fail "A13c global attributes hide the file: rc=$RC (want 1)"; show; }
+cp "$W/attrfile" "$gitdir/info/attributes"
+rm -rf "$W/fresh"; git clone -q --no-local . "$W/fresh"
+bash scripts/build-public-archive HEAD "$W/built.tar" > /dev/null
+git -C "$W/fresh" archive --format=tar HEAD > "$W/fresh.tar"
+if cmp -s "$W/built.tar" "$W/fresh.tar" && grep -qxF 'zz-ia.txt' <<< "$(tar -tf "$W/built.tar")"; then
+  pass "A13d build-public-archive == a fresh clone's git archive, byte for byte (with info/attributes present)"
+else fail "A13d build-public-archive differs from a fresh clone's git archive"; fi
+rm -f "$gitdir/info/attributes"
+printf 'zz-ia.txt export-ignore\n' > .gitattributes; git add .gitattributes; git commit -qm 'ignore zz-ia (committed)'
+run
+[ "$RC" = 0 ] && pass "A13o opposed: export-ignore COMMITTED in .gitattributes: not shipped, rc 0" \
+  || { fail "A13o committed export-ignore: rc=$RC (want 0)"; show; }
+git rm -q -f zz-ia.txt .gitattributes; git commit -qm 'drop zz-ia'
+
+# ---- REL-4.S7j: the REL-4.S7i-I non-blockers F1, F2, F3 --------------------
+# allowall <member>: allow-list that member by the key the last run printed.
+allowall() {
+  local k; k=$(decodekey "$1")
+  [ -n "$k" ] && allowdecode "$k" "$1" 'fixture: a deliberately corrupt stream'
+}
+python3 - "$HOMEPATH" <<'PY'
+import sys, gzip, bz2, lzma, random
+home = sys.argv[1]
+bad = ("see %s\n" % home).encode(); ok = b"harmless\n" * 4
+def badcrc_gz(b):
+    g = bytearray(gzip.compress(b)); g[-8] ^= 0xff; return bytes(g)
+def trunc_xz(b): return lzma.compress(b)[:-20]
+def trunc_bz(b): return bz2.compress(b)[:-10]
+# F1: a corrupt first stream, then a complete stream; and a complete stream,
+# junk, then a complete stream (`gzip -dc` stops at the junk).
+# xz codes a short input's literals nearly raw, so its second stream goes
+# through a delta filter: the raw bytes must not already carry the value.
+xz_delta = lambda b: lzma.compress(b, filters=[{"id": lzma.FILTER_DELTA, "dist": 1}, {"id": lzma.FILTER_LZMA2}])
+for ext, corrupt, comp in (("gz", badcrc_gz, gzip.compress), ("xz", trunc_xz, xz_delta),
+                           ("bz2", trunc_bz, bz2.compress)):
+    for tag, second in (("bad", bad), ("ok", b"harmless too\n")):
+        d = corrupt(ok * 20) + comp(second)
+        assert home.encode() not in d
+        open("multi-%s.%s" % (tag, ext), "wb").write(d)
+open("junk-bad.gz", "wb").write(gzip.compress(ok) + b"JUNK" + gzip.compress(bad))
+open("junk-ok.gz", "wb").write(gzip.compress(ok) + b"JUNK" + gzip.compress(b"harmless too\n"))
+# F3: bzip2 with a damaged header (the first block's magic) and a block
+# that is not byte-aligned holding the home path; a single-block one; a
+# multi-block one with a corrupt first block; opposing: plain text that
+# starts `BZh5`, and an intact two-block stream.
+r = random.Random(7)
+filler = "".join(r.choice("abcdefghijklmnopqrstuvwxyz \n") for _ in range(120000)).encode()
+two = bz2.compress(filler + bad, 1); twook = bz2.compress(filler + ok, 1)
+def nblocks(d):
+    bits = bin(int.from_bytes(d, "big"))[2:].zfill(len(d) * 8)
+    return bits.count(bin(0x314159265359)[2:].zfill(48))
+assert nblocks(two) >= 2 and home.encode() not in two
+hd = bytearray(two); hd[5] ^= 0xff; open("hdr-bad.bz2", "wb").write(bytes(hd))
+one = bytearray(bz2.compress(ok)); one[5] ^= 0xff; open("hdr-one.bz2", "wb").write(bytes(one))
+mid = bytearray(two); mid[2000] ^= 0xff; open("blk-bad.bz2", "wb").write(bytes(mid))
+open("bzh-text.txt", "wb").write(b"BZh5 is the name of a hash in these notes\nharmless\n")
+open("two-ok.bz2", "wb").write(twook)
+PY
+
+# A14 (F1) an allow-listed corrupt stream does not hide a later complete one.
+for em in gz:gunzip xz:unxz bz2:bunzip2; do
+  ext=${em%%:*}; m="multi-bad.$ext!${em#*:}"
+  git add "multi-bad.$ext"; run
+  if allowall "$m"; then
+    run
+    [ "$RC" = 1 ] && has "PERSONAL-DATA: $m:" && ! has "UNSCANNABLE: multi-bad.$ext" \
+      && pass "A14 $ext: corrupt stream allow-listed, the later stream's home path is still caught" \
+      || { fail "A14 $ext: rc=$RC (want 1, PERSONAL-DATA $m:, allow applied)"; show; }
+    masked "A14 $ext"
+  else fail "A14 $ext: no decode-key printed for $m"; show; fi
+  reset_guard; drop "multi-bad.$ext"
+  mo="multi-ok.$ext${m#multi-bad.$ext}"
+  git add "multi-ok.$ext"; run
+  if allowall "$mo"; then
+    run
+    [ "$RC" = 0 ] && pass "A14o $ext opposed: harmless after the corrupt stream, allow-listed: rc 0" \
+      || { fail "A14o $ext: rc=$RC (want 0)"; show; }
+  else fail "A14o $ext: no decode-key printed for $mo"; show; fi
+  reset_guard; drop "multi-ok.$ext"
+done
+git add junk-bad.gz; run
+[ "$RC" = 1 ] && has "PERSONAL-DATA: junk-bad.gz!gunzip:" \
+  && pass "A14j a gzip member after junk bytes is scanned: rc 1" || { fail "A14j junk then member: rc=$RC (want 1)"; show; }
+masked A14j
+drop junk-bad.gz; git add junk-ok.gz; run
+[ "$RC" = 0 ] && pass "A14k opposed: harmless member after junk: rc 0 (junk is not a failure)" \
+  || { fail "A14k harmless junk then member: rc=$RC (want 0)"; show; }
+drop junk-ok.gz
+
+# A15 (F2) git config in the ENVIRONMENT does not change the artifact.
+printf 'line one\nline two\n' > crlf.txt; git add crlf.txt; git commit -qm crlf
+rm -rf "$W/fresh2"; git clone -q --no-local . "$W/fresh2"
+CLEANENV="env -u GIT_CONFIG_PARAMETERS -u GIT_CONFIG_COUNT -u GIT_CONFIG_GLOBAL -u GIT_CONFIG_SYSTEM -u GIT_CONFIG -u GIT_TEMPLATE_DIR"
+$CLEANENV git -C "$W/fresh2" archive --format=tar HEAD > "$W/ref.tar"
+printf '[tar]\n\tumask = 0\n[core]\n\tautocrlf = true\n' > "$W/envcfg"
+mkdir -p "$W/tmpl"; cp "$W/envcfg" "$W/tmpl/config"
+for c in "P:GIT_CONFIG_PARAMETERS='tar.umask'='0'" "C:GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=core.autocrlf GIT_CONFIG_VALUE_0=true" \
+         "G:GIT_CONFIG_GLOBAL=$W/envcfg" "S:GIT_CONFIG_SYSTEM=$W/envcfg" "T:GIT_TEMPLATE_DIR=$W/tmpl"; do
+  tag=${c%%:*}; vars=${c#*:}
+  # sentinel: the same variable DOES change a plain `git archive` (P, C, G, S),
+  # or a plain `git init` + archive (T), so the comparison below can fail.
+  if [ "$tag" = T ]; then
+    rm -rf "$W/tbare"; $CLEANENV env $vars git init -q --bare "$W/tbare"
+    printf '%s\n' "$(git rev-parse --path-format=absolute --git-path objects)" > "$W/tbare/objects/info/alternates"
+    $CLEANENV git -C "$W/tbare" archive --format=tar "$(git rev-parse HEAD)" > "$W/sent.tar"
+  else
+    $CLEANENV env $vars git -C "$W/fresh2" archive --format=tar HEAD > "$W/sent.tar"
+  fi
+  cmp -s "$W/sent.tar" "$W/ref.tar" && fail "A15s $tag sentinel: the variable does not change git archive" \
+    || pass "A15s $tag sentinel: the variable changes a plain git archive"
+  $CLEANENV env $vars bash scripts/build-public-archive HEAD "$W/env.tar" > /dev/null || : > "$W/env.tar"
+  cmp -s "$W/env.tar" "$W/ref.tar" && pass "A15 $tag: build-public-archive with it set == a fresh clone's git archive" \
+    || fail "A15 $tag: the environment changed build-public-archive's bytes"
+done
+git rm -q -f crlf.txt; git commit -qm 'drop crlf'
+
+# A16 (F3) a bzip2 stream with a damaged header fails; its intact blocks are
+# recovered and scanned, also behind an allow entry.
+git add hdr-bad.bz2; run
+[ "$RC" = 1 ] && has "PERSONAL-DATA: hdr-bad.bz2!bunzip2:" && has "UNSCANNABLE: hdr-bad.bz2!bunzip2: does not fully decode" \
+  && pass "A16a damaged header: the later block's home path is caught AND the stream fails closed" \
+  || { fail "A16a damaged-header bz2: rc=$RC (want 1, PERSONAL-DATA and UNSCANNABLE)"; show; }
+masked A16a
+if allowall 'hdr-bad.bz2!bunzip2'; then
+  run
+  [ "$RC" = 1 ] && has "PERSONAL-DATA: hdr-bad.bz2!bunzip2:" && ! has "UNSCANNABLE: hdr-bad.bz2" \
+    && pass "A16b allow-listed: the failure is excused, the recovered home path is not" \
+    || { fail "A16b allow-listed damaged-header bz2: rc=$RC (want 1, PERSONAL-DATA only)"; show; }
+else fail "A16b no decode-key printed for hdr-bad.bz2"; fi
+reset_guard; drop hdr-bad.bz2
+git add hdr-one.bz2; run
+[ "$RC" = 1 ] && has "UNSCANNABLE: hdr-one.bz2!bunzip2: does not fully decode" \
+  && pass "A16c a harmless one-block bz2 with a damaged header fails closed: rc 1" \
+  || { fail "A16c harmless damaged-header bz2: rc=$RC (want 1, UNSCANNABLE)"; show; }
+drop hdr-one.bz2; git add blk-bad.bz2; run
+[ "$RC" = 1 ] && has "PERSONAL-DATA: blk-bad.bz2!bunzip2:" && has "UNSCANNABLE: blk-bad.bz2" \
+  && pass "A16d a corrupt first block: the second block's home path is caught" \
+  || { fail "A16d corrupt-block bz2: rc=$RC (want 1, PERSONAL-DATA and UNSCANNABLE)"; show; }
+masked A16d
+drop blk-bad.bz2; git add bzh-text.txt two-ok.bz2; run
+[ "$RC" = 0 ] && pass "A16o opposed: text starting BZh5, an intact two-block bz2: rc 0" \
+  || { fail "A16o BZh text / intact bz2: rc=$RC (want 0)"; show; }
+drop bzh-text.txt two-ok.bz2
+rm -f multi-*.gz multi-*.xz multi-*.bz2 junk-*.gz hdr-*.bz2 blk-bad.bz2 two-ok.bz2 bzh-text.txt
+
+# A5 — the key boundary. `keyed.txt` holds a keyed line `see|<name>`; the
+# attack moves it to a file NAMED `keyed.txt|see` holding `<name>`: under
+# sha256(path|line) both are sha256("keyed.txt|see|<name>").
+addkey keyed.txt "see|$NAMEV"
+printf 'see|%s\n' "$NAMEV" > keyed.txt; git add keyed.txt
+run
+[ "$RC" = 0 ] && pass "A5a opposed: the keyed line in its own file: rc 0" || { fail "A5a keyed line: rc=$RC (want 0)"; show; }
+drop keyed.txt
+printf '%s\n' "$NAMEV" > 'keyed.txt|see'; git add 'keyed.txt|see'
+run; show
+[ "$RC" = 1 ] && has "PERSONAL-DATA: keyed.txt|see:1:" && pass "A5b the line moved across the key boundary is caught" || fail "A5b key boundary: rc=$RC (want 1)"
+drop 'keyed.txt|see'
+reset_guard
+
+# A6 — a HOME PATH line can never be keyed into the artifact.
+addkey shipped.txt "see $HOMEPATH"
+printf 'see %s\n' "$HOMEPATH" > shipped.txt; git add shipped.txt
+run; show
+[ "$RC" = 1 ] && has "PERSONAL-DATA: shipped.txt:1:" && pass "A6a a keyed home path still fails" || fail "A6a keyed home path: rc=$RC (want 1)"
+masked A6a
+drop shipped.txt; reset_guard
+
+# A7 — normalisation: fullwidth letters; a zero-width joiner inside the name.
+FW=$(python3 -c 'import sys; print("".join(chr(ord(c)+0xFEE0) if "!"<=c<="~" else c for c in sys.argv[1]))' "$NAMEV")
+ZW=$(python3 -c 'import sys; s=sys.argv[1]; print(s[:2]+"‍"+s[2:])' "$NAMEV")
+printf 'by %s\n' "$FW" > fw.txt; git add fw.txt
+run; show
+[ "$RC" = 1 ] && has "PERSONAL-DATA: fw.txt:1:" && pass "A7a fullwidth name caught" || fail "A7a fullwidth: rc=$RC (want 1)"
+masked A7a
+drop fw.txt
+printf 'by %s\n' "$ZW" > zw.txt; git add zw.txt
+run
+[ "$RC" = 1 ] && has "PERSONAL-DATA: zw.txt:1:" && pass "A7b zero-width-joined name caught" || { fail "A7b zero-width: rc=$RC (want 1)"; show; }
+drop zw.txt
+FWOK=$(python3 -c 'print("".join(chr(ord(c)+0xFEE0) for c in "harmless"))')
+printf 'by %s\n' "$FWOK" > fw.txt; git add fw.txt
+run
+[ "$RC" = 0 ] && pass "A7c opposed: fullwidth harmless: rc 0" || { fail "A7c fullwidth harmless: rc=$RC (want 0)"; show; }
+drop fw.txt
+
+# A8 — two index entries that differ only by case (one file on APFS).
+b1=$(printf 'harmless\n' | git hash-object -w --stdin)
+b2=$(printf 'see %s\n' "$HOMEPATH" | git hash-object -w --stdin)
+git update-index --add --cacheinfo "100644,$b1,cc/Note.txt" --cacheinfo "100644,$b2,cc/note.txt"
+run
+[ "$RC" = 1 ] && has "PERSONAL-DATA: cc/note.txt:1:" && pass "A8a case-colliding entry caught" || { fail "A8a case collision: rc=$RC (want 1)"; show; }
+git rm -q --cached cc/Note.txt cc/note.txt
+
+# A9 — the pattern file is required where it belongs, and must work.
+printf '/private-note.md export-ignore\n' > .gitattributes; printf 'x\n' > private-note.md
+git add .gitattributes private-note.md
+mv scripts/personal-patterns.private "$W/patterns.away"
+run
+[ "$RC" = 2 ] && ! has "check-no-personal-data: clean" && pass "A9a pattern file missing from a private tree: rc 2" || { fail "A9a missing pattern file: rc=$RC (want 2)"; show; }
+mv "$W/patterns.away" scripts/personal-patterns.private
+run
+[ "$RC" = 0 ] && pass "A9b opposed: pattern file present: rc 0" || { fail "A9b pattern file present: rc=$RC (want 0)"; show; }
+printf 'sample\tname\tnothing-that-matches\n' >> scripts/personal-patterns.private
+run
+[ "$RC" = 2 ] && pass "A9c a sample its patterns cannot find: rc 2" || { fail "A9c broken sample: rc=$RC (want 2)"; show; }
+cp "$W/patterns" scripts/personal-patterns.private
+drop .gitattributes private-note.md
+
+# A10 — the published guard states none of the identifiers it protects.
+if pmatch < "$W/guard.orig"; then fail "A10 the guard under test carries a personal literal"
+else pass "A10 the guard under test carries no personal literal"; fi
+
+# ---- S11-S17 (REL-4.S7g), now against the archive -----------------------
+printf 'a\0b\nsee %s\n' "$HOMEPATH" > bin.dat; git add bin.dat
+run; show
+[ "$RC" = 1 ] && has "PERSONAL-DATA: bin.dat:2:" && pass "S11a NUL-byte file: caught at bin.dat:2" || fail "S11a NUL-byte file: rc=$RC (want 1)"
+masked S11a
+drop bin.dat
+printf 'a\0b\nharmless\n' > bin.dat; git add bin.dat
+run
+[ "$RC" = 0 ] && pass "S11b opposed: NUL-byte file with no hit: rc 0" || { fail "S11b NUL-byte file with no hit: rc=$RC (want 0)"; show; }
+drop bin.dat
+
+printf 'note.txt binary\n' > .gitattributes
+printf 'see %s\n' "$HOMEPATH" > note.txt
+git add .gitattributes note.txt
+if [ -z "$(git grep -I -l -e see -- note.txt || true)" ] && [ -n "$(git grep -a -l -e see -- note.txt || true)" ]; then
+  pass "S12-pre git treats note.txt as binary under the attribute"
+else fail "S12-pre the attribute did not make note.txt binary"; fi
+run
+[ "$RC" = 1 ] && has "PERSONAL-DATA: note.txt:1:" && pass "S12a binary attribute: caught" || { fail "S12a binary attribute: rc=$RC (want 1)"; show; }
+printf 'harmless\n' > note.txt; git add note.txt
+run
+[ "$RC" = 0 ] && pass "S12b opposed: binary attribute, no hit: rc 0" || { fail "S12b: rc=$RC (want 0)"; show; }
+drop note.txt .gitattributes
+
+ln -s "$HOMEPATH" lnk; git add lnk
+run; show
+[ "$RC" = 1 ] && has "PERSONAL-DATA: lnk: link target" && pass "S13a symlink to a home path caught" || fail "S13a symlink: rc=$RC (want 1)"
+masked S13a
+drop lnk
+ln -s /tmp/harmless-target lnk; git add lnk
+run
+[ "$RC" = 0 ] && pass "S13b opposed: symlink to a harmless target: rc 0" || { fail "S13b: rc=$RC (want 0)"; show; }
+drop lnk
+
+F1=FA; F2=KE
+printf 'token = "%s" # not %s%s\n' "$CANARY" "$F1" "$F2" > fake.txt; git add fake.txt
+run
+[ "$RC" = 1 ] && has "SECRET-SHAPED: fake.txt:1: <redacted kind=anthropic-api-key>" \
+  && pass "S14a a real-shaped key beside FAKE is caught" || fail "S14a: rc=$RC (want 1)"
+case "$OUT" in *"$TAIL"*) fail "S14b THE GUARD PRINTED THE SECRET'S VALUE" ;; *) pass "S14b its value is not printed" ;; esac
+printf 'token = "not a key" # %s%s\n' "$F1" "$F2" > fake.txt; git add fake.txt
+run
+[ "$RC" = 0 ] && pass "S14c opposed: FAKE with no key-shaped value: rc 0" || { fail "S14c: rc=$RC (want 0)"; show; }
+drop fake.txt
+
+addkey once.txt "by $NAMEV"
+printf 'by %s\n' "$NAMEV" > once.txt; git add once.txt
+run
+[ "$RC" = 0 ] && pass "S15a opposed: one keyed line: rc 0" || { fail "S15a: rc=$RC (want 0)"; show; }
+printf 'by %s\n' "$NAMEV" >> once.txt; git add once.txt
+run
+[ "$RC" = 1 ] && has "PERSONAL-DATA: once.txt:2:" && pass "S15b an exact second copy of a keyed line is caught" || { fail "S15b: rc=$RC (want 1)"; show; }
+drop once.txt; reset_guard
+
+REALGIT=$(command -v git)
+mkdir -p "$W/shim"
+printf '#!/usr/bin/env bash\nfor a in "$@"; do if [ -n "${FAILGIT:-}" ] && [ "$a" = "$FAILGIT" ]; then echo "shim: forced git $a error" >&2; exit 128; fi; done\nexec %q "$@"\n' "$REALGIT" > "$W/shim/git"
+chmod +x "$W/shim/git"
+for sub in grep archive; do
+  set +e; OUT=$(FAILGIT=$sub PATH="$W/shim:$PATH" bash scripts/check-no-personal-data.sh 2>&1); RC=$?; set -e
+  [ "$RC" = 2 ] && ! has 'check-no-personal-data: clean' \
+    && pass "S16 an erroring git $sub: rc 2, not clean" || { fail "S16 erroring git $sub: rc=$RC (want 2)"; show; }
+done
+set +e; OUT=$(PATH="$W/shim:$PATH" bash scripts/check-no-personal-data.sh 2>&1); RC=$?; set -e
+[ "$RC" = 0 ] && pass "S16c opposed: the shim passing everything through: rc 0" || { fail "S16c: rc=$RC (want 0)"; show; }
+
+printf 'see %s\n' "$HOMEPATH" > committed.txt; git add committed.txt; git commit -qm leak
+printf 'harmless\n' > committed.txt; git add committed.txt
+run
+[ "$RC" = 1 ] && has "PERSONAL-DATA: committed.txt:1:" && has "(in: HEAD)" \
+  && pass "S17a a committed line gone from worktree+index is caught in HEAD" || { fail "S17a: rc=$RC (want 1, in HEAD)"; show; }
+git commit -qm unleak
+run
+[ "$RC" = 0 ] && pass "S17b opposed: once HEAD no longer carries it: rc 0" || { fail "S17b: rc=$RC (want 0)"; show; }
+git rm -q committed.txt; git commit -qm rm
+
+# ---- [real] S4-S10: this repository's own files -------------------------
+if (( ! REAL )); then
+  skip "S4-S10 need the real pattern file (absent: public tree)"
+else
+  README_SRC="$HERE/../README.md"
+  BYL=$(python3 - "$README_SRC" "$W/patterns" <<'PY'
+import re, sys
+pats = [l.rstrip("\n").split("\t")[2] for l in open(sys.argv[2]) if l.startswith("personal\t")]
+for i, l in enumerate(open(sys.argv[1], encoding="utf-8"), 1):
+    if any(re.search(p, l, re.I) for p in pats): print(i); break
+PY
+)
+  [ -n "$BYL" ] && pass "S4-pre README.md has a keyed (byline) line" || fail "S4-pre README.md has no personal line (S6 would prove nothing)"
+  cp "$README_SRC" README.md; printf 'see %s\n' "$HOMEPATH" >> README.md; N=$(wc -l < README.md | tr -d ' ')
+  git add README.md
+  run
+  [ "$RC" = 1 ] && has "PERSONAL-DATA: README.md:$N:" && pass "S4 home path in README.md caught at :$N" || { fail "S4: rc=$RC (want 1)"; show; }
+  cp "$README_SRC" README.md; sed -i.bak "${BYL}s|\$| $HOMEPATH|" README.md; rm -f README.md.bak; git add README.md
+  run
+  [ "$RC" = 1 ] && has "PERSONAL-DATA: README.md:$BYL:" && pass "S5 home path riding the byline line caught" || { fail "S5: rc=$RC (want 1)"; show; }
+  cp "$README_SRC" README.md; git add README.md
+  run
+  [ "$RC" = 0 ] && pass "S6 opposed: README.md with the byline kept: rc 0" || { fail "S6: rc=$RC (want 0)"; show; }
+  SBYL=$(sed -n "${BYL}p" README.md)
+  printf '%s\n' "$SBYL" >> README.md; N=$(wc -l < README.md | tr -d ' '); git add README.md
+  run
+  [ "$RC" = 1 ] && has "PERSONAL-DATA: README.md:$N:" && pass "S15c a second copy of the byline is caught at :$N" || { fail "S15c: rc=$RC (want 1)"; show; }
+  cp "$README_SRC" README.md; git add README.md
+
+  # The ships/ignored oracle: check-public-tree's INTERNAL_PATHS (written
+  # independently of .gitattributes and of this guard).
+  INTERNAL=$(awk "/^INTERNAL_PATHS='/{f=1;next} f&&/^'/{f=0} f&&NF" "$HERE/check-public-tree.sh")
+  ships() { ! grep -qxF -- "$1" <<< "$INTERNAL"; }
+  REPO_SRC="$HERE/.."
+  FORMER=(
+    BUILDING.md R3.S2.0.hub-inspect.md R3.S2.0.hub-report.md apps/tui/HANDOFF.md
+    cli/src/launchd.rs cli/src/jobs.rs services/soup-backup.toml
+    services/threads/scripts/build-threads.sh
+    docs/ACCOUNT-EMAIL-ID.md docs/ASSUMPTIONS-LOG.md docs/GAP-AUDIT.md
+    docs/MESSAGING-ORCHESTRATION.md docs/PENDING-PROMISES.md
+    docs/PROTOLEDGER-INTEGRATION.md docs/STRUCTURED-OUTPUT.md
+    docs/THREAD-LEDGER.md docs/THREAD-LOAD-LATENCY.md
+    docs/THREADS-DASHBOARD-REVIEW.md docs/TUI-SUBAGENTS.md
+    docs/build-target-size.md docs/runbook-r5s3-hosts-all.md
+    libs/env/tests/hosts_all.rs apps/tui/tests/it/designs_165.rs
+    apps/tui/tests/it/light_global_0205.rs apps/tui/tests/it/review_165.rs
+    NOTICE libs/soup/src/scrub.rs libs/soup/tests/it/scrub.rs
+    scripts/install_conformance_test.sh
+    scripts/check-no-personal-data.sh
+  )
+  ORIG="$W/orig"; mkdir -p "$ORIG"
+  cp "$REPO_SRC/.gitattributes" .gitattributes; git add .gitattributes
+  nships=0; nign=0
+  for f in "${FORMER[@]}"; do
+    [ "$f" = scripts/check-no-personal-data.sh ] && src="$W/guard.orig" || src="$REPO_SRC/$f"
+    if [ ! -f "$src" ]; then fail "S7-pre $f missing from the source repo"; continue; fi
+    mkdir -p "$(dirname "$f")" "$ORIG/$(dirname "$f")"
+    cp "$src" "$f"; cp "$src" "$ORIG/$f"; git add "$f"
+    if ships "$f"; then nships=$((nships + 1)); else nign=$((nign + 1)); fi
+  done
+  [ "$nships" -gt 0 ] && [ "$nign" -gt 0 ] && pass "S7-pre both regimes populated: $nships ship, $nign export-ignored" \
+    || fail "S7-pre a regime is empty ($nships ship, $nign ignored)"
+  run
+  [ "$RC" = 0 ] && pass "S7 rc=0 on all ${#FORMER[@]} former whole-file exemptions as they stand" \
+    || { fail "S7 rc=$RC on the former exemptions as they stand (want 0)"; show; }
+  for f in "${FORMER[@]}"; do
+    [ -f "$ORIG/$f" ] || continue
+    if ships "$f"; then want=1; tag=ships; else want=0; tag="export-ignored, not in the artifact"; fi
+    # S8
+    printf '\nsee %s\n' "$HOMEPATH" >> "$f"; N=$(wc -l < "$f" | tr -d ' '); git add "$f"
+    run
+    if [ "$RC" = "$want" ] && { [ "$want" = 0 ] || has "PERSONAL-DATA: $f:$N:"; }; then pass "S8 $f ($tag): home path rc $want"
+    else fail "S8 $f ($tag): rc=$RC (want $want)"; show | tail -n 3; fi
+    cp "$ORIG/$f" "$f"
+    # S9 — a secret fails ANYWHERE in the tree, shipped or not.
+    printf '\ntoken = "%s"\n' "$CANARY" >> "$f"; N=$(wc -l < "$f" | tr -d ' '); git add "$f"
+    run
+    case "$OUT" in *"$TAIL"*) fail "S9 $f: THE GUARD PRINTED THE SECRET'S VALUE" ;; esac
+    if [ "$RC" = 1 ] && has "SECRET-SHAPED: $f"; then pass "S9 $f: secret caught"
+    else fail "S9 $f: rc=$RC (want 1)"; fi
+    cp "$ORIG/$f" "$f"; git add "$f"
+    # S10 — a home path appended to the first personal line.
+    L=$(python3 - "$f" "$W/patterns" <<'PY'
+import re, sys
+pats = [l.rstrip("\n").split("\t")[2] for l in open(sys.argv[2]) if l.startswith("personal\t")]
+for i, l in enumerate(open(sys.argv[1], "rb"), 1):
+    if any(re.search(p, l.decode("latin-1"), re.I) for p in pats): print(i); break
+PY
+)
+    if [ -n "$L" ]; then
+      sed -i.bak "${L}s|\$| $HOMEPATH|" "$f"; rm -f "$f.bak"; git add "$f"
+      run
+      if [ "$RC" = "$want" ] && { [ "$want" = 0 ] || has "PERSONAL-DATA: $f:$L:"; }; then pass "S10 $f ($tag): home path on personal line :$L rc $want"
+      else fail "S10 $f ($tag): rc=$RC on :$L (want $want)"; fi
+      cp "$ORIG/$f" "$f"; git add "$f"
+    fi
+  done
+  run
+  [ "$RC" = 0 ] && pass "S7-post restored tree rc=0" || { fail "S7-post restored tree rc=$RC (want 0)"; show; }
+fi
+
+if [ "$FAILS" -ne 0 ]; then
+  echo "test-check-no-personal-data: $FAILS FAILED"
+  finish 1
+fi
+echo "test-check-no-personal-data: all cases held"
+finish 0

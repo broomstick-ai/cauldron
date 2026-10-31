@@ -1,0 +1,124 @@
+#!/usr/bin/env bash
+# test-live-restart-guard — the conformance test for scripts/lib/live-restart-guard.sh
+# (REL-4.S4b, for REL-4.S4-I F2).
+#
+#   scripts/test-live-restart-guard [CAULDRON_BINARY]
+#
+# F2: REL-4.S4 rewrote LIVE_ROOT to a placeholder home that exists on no
+# machine, so every read of "his ledger" answered no-ledger/no-acts and the
+# guard passed vacuously in all three proofs that source it. Three cases:
+#
+#   A  DERIVATION. Sourced under a repointed HOME, LIVE_ROOT is the passwd
+#      home's .cauldron — read here with python's `pwd` module, a different
+#      instrument from the shell expansion the lib uses — and NOT the repointed
+#      HOME's, and it exists on this machine.
+#   B  THE RED. LIVE_ROOT pointed at a live-looking SCRATCH root whose ledger
+#      holds an act on `threads` by a supervisor rooted at OUR proof root: the
+#      guard's "no act ... was performed by a supervisor OF OURS" assertions
+#      must FAIL.
+#   C  THE OPPOSITE. The same scratch root, the same act, by a supervisor
+#      rooted somewhere else: every assertion of the guard passes.
+#
+# B and C are the same code path with one field changed, so a guard that
+# always fails (or never does) fails one of them. Only scratch roots under a
+# mktemp dir are written; the operator's ~/.cauldron is only stat'ed (case A)
+# and read through `cauldron supervisions` by the guard itself, read-only.
+#
+# Exits 0 only if every case held.
+set -euo pipefail
+# REL-4.S7i: bash 3.2 (this machine's /bin/bash) exits 0 from a `set -u`
+# abort under `set -e` when an EXIT trap is set. Every deliberate `exit`
+# marks itself; the EXIT trap ends in __abort_guard, which turns an UNMARKED
+# exit whose status reads 0 into 2.
+__deliberate=
+exit() { local s=$?; __deliberate=1; builtin exit "${1:-$s}"; }
+__abort_guard() {
+  if [ -z "$__deliberate" ] && [ "${__st:-0}" -eq 0 ]; then
+    echo "$(basename "$0"): ABORTED (set -e/-u abort; not a pass)" >&2; builtin exit 2
+  fi
+}
+
+HERE=$(cd "$(dirname "$0")" && pwd)
+REPO=$(cd "$HERE/.." && pwd)
+LIB=$HERE/lib/live-restart-guard.sh
+CAULDRON=${1:-$REPO/target/debug/cauldron}
+[ -x "$CAULDRON" ] || { echo "test-live-restart-guard: no cauldron binary at $CAULDRON" >&2; exit 2; }
+W=$(mktemp -d "${TMPDIR:-/tmp}/test-live-restart-guard.XXXXXX")
+W=$(cd "$W" && pwd -P)
+trap '__st=$?; rm -rf "$W"; __abort_guard' EXIT
+
+FAILS=0
+pass() { echo "[PASS] $1"; }
+fail() { echo "[FAIL] $1"; FAILS=$((FAILS + 1)); }
+
+# ── A. derivation ──────────────────────────────────────────────────────────
+PW_HOME=$(python3 -c 'import os,pwd;print(pwd.getpwuid(os.getuid()).pw_dir)')
+mkdir -p "$W/elsewhere"
+GOT=$(HOME="$W/elsewhere" bash -c 'source "$1"; printf %s "$LIVE_ROOT"' _ "$LIB")
+echo "A: passwd home (python pwd) = $PW_HOME ; LIVE_ROOT under HOME=$W/elsewhere = $GOT"
+[ "$GOT" = "$PW_HOME/.cauldron" ] && pass "A1 LIVE_ROOT is the passwd home's .cauldron" \
+  || fail "A1 LIVE_ROOT is the passwd home's .cauldron (got '$GOT')"
+[ "$GOT" != "$W/elsewhere/.cauldron" ] && pass "A2 LIVE_ROOT does not follow a repointed HOME" \
+  || fail "A2 LIVE_ROOT followed the repointed HOME"
+[ -d "$GOT" ] && pass "A3 the derived live root exists on this machine (so the guard can see it)" \
+  || fail "A3 the derived live root '$GOT' does not exist on this machine"
+
+# ── B / C. the guard pointed at a live-looking scratch root ────────────────
+# $1 = label, $2 = the `by.root` the live record names. Prints the guard's
+# whole output to $W/<label>.out and its FAIL count to $W/<label>.fails.
+run_guard() {
+  local label=$1 actor=$2
+  rm -rf "$W/proof" "$W/live"
+  mkdir -p "$W/proof/data/dev" "$W/live/data/prod"
+  (
+    set +e
+    PROOF_ROOT=$W/proof
+    G_FAILS=0
+    ok()  { echo "  ok   $1"; }
+    bad() { echo "  FAIL $1"; G_FAILS=$((G_FAILS + 1)); }
+    eq()  { if [ "$2" = "$3" ]; then ok "$1"; else bad "$1 (got '$2', want '$3')"; fi; }
+    ne()  { if [ "$2" != "$3" ]; then ok "$1"; else bad "$1 (got '$2', must differ)"; fi; }
+    yes() { if eval "$2"; then ok "$1"; else bad "$1"; fi; }
+    has() { if printf '%s' "$2" | grep -q -- "$3"; then ok "$1"; else bad "$1"; fi; }
+    # shellcheck source=lib/live-restart-guard.sh
+    source "$LIB"
+    LIVE_ROOT=$W/live   # POINTED at the scratch root, after the derivation ran
+    restart_guard_before
+    at=$(date -u +%Y-%m-%dT%H:%M:%S.500000+00:00)
+    rec() { # <env> <service> <act> <why> <by.root>
+      printf '{"at":"%s","env":"%s","service":"%s","act":"%s","why":"%s","version":"t","boot":"","pid":1,"by":{"pid":2,"since":"","commit":"t","root":"%s"},"detail":"test-live-restart-guard"}\n' \
+        "$at" "$1" "$2" "$3" "$4" "$5"
+    }
+    rec dev echo launch requested "$PROOF_ROOT" > "$PROOF_ROOT/data/dev/supervisions.jsonl"
+    rec prod threads stop requested "$actor" > "$LIVE_ROOT/data/prod/supervisions.jsonl"
+    restart_guard_after
+    echo "$G_FAILS" > "$W/$label.fails"
+  ) > "$W/$label.out" 2>&1 || true
+  sed 's/^/    /' "$W/$label.out"
+}
+
+echo "B: live-looking scratch root, the act on threads is OURS"
+run_guard B "$W/proof"
+B_FAILS=$(cat "$W/B.fails" 2>/dev/null || echo missing)
+grep -q "FAIL no act on the operator's \`threads\` was performed by a supervisor OF OURS" "$W/B.out" \
+  && pass "B1 the guard goes RED on an act of ours in the live ledger" \
+  || fail "B1 the guard did not go red on an act of ours (fails=$B_FAILS)"
+grep -q "FAIL and no act on ANY service in his environment was ours either" "$W/B.out" \
+  && pass "B2 and the whole-environment claim goes red too" \
+  || fail "B2 the whole-environment claim did not go red"
+
+echo "C: the same scratch root, the act is someone else's"
+run_guard C "$W/someone-else"
+C_FAILS=$(cat "$W/C.fails" 2>/dev/null || echo missing)
+grep -q "his ledger: exists=true  acts on threads this window=1" "$W/C.out" \
+  && pass "C0 SENTINEL: the guard READ the scratch ledger and saw the one act" \
+  || fail "C0 the guard did not see the scratch ledger's act"
+[ "$C_FAILS" = 0 ] && pass "C1 every guard assertion passes when the act is not ours" \
+  || fail "C1 the guard failed $C_FAILS assertion(s) on an act that is not ours"
+
+if [ "$FAILS" -ne 0 ]; then
+  echo "test-live-restart-guard: $FAILS FAILED"
+  exit 1
+fi
+echo "test-live-restart-guard: all cases held"
+exit  # REL-4.S7i: a fall-through end is a deliberate exit (see __abort_guard)

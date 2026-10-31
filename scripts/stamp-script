@@ -1,0 +1,87 @@
+#!/usr/bin/env bash
+# stamp-script — produce a SCRIPT artifact that states the commit it came from.
+#
+#     scripts/stamp-script <git-worktree> <path-in-worktree> <out-file>
+#
+# WHY THIS EXISTS. Cauldron installs an `[build] artifact` by copying it and
+# reads the version identity OFF THE IMAGE with `stamp_args` (cli/src/main.rs
+# `install_artifact`). A compiled service has a build.rs that bakes its commit
+# in; a shell script has nothing, so a script artifact with no `stamp_args`
+# installs as `unstamped-<content hash>` and the registry's COMMIT column is
+# empty. That is how soup-backup's health fix (harness 0232d4f5) went live as
+# `unstamped-98b47d1e2adfe5de` (r42 SB-1): the bytes were exactly 0232d4f5's,
+# and nothing anywhere could say so.
+#
+# WHAT IT DOES. Reads <path-in-worktree> from <git-worktree>'s working tree,
+# and writes <out-file> = that script with ONE verb injected right after its
+# shebang line:
+#
+#     <out-file> --build-stamp   ->  commit=<sha> provenance=git dirty=<0|1> epoch=<n> source=<path>
+#
+# which is the format `threads --build-stamp` and `cauldron --build-stamp`
+# print and `parse_stamp` reads. Every other byte is the worktree's, unchanged,
+# so the payload of the installed image is still byte-for-byte the commit's
+# file (strip lines 2-3 to compare).
+#
+#   commit = `git rev-parse HEAD` of the worktree.
+#   dirty  = 1 when `git status --porcelain --untracked-files=normal` over the
+#            WHOLE worktree prints anything — the same rule cauldron's own
+#            `git_dirty` applies to a cargo build, for the same reason. A git
+#            that cannot answer is a REFUSAL, never read as clean.
+#   epoch  = the commit's committer time.
+#
+# Refuses (exit 2, nothing written): a source with no `#!` first line, a
+# source that is already stamped, an <out-file> inside the worktree (it would
+# make the tree it is stamping dirty). After writing, it RUNS the output with
+# --build-stamp and refuses (exit 3, output removed) unless the line read back
+# is exactly the one it meant to write — the end state, not the writer's word.
+set -euo pipefail
+
+die() { echo "stamp-script: $*" >&2; exit 2; }
+
+[ $# -eq 3 ] || die "usage: stamp-script <git-worktree> <path-in-worktree> <out-file>"
+wt="$1"; rel="$2"; out="$3"
+
+[ -d "$wt" ] || die "worktree $wt is not a directory"
+case "$out" in /*) ;; *) die "out-file must be absolute: $out" ;; esac
+src="$wt/$rel"
+[ -f "$src" ] || die "no file at $src"
+
+top="$(git -C "$wt" rev-parse --show-toplevel 2>/dev/null)" || die "$wt is not a git worktree"
+case "$(cd "$(dirname "$out")" 2>/dev/null && pwd -P)/" in
+  "$(cd "$top" && pwd -P)/"*) die "out-file $out is inside the worktree it stamps; that would dirty it" ;;
+esac
+
+commit="$(git -C "$wt" rev-parse HEAD 2>/dev/null)" || die "git could not name HEAD in $wt"
+epoch="$(git -C "$wt" show -s --format=%ct HEAD 2>/dev/null)" || die "git could not read HEAD's time in $wt"
+porcelain="$(git -C "$wt" status --porcelain --untracked-files=normal 2>/dev/null)" \
+  || die "git could not say whether $wt is dirty; refusing rather than reading that as clean"
+dirty=0; [ -n "$porcelain" ] && dirty=1
+
+first="$(head -n 1 "$src")"
+case "$first" in '#!'*) ;; *) die "$src does not start with a #! line; nothing to inject after" ;; esac
+marker='# cauldron-build-stamp:'
+grep -qF "$marker" "$src" && die "$src is already stamped"
+
+stamp="commit=$commit provenance=git dirty=$dirty epoch=$epoch source=$rel"
+
+mkdir -p "$(dirname "$out")"
+tmp="$(dirname "$out")/.$(basename "$out").stamping.$$"
+trap 'rm -f "$tmp"' EXIT
+{
+  printf '%s\n' "$first"
+  printf '%s injected by cauldron scripts/stamp-script; every other line is %s at %s\n' "$marker" "$rel" "$commit"
+  printf 'if [ "${1:-}" = "--build-stamp" ]; then printf '"'"'%%s\\n'"'"' '"'"'%s'"'"'; exit 0; fi\n' "$stamp"
+  tail -n +2 "$src"
+} > "$tmp"
+chmod 0755 "$tmp"
+mv -f "$tmp" "$out"
+trap - EXIT
+
+got="$("$out" --build-stamp 2>/dev/null | head -n 1)" || true
+if [ "$got" != "$stamp" ]; then
+  rm -f "$out"
+  echo "stamp-script: REFUSED: $out --build-stamp printed '$got', expected '$stamp'; output removed" >&2
+  exit 3
+fi
+printf '%s\n' "$stamp"

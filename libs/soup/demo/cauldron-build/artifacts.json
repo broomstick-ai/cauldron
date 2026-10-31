@@ -1,0 +1,77 @@
+{
+ "_note": "The curated environment's artifacts. Every location is a file shipped in the soup crate's dataset; the installer points it at the environment's own copy.",
+ "directories": [
+  {
+   "name": "build notes",
+   "path": "{files}",
+   "claimed_by": [
+    "X-1",
+    "X-7"
+   ]
+  }
+ ],
+ "worktrees": [],
+ "artifacts": [
+  {
+   "id": "ART-1",
+   "handle": "Ledger v1 sketch: dumps, their phases and the rails",
+   "kind": "design",
+   "location": "{files}/ledger-v1-sketch.txt",
+   "made_by": "T-8",
+   "for": "Q-2",
+   "created": "2026-10-30T09:00:00Z",
+   "regions": [
+    "R-3"
+   ]
+  },
+  {
+   "id": "ART-2",
+   "handle": "Where the ripple runtime and the soup stand, and what the release can carry",
+   "kind": "report",
+   "location": "{files}/runtime-assessment.md",
+   "made_by": "operator",
+   "for": "Q-6",
+   "created": "2026-10-30T09:00:00Z",
+   "regions": [
+    "R-2",
+    "R-3"
+   ]
+  },
+  {
+   "id": "ART-3",
+   "handle": "The teaser, shot by shot",
+   "kind": "doc",
+   "location": "{files}/teaser-sequence.md",
+   "made_by": "T-18",
+   "for": "Q-7",
+   "created": "2026-10-30T09:00:00Z",
+   "regions": [
+    "R-5"
+   ]
+  },
+  {
+   "id": "ART-4",
+   "handle": "Install path notes: what a stranger's Mac needs",
+   "kind": "doc",
+   "location": "{files}/install-notes.md",
+   "made_by": "T-19",
+   "for": "T-20",
+   "created": "2026-10-30T09:00:00Z",
+   "regions": [
+    "R-5"
+   ]
+  },
+  {
+   "id": "ART-5",
+   "handle": "Incident: the log wedge, and the fix",
+   "kind": "report",
+   "location": "{files}/incident-log-wedge.md",
+   "made_by": "T-17",
+   "for": "T-17",
+   "created": "2026-10-30T09:00:00Z",
+   "regions": [
+    "R-4"
+   ]
+  }
+ ]
+}

@@ -1,0 +1,72 @@
+# ─────────────────────────────────────────────────────────────────────────────
+#  MECHANISM 2 of the purity gate (0023 `architecture`).
+#
+#  The dependency set (Cargo.toml) closes every door it can, but it cannot
+#  close one: this crate legitimately depends on `chrono` to TYPE the `now`
+#  parameter, and that same dependency hands out `Utc::now()`. Cargo has no way
+#  to take a crate's types and refuse its functions.
+#
+#  Clippy does. `disallowed-methods` resolves a real call path through the type
+#  system, so — unlike grep — it cannot be fooled by a substring in a comment,
+#  by an alias, or by a re-export.
+#
+#  Enforced by `cargo clippy -p tui-render -- -D warnings`, run from this
+#  directory by ./conformance_test.sh, which forces it to fail before it
+#  accepts the green.
+#
+#  If a line below ever needs an exception, it is written as a per-call-site
+#  `#[allow(clippy::disallowed_methods)]` with a comment naming the reason, so
+#  the excuse sits next to the line it excuses. There are none today.
+# ─────────────────────────────────────────────────────────────────────────────
+
+disallowed-methods = [
+    { path = "chrono::Utc::now", reason = "the render layer is handed `now`; it never reads one. A clock inside here means no two frames agree and the golden test stops being able to assert anything." },
+    { path = "chrono::Local::now", reason = "same, and this is the exact leak the ORIGINAL apps/tui/src/render.rs had (it read chrono::Local inside the render path)." },
+    { path = "std::time::Instant::now", reason = "a clock is an input; inputs arrive as parameters." },
+    { path = "std::time::SystemTime::now", reason = "a clock is an input; inputs arrive as parameters." },
+    { path = "std::env::var", reason = "the environment is ambient state the golden test cannot fix." },
+    { path = "std::env::var_os", reason = "the environment is ambient state the golden test cannot fix." },
+    { path = "std::env::vars", reason = "the environment is ambient state the golden test cannot fix." },
+    { path = "std::fs::read", reason = "this crate never reads disk." },
+    { path = "std::fs::read_to_string", reason = "this crate never reads disk." },
+    { path = "std::fs::write", reason = "this crate never writes disk." },
+    { path = "std::fs::metadata", reason = "this crate never touches disk." },
+    { path = "std::fs::File::open", reason = "this crate never touches disk." },
+    { path = "std::fs::File::create", reason = "this crate never touches disk." },
+    { path = "std::process::Command::new", reason = "this crate never spawns anything." },
+    { path = "std::process::exit", reason = "the shell owns the exit path, because the shell is what has to restore the terminal." },
+    { path = "std::io::stdout", reason = "this crate produces LINES and hands them back; it never writes them anywhere." },
+    { path = "std::io::stderr", reason = "printing to stderr from inside raw mode is the garbled-screen defect (0018)." },
+]
+
+# ─────────────────────────────────────────────────────────────────────────────
+#  THE HOLE THIS CLOSES, found by auditing the gate rather than trusting its
+#  green: `std::io::stdout` and `std::io::stderr` are banned above, and both
+#  bans are bypassed by the macro everybody actually reaches for. `println!`
+#  expands to `std::io::_print`, not to `std::io::stdout()`, so
+#  `disallowed-methods` never sees it; the dependency set cannot help, because
+#  the macros are in the prelude; and the golden test does not fail on a stray
+#  print, it just prints. All three mechanisms pass a crate with an
+#  `eprintln!("frame: {vs:?}")` in it — which is `0018`'s garbled-screen defect
+#  written straight into the pure layer, since a write from inside raw mode
+#  paints over the face and cannot be cleaned up.
+#
+#  `disallowed-macros` resolves the macro's real path, so it catches the
+#  prelude spelling, a `use std::println`, and an alias.
+# ─────────────────────────────────────────────────────────────────────────────
+disallowed-macros = [
+    { path = "std::print", reason = "this crate produces LINES and hands them back; a write from inside raw mode paints over the face (0018)." },
+    { path = "std::println", reason = "this crate produces LINES and hands them back; a write from inside raw mode paints over the face (0018)." },
+    { path = "std::eprint", reason = "printing to stderr from inside raw mode is the garbled-screen defect (0018)." },
+    { path = "std::eprintln", reason = "printing to stderr from inside raw mode is the garbled-screen defect (0018)." },
+    { path = "std::dbg", reason = "a debug print left behind is a debug print in his terminal; it also writes to stderr." },
+]
+
+disallowed-types = [
+    { path = "std::time::Instant", reason = "there is no monotonic clock in a pure render layer." },
+    { path = "std::time::SystemTime", reason = "there is no wall clock in a pure render layer." },
+    { path = "std::process::Command", reason = "this crate never spawns anything." },
+    { path = "std::fs::File", reason = "this crate never touches disk." },
+    { path = "std::path::PathBuf", reason = "a path in here is the first half of a filesystem read." },
+    { path = "chrono::Local", reason = "the shell owns the display timezone; the pure layer sees UTC and the `now` it is handed." },
+]

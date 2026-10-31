@@ -1,0 +1,51 @@
+# **THE SEAM REFERENCE, AS A CRATE — AND IT IS NEVER LINKED BY ANYTHING.**
+#
+# `docs/consumer-seam.md` §7.1 is explicit that the reference is "data for a
+# test, never a `use`": no face depends on this crate, `vendor-chassis.sh`
+# copies the five `.rs` files into a consumer repo as TEXT, and each face's
+# `src/seam/` is a copy that `tools/seamdiff` diffs against it.
+#
+# **So why a manifest at all.** Because an unverified reference is worse than
+# none. The whole point of §R3 is that the second copy is written FROM this
+# text; a reference that does not compile hands its defects to every copy at
+# once, and a reference whose `Held::fold` is wrong hands a wrong fold to both
+# faces with a conformance suite that agrees with it. This manifest is how the
+# reference is type-checked and how `tests/conformance.rs` replays the golden
+# transcripts through the real `Held::fold` rather than through a paraphrase.
+#
+# **NOT A WORKSPACE MEMBER, DELIBERATELY** — the same empty `[workspace]` table
+# `probe/` uses, for the same reason: `cargo test --workspace` at the repo root
+# must not build the reference, because the reference is not part of the daemon
+# and its dependency tree (a websocket client) is not the daemon's.
+[workspace]
+
+[package]
+name = "seam-reference"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+# The lib root is `mod.rs` and the five files sit beside it, because those SIX
+# PATHS are what `docs/consumer-seam.md` §2.0 names and what the vendor script
+# copies. A `src/` directory would mean the reference's paths and a face's paths
+# were different strings, and the diff tool would have to know the mapping.
+[lib]
+name = "seam_reference"
+path = "mod.rs"
+
+[dependencies]
+# The chassis, at exactly the feature set a consumer links: the mirror floor, no
+# producer half, no tokio inside it. `held.rs` and `view.rs` link only this.
+shapewire = { path = "..", default-features = false }
+serde_json = "1"
+chrono = { version = "0.4", features = ["serde"] }
+tracing = "0.1"
+# `link.rs` alone needs these three. There is deliberately no `reqwest` and no
+# HTTP client of any kind: the `/health` probe that used to need one moved
+# behind `link::Supervisor`, which is the face's to implement.
+tokio = { version = "1", features = ["macros", "rt", "rt-multi-thread", "sync", "time"] }
+tokio-tungstenite = { version = "0.24", features = ["rustls-tls-native-roots"] }
+futures-util = "0.3"
+
+[dev-dependencies]
+tokio = { version = "1", features = ["full"] }

@@ -1,0 +1,120 @@
+#!/usr/bin/env bash
+# prove-drift-check — scripts/drift-check's exit codes, proved under EVERY
+# python3 on this machine (macOS's 3.9 has no `tomllib`, and drift-check used to
+# crash there with exit 1, which is also its "drifted" code).
+#
+# It builds a scratch SOURCE repo and a scratch WORKSPACE holding a copy of the
+# drift-check under test, then walks the source through states whose correct
+# verdict is known:
+#
+#   0  nothing moved; and a commit touching only an `:(exclude)`d path
+#   1  a committed change; an uncommitted change; the excluded path's own crate
+#   2  a source_paths entry that matches no file (it used to diff to empty and
+#      read as "no drift"); a value the 3.9 fallback reader does not support
+#   3  drift-check itself crashing (an unreadable manifest)
+#
+# Nothing outside the scratch dir is read or written.
+#
+#   scripts/prove-drift-check                     # tests scripts/drift-check
+#   scripts/prove-drift-check /path/to/drift-check  # tests another copy
+#
+# Exits 0 only if every case gave its expected code under every interpreter.
+set -euo pipefail
+# REL-4.S7i: bash 3.2 (this machine's /bin/bash) exits 0 from a `set -u`
+# abort under `set -e` when an EXIT trap is set. Every deliberate `exit`
+# marks itself; the EXIT trap ends in __abort_guard, which turns an UNMARKED
+# exit whose status reads 0 into 2.
+__deliberate=
+exit() { local s=$?; __deliberate=1; builtin exit "${1:-$s}"; }
+__abort_guard() {
+  if [ -z "$__deliberate" ] && [ "${__st:-0}" -eq 0 ]; then
+    echo "$(basename "$0"): ABORTED (set -e/-u abort; not a pass)" >&2; builtin exit 2
+  fi
+}
+shopt -s extglob
+
+HERE=$(cd "$(dirname "$0")" && pwd)
+SCRIPT=${1:-$HERE/drift-check}
+W=$(mktemp -d "${TMPDIR:-/tmp}/prove-drift-check.XXXXXX")
+trap '__st=$?; chmod -R u+rw "$W" 2>/dev/null || true; rm -rf "$W"; __abort_guard' EXIT
+
+PYS=()
+for py in /usr/bin/python3 /opt/homebrew/bin/python3 /usr/local/bin/python3; do
+  [ -x "$py" ] && PYS+=("$py")
+done
+[ "${#PYS[@]}" -gt 0 ] || { echo "no python3 found"; exit 2; }
+
+mkdir -p "$W/src" "$W/ws/scripts" "$W/ws/apps/tui" "$W/ws/libs/render"
+cp "$SCRIPT" "$W/ws/scripts/drift-check"
+cd "$W/src"
+git init -q; git config user.email proof@localhost; git config user.name proof
+mkdir -p apps/tui/render; echo a > apps/tui/a.rs; echo b > apps/tui/render/b.rs
+git add apps/tui/a.rs apps/tui/render/b.rs; git commit -qm A
+A=$(git rev-parse HEAD)
+
+man() { # <crate dir> <source_paths as TOML> <source_sha>
+  printf '[package]\nname = "%s"\nversion = "0.1.0"\n\n[package.metadata.provenance]\nsource_repo = "%s"\nsource_paths = %s\nsource_sha = "%s"\nmoved = "2026-10-14"\n\n[dependencies]\n' \
+    "$(basename "$1")" "$W/src" "$2" "$3" > "$W/ws/$1/Cargo.toml"
+}
+
+FAILS=0
+run() { # <label> <expected rc, as a bash extglob pattern>
+  local py out rc verdict
+  for py in "${PYS[@]}"; do
+    set +e; out=$("$py" "$W/ws/scripts/drift-check" 2>&1); rc=$?; set -e
+    case "$rc" in $2) verdict=OK ;; *) verdict=WRONG; FAILS=$((FAILS + 1)) ;; esac
+    echo "[$verdict] $1 | $py ($("$py" -c 'import sys;print("%d.%d"%sys.version_info[:2])')) rc=$rc want $2"
+    [ "$verdict" = OK ] || echo "$out" | sed 's/^/      /'
+  done
+}
+
+man apps/tui '["apps/tui", ":(exclude)apps/tui/render"]' "$A"
+man libs/render '["apps/tui/render"]' "$A"
+run "clean: nothing moved" 0
+
+echo b2 > apps/tui/render/b.rs; git commit -qam B-render-only
+man libs/render '["apps/tui/render"]' "$(git rev-parse HEAD)"
+run "render-only commit: tui's :(exclude) keeps it out" 0
+man libs/render '["apps/tui/render"]' "$A"
+run "render-only commit: the render crate DRIFTED" 1
+man libs/render '["apps/tui/render"]' "$(git rev-parse HEAD)"
+
+echo a2 > apps/tui/a.rs
+run "uncommitted change in tui's source: DRIFTED" 1
+git commit -qam C
+run "committed change in tui's source: DRIFTED" 1
+
+man apps/tui '["apps/tui (all but render/)"]' "$(git rev-parse HEAD)"
+run "a source_paths entry matching no file: REFUSED" 2
+
+man apps/tui '["apps/tui"]' "$(git rev-parse HEAD)"
+sed -i '' 's/^moved = .*/moved = 2026-10-14/' "$W/ws/apps/tui/Cargo.toml"
+# tomllib parses a bare TOML date (0); the 3.9 reader refuses it rather than guess (2).
+run "a bare TOML date" "@(0|2)"
+
+man apps/tui '["apps/tui"]' "$(git rev-parse HEAD)"
+chmod 000 "$W/ws/apps/tui/Cargo.toml"
+run "an unreadable manifest: drift-check CRASHES" 3
+chmod 644 "$W/ws/apps/tui/Cargo.toml"
+run "restored" 0
+
+# REL-4.S4b (REL-4.S4-I F5): a `source_repo` spelled `~/...` resolves against
+# HOME. HOME is pointed at a scratch dir holding a link to the source repo, so
+# the same manifest is right only if `~` is expanded. Opposed by the same
+# manifest under a HOME with no such repo: refused (2), not "no drift".
+mkdir -p "$W/home/code"; ln -s "$W/src" "$W/home/code/src"
+sed -i '' "s|^source_repo = .*|source_repo = \"~/code/src\"|" "$W/ws/apps/tui/Cargo.toml" "$W/ws/libs/render/Cargo.toml"
+REAL_HOME=$HOME
+export HOME="$W/home"
+run "source_repo = ~/code/src, HOME has it: no drift" 0
+mkdir -p "$W/emptyhome"
+export HOME="$W/emptyhome"
+run "source_repo = ~/code/src, HOME lacks it: REFUSED" 2
+export HOME="$REAL_HOME"
+
+if [ "$FAILS" -ne 0 ]; then
+  echo "prove-drift-check: $FAILS WRONG"
+  exit 1
+fi
+echo "prove-drift-check: every case held under ${#PYS[@]} interpreter(s)"
+exit  # REL-4.S7i: a fall-through end is a deliberate exit (see __abort_guard)

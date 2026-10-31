@@ -1,0 +1,62 @@
+#!/usr/bin/env bash
+# Fake `claude` for `tests/turn_mcp_door.rs` (R4.S5). NEVER a real invocation.
+#
+# It records what the DAEMON handed it — argv, `THREADS_RUN_TOKEN`, and the
+# contents of the file named by `--mcp-config` (copied, because the daemon
+# removes that file when the turn ends) — and then holds the turn open until
+# the test releases it, so the test can dial `/mcp` with the token while the
+# turn is genuinely running.
+#
+# The prompt (stdin) carries `capture=<path>` and `release=<path>`. A prompt
+# with no `capture=` (a managed child's task, say) is a basic turn.
+#
+# Nothing here reads the daemon's key or code: the token it records is the one
+# the daemon put in its environment, and nothing else.
+set -u
+
+PROMPT="$(cat)"
+
+emit_init() {
+  echo '{"type":"system","subtype":"init","session_id":"fake-sess","cwd":"/tmp","model":"claude-fable-5","tools":["Bash","Read"],"mcp_servers":[],"permissionMode":"bypassPermissions","slash_commands":[],"apiKeySource":"none","agents":[]}'
+}
+emit_text() {
+  echo '{"type":"assistant","message":{"id":"msg_fake_01","model":"claude-fable-5","content":[{"type":"text","text":"Hello from fake claude."}],"usage":{"input_tokens":100,"output_tokens":20,"cache_read_input_tokens":0,"cache_creation_input_tokens":0}}}'
+}
+emit_result() {
+  echo '{"type":"result","subtype":"success","is_error":false,"total_cost_usd":0.01,"num_turns":1,"duration_ms":50,"stop_reason":"end_turn","modelUsage":{"claude-fable-5":{"inputTokens":105,"outputTokens":25,"cacheReadInputTokens":0,"cacheCreationInputTokens":0,"costUSD":0.01}},"session_id":"fake-sess"}'
+}
+
+CAPTURE="$(printf '%s' "$PROMPT" | sed -n 's/.*capture=\([^ ]*\).*/\1/p')"
+RELEASE="$(printf '%s' "$PROMPT" | sed -n 's/.*release=\([^ ]*\).*/\1/p')"
+
+if [[ -n "$CAPTURE" ]]; then
+  : > "$CAPTURE.argv.tmp"
+  MCP=""
+  prev=""
+  for a in "$@"; do
+    printf '%s\n' "$a" >> "$CAPTURE.argv.tmp"
+    [[ "$prev" == "--mcp-config" ]] && MCP="$a"
+    prev="$a"
+  done
+  if [[ -n "$MCP" && -f "$MCP" ]]; then
+    cp "$MCP" "$CAPTURE.mcp"
+  fi
+  if [[ -n "${THREADS_RUN_TOKEN+set}" ]]; then
+    printf '%s' "$THREADS_RUN_TOKEN" > "$CAPTURE.token"
+  fi
+  mv "$CAPTURE.argv.tmp" "$CAPTURE.argv"
+  # The marker LAST: every file above is complete when this exists.
+  : > "$CAPTURE.done"
+  emit_init
+  emit_text
+  if [[ -n "$RELEASE" ]]; then
+    for _ in $(seq 1 400); do
+      [[ -f "$RELEASE" ]] && break
+      sleep 0.05
+    done
+  fi
+  emit_result
+  exit 0
+fi
+
+emit_init; emit_text; emit_result; exit 0

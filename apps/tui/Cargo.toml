@@ -1,0 +1,208 @@
+[package]
+name = "tui"
+version.workspace = true
+edition.workspace = true
+description = "The terminal face: a chat with the threads daemon, and standing visibility of what the machine is doing while he types. The SHELL half — terminal ownership, transport, input, projection. Every pixel it draws comes from `tui-render`, which cannot do any of those things. Moved from harness apps/tui (R7.S1b); the v0 cluster tree is `tui --cauldron`."
+# ONE integration-test binary for `it`: every test under tests/it/ is a module
+# of tests/it/main.rs (core:cargo-lease, "One test binary per crate"). Add a
+# module there, never a new top-level file under tests/. `pool_daemon` and
+# `pool_setlive` below stay separate binaries because each sets process
+# environment the `it` binary's other modules would read.
+autotests = false
+
+[package.metadata.provenance]
+source_repo = "~/code/harness"
+# git pathspecs (scripts/drift-check diffs them): all of apps/tui but render/,
+# which moved separately and is libs/tui-render.
+source_paths = ["apps/tui", ":(exclude)apps/tui/render"]
+source_sha = "883204b42c440bae3e9eccd0fc2c00a482d6a79f"
+moved = "2026-10-14"
+
+# The app is just `tui`. `cauldron $1` routes to the app named `$1`, with `tui`
+# the default, so the app never wears the system's name.
+[[bin]]
+name = "tui"
+path = "src/main.rs"
+
+
+# DG-5: every integration test is a module of tests/it/main.rs; add new ones
+# there, never as a new top-level tests/*.rs (skill core:cargo-lease).
+[[test]]
+name = "it"
+path = "tests/it/main.rs"
+# Kept apart: sets the mic CAPTURE/STT/PLAY variables for the whole process.
+# (REL-1.S1b restored main's arrangement after the globs2 merge folded it into
+# `it`: in `it`, those process-wide set_vars are inherited by every face child
+# any of ~470 other tests spawns concurrently, and mic.rs's LOCK only
+# serializes mic's own tests.)
+[[test]]
+name = "mic"
+path = "tests/mic.rs"
+# Kept apart: sets THREADS_* for the whole process and runs the daemon (keychain tripwire).
+[[test]]
+name = "pool_daemon"
+path = "tests/pool_daemon.rs"
+# Kept apart: sets TUI_POOL_ACCOUNTS_TOOL and CLAUDE_CONFIG_DIR for the whole process.
+[[test]]
+name = "pool_setlive"
+path = "tests/pool_setlive.rs"
+
+[dependencies]
+# The PURE render layer, as a CHILD package. Every line on screen comes from
+# its `frame()`; this crate writes no geometry of its own.
+tui-render = { path = "../../libs/tui-render" }
+# Terminal ownership (DEC modes, panic restore, OSC 52, keyboard negotiation),
+# extracted from this crate's own `term.rs`; see libs/term-shell/PROVENANCE.md.
+# The v0 cluster tree (`--cauldron`) uses it; the chat face keeps its `term.rs`.
+term-shell = { path = "../../libs/term-shell" }
+# Inherited from `[workspace.dependencies]` so this crate and `tui-render`
+# cannot name two different `Line` types — see the comment on that entry.
+# `crossterm` is added HERE and not there: the backend belongs to the crate
+# that owns a terminal, and `ratatui::crossterm` is then the ONLY crossterm in
+# the tree, so there is no second version of it to skew against the backend's.
+ratatui = { workspace = true, features = ["crossterm"] }
+chrono = { workspace = true, features = ["clock", "serde"] }
+anyhow = { workspace = true }
+# The event loop is one mpsc of internal events — the shape mined from the old
+# apps/tui and the shape build step 2's transport actor plugs into unchanged.
+tokio = { workspace = true, features = ["full"] }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true, features = ["env-filter", "fmt"] }
+# LOG TO A FILE, NEVER TO THE TERMINAL (mined from the old apps/tui; `0018`
+# names a stderr write from inside raw mode as the garbled-screen defect). The
+# non-blocking writer matters as well as the file: a synchronous append inside
+# the loop would stall the redraw on disk, and a face that stutters when the
+# log is busy is a face that looks broken.
+tracing-appender = { workspace = true }
+dirs = { workspace = true }
+
+# ── THE WIRE (build step 2) ─────────────────────────────────────────────────
+# A LOCAL TOLERANT MIRROR of the threads daemon's protocol lives in `proto.rs`;
+# there is deliberately NO path dependency on `substrate-interface-layer`'s
+# `threads` crate (DEC-10). `apps/aui` made the same call for the same two
+# reasons: a cross-repo path dep couples every harness build to a checkout that
+# is not in this repo's lockfile, and the daemon's own docs promise new event
+# kinds without warning — so tolerance, not type-sharing, is the contract the
+# wire actually offers.
+#
+# The versions match `apps/aui`'s exactly, which is not a coincidence: both
+# crates speak to the same daemon on the same machine, and two tungstenite
+# versions in one tree is a class of bug nobody wants to debug twice.
+tokio-tungstenite = { workspace = true, features = ["rustls-tls-native-roots"] }
+
+# ── THE SECOND WIRE: the AUI's proto-v2 mutation socket on 9010 (T-27) ──────
+#
+# A PATH DEPENDENCY, and the opposite call from the daemon wire's tolerant
+# mirror above — deliberately, because the two situations are not alike.
+# `DEC-10`'s mirror argument was about a checkout in ANOTHER repo that is not
+# in this lockfile and whose docs promise new event kinds without warning.
+# `libs/aui-state` is in THIS workspace, and its `proto` + `server::Mutation`
+# are the exact types the live `ui-server` compiles against — so depending on
+# it is depending on production code, and the alternative (a hand-copied
+# `Mutation` enum) would be a second definition of a wire whose whole safety
+# property is that there is one.
+#
+# Its `FROZEN-DO-NOT-ANCHOR.md` bars anchoring a CLIENT *inside* that crate.
+# That rule is kept: the client lives here, in `src/aui.rs`, and nothing under
+# `libs/aui-state` is edited by this face.
+#
+# `default-features = false` drops the DORMANT client runtime; `server` is the
+# half that is live and is the half that defines `Mutation`.
+# CAULDRON (R7.S1b): the paragraphs above describe the harness layout this
+# face was moved from. Here the face links `libs/aui-wire`, a MOVED copy of the
+# face-facing subset of harness `aui-state` (proto, node, model, `Mutation`) —
+# see libs/aui-wire/PROVENANCE.md. The AUI stays in harness (CON-15), so the
+# wire is defined in two places until it moves.
+aui-wire = { path = "../../libs/aui-wire" }
+# The `Mutation` variants key a thread by `Uuid`, so the shell speaks `Uuid`.
+# The PURE render crate deliberately does not — see `render/Cargo.toml`.
+uuid = { workspace = true, features = ["v4", "serde"] }
+# ── THE PROJECT REGISTRY: `~/.cauldron/projects.json` ───────────────────────
+#
+# **The face READS it, and since round five WRITES it — through the crate's own
+# locked `Registry::update`, which is `0071` §13's sanctioned third writer
+# ("a third writer, but through the one implementation, and visible to the AUI
+# on its next `Snapshot::get` (a stat) without a restart"). `ui-server` is NOT
+# the only writer and has not been since `libs/cauldron/src/bin/cauldron.rs`
+# shipped.** This face used to
+# derive its own project list by scanning `~/minds` — a SECOND derivation of
+# one truth, and the two forked in this arc (the TUI sent `miscellaneous`
+# while the AUI held `_miscellaneous`, and every bucket act was refused).
+# `apps/aui` is fully cut over to this crate (`0077`); this is the other face
+# joining it, so there is one definition of what his projects ARE.
+#
+# A PATH DEPENDENCY for `libs/aui-state`'s reason: the crate is in THIS
+# workspace and is the code the live `ui-server` compiles against, so
+# depending on it is depending on production rather than on a copy.
+# CAULDRON (R7.S1b): harness `libs/cauldron` moved home as `libs/projects`
+# (the file it owns is cauldron's); see libs/projects/PROVENANCE.md.
+projects = { path = "../../libs/projects" }
+# ── THE ENVIRONMENT (R7.S1c) ────────────────────────────────────────────────
+# Which cauldron environment this face was launched in, and where that
+# environment's threads is: the SAME resolution every `cauldron` verb uses
+# (root, `--env`/`CAULDRON_ENV`, `env.toml`, the declaration search, the seam
+# table), so the face and `cauldron start threads` cannot disagree about which
+# daemon is "the threads". See `src/cauldron_env.rs`.
+env = { path = "../../libs/env" }
+# REL-3.S2: the face's own `+` seeds `cauldron-build` exactly as the CLI's
+# `env create` does (`soup::demo::seed_env`). The soup crate's own tests
+# dev-depend on this crate; a dev-dependency cycle is allowed.
+soup = { path = "../../libs/soup" }
+# ── THE SUBSCRIPTION-SHAPE CHASSIS, VENDORED (and the SAME copy the AUI links) ──
+#
+# `libs/shapewire` is a copy of `substrate-interface-layer:lib/shapewire`, taken
+# by `scripts/vendor-shapewire.sh` and stamped in `libs/shapewire/VENDORED`.
+# Vendored and not a cross-repo path dependency for `libs/tickets`' reason — a
+# build that reaches outside this tree is green on one machine and red on
+# another — and `apps/aui` links the identical copy, which is the point: the two
+# faces are two SKINS over one mirror, so a second definition of the mirror
+# would be the shared-backend-by-copy defect this whole design refused.
+#
+# `default-features = false` is the CONSUMER FLOOR and it is load-bearing rather
+# than tidy: the floor is `wire` + `mirror` + `envelope` + `operation`, with no
+# tokio, no axum and no socket in it. The producer halves (`hub`, `fold`,
+# `ledger`, `command`, `server`) are what a DAEMON links. Taking the floor is
+# what makes `seam/held.rs` and `seam/view.rs` pure state machines a test drives
+# from a JSON transcript with no runtime at all.
+#
+# **AND THERE IS DELIBERATELY NO `reqwest` HERE, NOR ANY OTHER HTTP CLIENT.**
+# The `/health` probe that decides whether to spawn a daemon is the AUI's job
+# and lives above the AUI's seam (`apps/aui/src/mirror.rs`, divergence D1); this
+# face passes `Supervision::None` and therefore needs no client at all. A
+# `reqwest` appearing in this manifest is the tell that the terminal face has
+# started supervising a daemon it does not own.
+#
+# **AND IT IS WHY `-p shapewire` MUST NOT BE IN A COMMAND THAT CHECKS THIS FACE.**
+# Selecting `shapewire` as a package turns ITS defaults on, and cargo then builds
+# ONE `shapewire` with the union of the features — so
+# `cargo build --tests -p aui -p tui -p shapewire` compiles this face against
+# `hub`, `fold`, `ledger` and `command` and reports a clean build of something
+# nobody ships. It cost a FALSE GREEN during the 9235e8e vendor bump: that command
+# said "0 errors" while `cargo test -p aui -p aui-state` on the same tree would
+# not compile at all, and the stale floor rlib left behind made the next failure
+# look like a target-dir race. Check a face with the face's own packages only.
+# `ledger` (no dependencies of its own): Settings › Storage shows its
+# LEDGER_MAX_BYTES as the warnings cap, read from the source, not copied.
+shapewire = { path = "../../libs/shapewire", default-features = false, features = ["ledger"] }
+futures-util = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+# The settings files (`src/cauldron/settings.rs`): the same TOML crate `libs/env`
+# reads env.toml with, so a cauldron's two kinds of settings file parse alike.
+toml = { workspace = true }
+# Settings are SAVED through `toml_edit` (0220 E3): it edits the file as he
+# wrote it, so his comments, his order and any key this build does not know
+# survive a save. `toml` still reads; the version is the one `toml` links.
+toml_edit = "0.22"
+# The ripple policy's hash (`src/cauldron/ripples.rs`): sha256 over canonical
+# JSON, as the ripple runtime's `Policy::hash` takes it.
+sha2 = { workspace = true }
+
+# R7.S2: `tests/pool_daemon.rs` drives the pool board against a THROWAWAY
+# threads daemon (ephemeral port, tempdir data dir, fake claude binary).
+[dev-dependencies]
+threads = { path = "../../services/threads" }
+tempfile = "3"
+
+[lints.rust]
+unsafe_code = "forbid"

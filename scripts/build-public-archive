@@ -1,0 +1,73 @@
+#!/usr/bin/env bash
+# build-public-archive <commit-ish> <out.tar>
+#
+# THE one definition of the public artifact (REL-4.S7h). The public repository
+# is cut from this one as `git archive --format=tar <commit>`: every path that
+# `.gitattributes` marks `export-ignore` is left out, and every `export-subst`
+# placeholder is expanded from that commit's metadata. check-public-tree.sh
+# (which paths ship) and check-no-personal-data.sh (what the shipped bytes say)
+# both build the artifact through THIS script, so neither can check a
+# different thing from what the publish step ships.
+#
+# It takes a COMMIT, never a bare tree: `git archive` skips `export-subst` for
+# a tree, so a tree-only archive is not the artifact that ships.
+# Prints the resolved commit sha on stdout. Exit non-zero on any failure.
+#
+# The artifact depends on the COMMIT alone (REL-4.S7i, N3). `git archive`
+# also obeys attribute sources local to a repository and a machine:
+# `.git/info/attributes`, `core.attributesFile` (default
+# ~/.config/git/attributes), the system gitattributes, and config such as
+# `tar.umask`. Any of those can export-ignore a file that a fresh clone's
+# `git archive` ships, and then both checks certify an artifact nobody
+# publishes. So the archive is made in a throw-away bare repository that
+# borrows this one's objects (alternates) and nothing else: no info/
+# directory, no local config, no refs. System and global config and the
+# system and global attributes are switched off, so the only attributes in
+# force are the `.gitattributes` files inside the commit.
+set -euo pipefail
+
+if [ "$#" -ne 2 ]; then
+  echo "usage: build-public-archive <commit-ish> <out.tar>" >&2
+  exit 2
+fi
+ref=$1
+out=$2
+top="$(git rev-parse --show-toplevel)"
+sha="$(git -C "$top" rev-parse --verify "$ref^{commit}")"
+objects="$(git -C "$top" rev-parse --path-format=absolute --git-path objects)"
+bare="$(mktemp -d "${TMPDIR:-/tmp}/build-public-archive.XXXXXX")"
+# bash 3.2 exits 0 from some `set -u` aborts when an EXIT trap is set; any
+# exit that is not the deliberate one at the end is reported as 2.
+FINISHED=
+trap 'st=$?; rm -rf "$bare"; if [ -z "$FINISHED" ]; then echo "build-public-archive: aborted (status $st)" >&2; exit 2; fi' EXIT
+# REL-4.S7j (F2): config can also arrive through the ENVIRONMENT -
+# GIT_CONFIG_PARAMETERS (what `git -c` exports to child gits), GIT_CONFIG_COUNT
+# with GIT_CONFIG_KEY_<n>/GIT_CONFIG_VALUE_<n>, GIT_CONFIG_GLOBAL /
+# GIT_CONFIG_SYSTEM (and GIT_CONFIG) naming other files, GIT_TEMPLATE_DIR
+# seeding the new repository's config. Every one is unset or overridden
+# below (GIT_CONFIG_NOSYSTEM wins over GIT_CONFIG_SYSTEM), so `tar.umask`,
+# `core.autocrlf` and the like cannot change the artifact's bytes.
+noenv() {
+  env -u GIT_CONFIG_PARAMETERS -u GIT_CONFIG_COUNT -u GIT_CONFIG -u GIT_CONFIG_SYSTEM \
+    -u GIT_TEMPLATE_DIR GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null "$@"
+}
+iso() {  # git with no machine, user, environment or repository-local settings
+  noenv env -u GIT_WORK_TREE -u GIT_INDEX_FILE -u GIT_COMMON_DIR -u GIT_ATTR_SOURCE \
+    GIT_ATTR_NOSYSTEM=1 GIT_DIR="$bare" GIT_NO_REPLACE_OBJECTS=1 \
+    git -c core.attributesFile=/dev/null "$@"
+}
+# init with the caller's object-store variables unset, so the bare
+# repository gets its own objects/ directory to hold the alternates file;
+# no template, so nothing seeds its config.
+noenv env -u GIT_OBJECT_DIRECTORY -u GIT_ALTERNATE_OBJECT_DIRECTORIES -u GIT_DIR \
+  git init -q --bare --template= "$bare"
+rm -rf "$bare/info" "$bare/hooks"
+mkdir -p "$bare/objects/info"
+# A caller's scratch object store (check-no-personal-data commits the index
+# and working tree there) arrives as GIT_OBJECT_DIRECTORY plus alternates in
+# the environment; git honours those over the file below.
+printf '%s\n' "$objects" > "$bare/objects/info/alternates"
+iso cat-file -e "$sha^{commit}"
+iso archive --format=tar "$sha" > "$out"
+echo "$sha"
+FINISHED=1

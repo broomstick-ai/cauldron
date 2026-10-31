@@ -1,0 +1,228 @@
+#!/bin/bash
+# ════════════════════════════════════════════════════════════════════════════
+#  prove-env-aware-face — the face reads the threads of the cauldron
+#  environment it was launched in, and rides out a supervised restart (R7.S1c)
+# ════════════════════════════════════════════════════════════════════════════
+#
+# EVERYTHING RUNS IN A SCRATCH ROOT: its own CAULDRON_HOME, its own HOME, its
+# own ports (48653/48654 by default). Nothing reads or writes ~/.cauldron,
+# nothing goes near 3653, nothing touches launchd. The two environments' holders
+# are `cauldron daemon` in the foreground of this script, killed on exit.
+#
+# Uses the binaries ALREADY BUILT in $CARGO_TARGET_DIR/debug (cauldron, tui,
+# threads, threads-dev) — build them first from the worktree under test:
+#   cargo build -p cauldron -p tui -p threads --bins
+#
+# WHAT IT PROVES (val 1-4 of R7.S1c):
+#   V1  a face opened in env `a` shows env a's threads: a thread seeded only
+#       into a's store renders with its transcript.
+#   V3  a face opened in env `b` (same root, same build) does NOT show it: the
+#       same thread id never loads there. And `tui --resolve` names two ports.
+#   V2  kill -9 env a's threads under an open face: the face draws the down
+#       page, the holder relaunches threads, and the face is back on the
+#       thread's transcript with no key pressed.
+#       FORCED RED: PROVE_NO_RESTART=1 turns env a's `auto_restart` off on the
+#       running holder just before the kill; the face must then still be on
+#       the down page at the end, and V2 FAILS.
+#   V4  an environment with no address of its own (env `c`) is REFUSED by the
+#       face rather than resolved to prod's 3653; a and b resolve elsewhere.
+#
+# Exit 0 only if every check passed. Every wait is bounded well under 600 s.
+set -euo pipefail
+# REL-4.S7i: bash 3.2 (this machine's /bin/bash) exits 0 from a `set -u`
+# abort under `set -e` when an EXIT trap is set. Every deliberate `exit`
+# marks itself; the EXIT trap ends in __abort_guard, which turns an UNMARKED
+# exit whose status reads 0 into 2.
+__deliberate=
+exit() { local s=$?; __deliberate=1; builtin exit "${1:-$s}"; }
+__abort_guard() {
+  if [ -z "$__deliberate" ] && [ "${__st:-0}" -eq 0 ]; then
+    echo "$(basename "$0"): ABORTED (set -e/-u abort; not a pass)" >&2; builtin exit 2
+  fi
+}
+
+CT="${CARGO_TARGET_DIR:?set CARGO_TARGET_DIR to the target dir the binaries were built in}"
+BIN="$CT/debug"
+REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+PA="${PROVE_PORT_A:-48653}"
+PB="${PROVE_PORT_B:-48654}"
+SCRATCH="/private/tmp/prove-env-aware-face-$$"
+ROOT="$SCRATCH/root"
+FHOME="$SCRATCH/home"
+THREAD="dev-idle-00"
+
+fail=0
+pass() { printf 'PASS %s\n' "$1"; }
+bad()  { printf 'FAIL %s\n' "$1"; fail=1; }
+die()  { printf 'prove-env-aware-face: %s\n' "$1" >&2; exit 2; }
+
+for b in cauldron tui threads threads-dev; do [ -x "$BIN/$b" ] || die "no $BIN/$b — build first"; done
+for p in "$PA" "$PB"; do
+  [ "$p" != 3653 ] || die "port 3653 is production's; refusing"
+  if /usr/bin/nc -z 127.0.0.1 "$p" 2>/dev/null; then die "port $p is already in use"; fi
+done
+
+cleanup() {
+  for e in a b; do
+    [ -f "$ROOT/daemon-$e.pid" ] && /bin/kill -TERM "$(cat "$ROOT/daemon-$e.pid")" 2>/dev/null || true
+  done
+  for e in a b; do
+    s="$ROOT/data/$e/seams.json"
+    [ -f "$s" ] || continue
+    pid="$(/usr/bin/python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["seams"].get("threads",{}).get("pid",""))' "$s" 2>/dev/null || true)"
+    [ -n "$pid" ] && /bin/kill -TERM "$pid" 2>/dev/null || true
+  done
+  /bin/sleep 2
+  if [ -z "${KEEP_SCRATCH:-}" ]; then rm -rf "$SCRATCH"; else echo "kept $SCRATCH"; fi
+}
+trap '__st=$?; cleanup; __abort_guard' EXIT
+
+mkdir -p "$ROOT/services" "$FHOME" "$SCRATCH/seed"
+
+# ── the declaration: hosted, like the shipped one, plus the line that hands
+#    the per-environment port to the daemon ──────────────────────────────────
+cat > "$ROOT/services/threads.toml" <<EOF
+name = "threads"
+description = "throwaway threads for prove-env-aware-face"
+kind = "daemon"
+registers = false
+probe = "connect"
+stop_signal = "TERM"
+escalate = true
+start_timeout_ms = 45000
+[launch]
+addr = "127.0.0.1:3653"
+[env]
+THREADS_HOME = "\${CAULDRON_SERVICE_DATA_DIR}/store"
+THREADS_CHASSIS_PORT = "\${CAULDRON_HOSTED_PORT}"
+THREADS_UPDATE_WATCH = "off"
+THREADS_CLAUDE_BIN = "$REPO/services/threads/tests/fixtures/fake-claude"
+HOME = "$FHOME"
+[build]
+artifact = "$BIN/threads"
+bin = "threads"
+profile = "dev"
+EOF
+
+c() { HOME="$FHOME" CAULDRON_HOME="$ROOT" "$BIN/cauldron" "$@"; }
+
+label="$(c --env a build threads | /usr/bin/sed -n 's/.*built threads as version \([^ ]*\).*/\1/p')"
+[ -n "$label" ] || die "cauldron build threads printed no version"
+echo "built threads as $label"
+
+manifest() { # env port auto_restart
+  mkdir -p "$ROOT/data/$1"
+  cat > "$ROOT/data/$1/env.toml" <<EOF
+[supervisor]
+auto_restart = $3
+auto_rollback = false
+poll_secs = 1
+down_after = 1
+max_start_failures = 5
+backoff_base_secs = 1
+backoff_max_secs = 5
+stable_after_secs = 600
+
+[services.threads]
+version = "$label"
+addr = "127.0.0.1:$2"
+EOF
+}
+manifest a "$PA" true
+manifest b "$PB" true
+mkdir -p "$ROOT/data/c"
+printf '[services.threads]\nversion = "%s"\n' "$label" > "$ROOT/data/c/env.toml"
+
+# ── seed env a's store, and only env a's ────────────────────────────────────
+env -i PATH=/usr/bin:/bin HOME="$SCRATCH/seed" "$BIN/threads-dev" --seed-only > /dev/null
+mkdir -p "$ROOT/data/a/threads/store"
+/usr/bin/sqlite3 "$SCRATCH/seed/.threads-dev/threads.db" ".backup $ROOT/data/a/threads/store/threads.db"
+
+# ── the two holders ─────────────────────────────────────────────────────────
+for e in a b; do
+  HOME="$FHOME" CAULDRON_HOME="$ROOT" CAULDRON_ENV="$e" \
+    "$BIN/cauldron" daemon > "$ROOT/daemon-$e.log" 2>&1 &
+  echo $! > "$ROOT/daemon-$e.pid"
+done
+up() { /usr/bin/nc -z 127.0.0.1 "$1" 2>/dev/null; }
+for i in $(seq 1 90); do up "$PA" && up "$PB" && break; /bin/sleep 1; done
+up "$PA" && up "$PB" || die "the holders did not bring threads up on $PA/$PB within 90 s"
+
+# The face, through the router, exactly as `cauldron --env <e> tui` runs it.
+face() { # env seconds outfile
+  env -u TUI_THREADS_CHASSIS_PORT -u TUI_THREADS_PORT HOME="$FHOME" CAULDRON_HOME="$ROOT" \
+    timeout $(( $2 + 30 )) "$BIN/cauldron" --env "$1" tui --headless --thread "$THREAD" \
+    --seconds "$2" --size 110x20 --out "$3"
+}
+last_frame() { /usr/bin/awk '/^=== frame/{buf=""} {buf=buf $0 "\n"} END{printf "%s", buf}' "$1" | /usr/bin/grep -v '^=== end'; }
+
+# ── V4: the resolution, and the refusal ─────────────────────────────────────
+ra="$(HOME="$FHOME" CAULDRON_HOME="$ROOT" env -u TUI_THREADS_CHASSIS_PORT "$BIN/cauldron" --env a tui --resolve)"
+rb="$(HOME="$FHOME" CAULDRON_HOME="$ROOT" env -u TUI_THREADS_CHASSIS_PORT "$BIN/cauldron" --env b tui --resolve)"
+echo "resolve a: $ra"; echo "resolve b: $rb"
+set +e
+rc_out="$(HOME="$FHOME" CAULDRON_HOME="$ROOT" env -u TUI_THREADS_CHASSIS_PORT "$BIN/cauldron" --env c tui --resolve 2>&1)"; rc=$?
+set -e
+case "$ra|$rb" in
+  *"port=$PA source=env.toml"*"|"*"port=$PB source=env.toml"*) pass "V4a a and b resolve to their own ports ($PA, $PB)" ;;
+  *) bad "V4a resolution: a=[$ra] b=[$rb]" ;;
+esac
+if [ "$rc" -ne 0 ] && printf '%s' "$rc_out" | /usr/bin/grep -q 'REFUSED'; then
+  pass "V4b env c (no addr of its own -> prod's 3653) is refused, rc=$rc"
+else
+  bad "V4b env c was not refused: rc=$rc out=[$rc_out]"
+fi
+
+# ── V1 and V3: own data only ────────────────────────────────────────────────
+face a 6 "$ROOT/v1-a.txt" > /dev/null 2>&1 || true
+face b 6 "$ROOT/v3-b.txt" > /dev/null 2>&1 || true
+if last_frame "$ROOT/v1-a.txt" | /usr/bin/grep -q "dev fixture: reply .* on $THREAD"; then
+  pass "V1 env a's face shows env a's thread $THREAD"
+else
+  bad "V1 env a's face did not show $THREAD:"; last_frame "$ROOT/v1-a.txt"
+fi
+if /usr/bin/grep -q "dev fixture" "$ROOT/v3-b.txt"; then
+  bad "V3 env b's face showed env a's data:"; last_frame "$ROOT/v3-b.txt"
+elif last_frame "$ROOT/v3-b.txt" | /usr/bin/grep -q ' connected '; then
+  pass "V3 env b's face is connected (to $PB) and shows none of env a's threads"
+else
+  bad "V3 env b's face never connected:"; last_frame "$ROOT/v3-b.txt"
+fi
+
+# ── V2: kill -9 under an open face ──────────────────────────────────────────
+# THE FORCING: the holder needs auto_restart to bring threads up at all, and it
+# reads its policy once, at start (`daemon.rs` `run`). So env a's holder is
+# stopped, the key turned off, and a holder started again on the SAME running
+# threads (it re-attaches) — only then is threads killed.
+if [ -n "${PROVE_NO_RESTART:-}" ]; then
+  /bin/kill -TERM "$(cat "$ROOT/daemon-a.pid")"
+  /bin/sleep 2
+  /usr/bin/sed -i '' 's/^auto_restart = true$/auto_restart = false/' "$ROOT/data/a/env.toml"
+  /usr/bin/grep -n '^auto_restart' "$ROOT/data/a/env.toml"
+  HOME="$FHOME" CAULDRON_HOME="$ROOT" CAULDRON_ENV=a \
+    "$BIN/cauldron" daemon >> "$ROOT/daemon-a.log" 2>&1 &
+  echo $! > "$ROOT/daemon-a.pid"
+  /bin/sleep 3
+  /usr/bin/grep -n 'auto_restart=' "$ROOT/daemon-a.log" | /usr/bin/tail -1
+  echo "FORCING: env a's holder restarted with auto_restart off"
+fi
+face a 40 "$ROOT/v2-a.txt" > /dev/null 2>&1 &
+fpid=$!
+/bin/sleep 8
+tpid="$(/usr/bin/python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["seams"]["threads"]["pid"])' "$ROOT/data/a/seams.json")"
+echo "kill -9 env a threads pid $tpid"
+/bin/kill -9 "$tpid"
+wait "$fpid" || true
+/usr/bin/grep '^=== frame' "$ROOT/v2-a.txt" | /usr/bin/sed 's/^/  /'
+down_at="$(/usr/bin/grep -n 'threads is down' "$ROOT/v2-a.txt" | /usr/bin/head -1 | cut -d: -f1)"
+if [ -z "$down_at" ]; then
+  bad "V2 the face never drew the down page"
+elif /usr/bin/tail -n +"$down_at" "$ROOT/v2-a.txt" | /usr/bin/grep -q "dev fixture: reply .* on $THREAD" \
+     && ! last_frame "$ROOT/v2-a.txt" | /usr/bin/grep -q 'threads is down'; then
+  newpid="$(/usr/bin/python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["seams"]["threads"]["pid"])' "$ROOT/data/a/seams.json")"
+  pass "V2 down page, holder relaunched threads (pid $tpid -> $newpid), face back on the transcript with no key"
+else
+  bad "V2 the face did not come back after the kill; its last frame:"; last_frame "$ROOT/v2-a.txt"
+fi
+
+exit "$fail"

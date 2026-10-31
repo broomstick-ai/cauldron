@@ -1,0 +1,273 @@
+#!/usr/bin/env bash
+# Fake `claude` for `tests/no_resend.rs` (R13.1 — a delivered message is never
+# re-sent). NEVER a real invocation.
+#
+# It RECORDS what the daemon wrote on stdin, once per spawn, to `stdin.log` in
+# its working directory (the thread's cwd, one temp dir per test), headed by
+#   @@SPAWN <n> resume=<0|1> pid=<pid>
+# so a test can COUNT how many times a message's text reached a process across
+# every attempt and every daemon life. The behaviour of spawn <n> is line <n>
+# of `plan` in the same directory (default `ok`), because the daemon's continue
+# note carries no test keyword a prompt-steered fake could key on:
+#   ok               — init, assistant text, success result, exit 0
+#   answer_transient — init, assistant text (the model ANSWERED), then a
+#                      transient API error on stderr, exit 1
+#   silent_transient — a transient API error on stderr before any output, exit 1
+#   answer_credit    — init, assistant text, then a credit-balance error, exit 1
+#   silent_credit    — a credit-balance error before any output, exit 1
+#   silent_hold      — init only (stdin read, NO model output), then holds
+#                      until `release` exists; the test kills it (R13.2)
+#   answer_hold      — init, assistant text, then holds until `release` exists
+#                      in the cwd (30 s ceiling); the test kills it meanwhile
+#   notify_then_work_hold — (R13.4, the DEPLOY-9l attempt-2 shape) a queued
+#                      task-notification mini-turn FIRST: init + a clean
+#                      result; then the operator's turn opens with a SECOND
+#                      init and a top-level tool_use, and holds until
+#                      `release` (the test kills it meanwhile)
+#   answer_trailing_hold — (R13.4, the DEPLOY-9l attempt-1 shape) init,
+#                      assistant text, a clean result, then the background-
+#                      task lines a finished turn streams AFTER its result
+#                      (background_tasks_changed, task_updated killed,
+#                      task_notification), then holds until `release` and
+#                      exits 0 with no further output
+#   (Every notify_* mode ANNOUNCES its mini-turn as the real CLI does: a
+#   `task_notification` line for a previous session's task BEFORE the
+#   mini-turn's init — DEPLOY-9m seq 54 -> init 55 -> result 56 -> init 57.)
+#   notify_text_init_hold — (R13.5 G3) a notification mini-turn that SPEAKS:
+#                      init, top-level text, a clean result; then the
+#                      operator's turn opens with a SECOND init and NOTHING
+#                      else (the model has not read it yet); holds until
+#                      `release` (the test kills it meanwhile)
+#   notify_text_work_hold — (R13.5 G3, the opposing arm) the same speaking
+#                      mini-turn, then the operator's turn opens (second init)
+#                      AND the model starts on it (a top-level tool_use);
+#                      holds until `release`
+#   answer_wake_init_hold — (R13.5 G5) the operator's turn ANSWERS (init,
+#                      text, clean result); then a task this process launched
+#                      reports (`task_notification`) and wakes the CLI into a
+#                      new turn (second init) that writes nothing; holds
+#                      until `release` (the test kills it meanwhile)
+#   answer_bare_init_hold — (R13.5 G5) the same, but the second init comes
+#                      with NO announcing line. Byte-for-byte the stream of
+#                      an UN-announced notification mini-turn followed by
+#                      the operator's turn: the stream cannot tell them apart,
+#                      and the daemon takes the continue note (never a
+#                      duplicate)
+#   notify_silent_init_hold — (R13.5 G3-A, the prod mini-turn shape) an
+#                      announced SILENT mini-turn (announce, init, clean
+#                      result, no output), then the operator's turn opens
+#                      (second, un-announced init) and writes nothing; holds
+#   announced_turn_answer_bare_hold — (R13.5 G6 = inspect q1d-A) an announced
+#                      silent mini-turn; then the operator's OWN turn is
+#                      announced too (a second notification) and ANSWERS
+#                      (init, text, result); then a bare init wake; holds
+#   folded_notice_answer_hold — (R13.5 G6 = inspect q1d-B) announce, then
+#                      ONE turn that answers with a notification folded in
+#                      (init, text, notification, result); then a bare init
+#                      wake; holds
+#   answer_wake_work_hold — (R13.5 inspect finding 3) the operator's turn
+#                      answers (init, text, result); an announced wake opens
+#                      a new turn that starts work (init, tool_use); holds
+set -u
+
+# The zero-cost `/usage` probe carries no stdin: hand it to the shared fake.
+for arg in "$@"; do
+  if [[ "$arg" == "/usage" ]]; then
+    exec "$(dirname "$0")/fake-claude" "$@"
+  fi
+done
+
+DIR="$PWD"
+PROMPT="$(cat)"
+# Like the real CLI (claude 2.1.280, measured by the R13.2 inspector): an
+# empty stdin is refused before any `init` — so an attempt whose write never
+# happened can never look as if it came up (R13.2-inspect R2).
+if [[ -z "$PROMPT" ]]; then
+  echo "Error: Input must be provided either through stdin or as a prompt argument when using --print" >&2
+  exit 1
+fi
+N=$(( $(cat "$DIR/.spawns" 2>/dev/null || echo 0) + 1 ))
+echo "$N" > "$DIR/.spawns"
+RESUME=0
+for a in "$@"; do
+  [[ "$a" == "--resume" ]] && RESUME=1
+done
+{
+  printf '@@SPAWN %s resume=%s pid=%s\n' "$N" "$RESUME" "$$"
+  printf '%s\n' "$PROMPT"
+} >> "$DIR/stdin.log"
+
+# Opt-in (a `write-transcript` file in the cwd): leave a native transcript for
+# the session in this account's store, as the real CLI does, so a failover can
+# PORT the conversation and the next spawn RESUMES it. Off by default: a
+# projected thread's native file is the daemon's render and is not ours to
+# touch.
+SID=""
+prev=""
+for a in "$@"; do
+  [[ "$prev" == "--session-id" || "$prev" == "--resume" ]] && SID="$a"
+  prev="$a"
+done
+if [[ -f "$DIR/write-transcript" && -n "${CLAUDE_CONFIG_DIR:-}" && -n "$SID" ]]; then
+  mkdir -p "$CLAUDE_CONFIG_DIR/projects/fake-slug"
+  printf '{"type":"user","sessionId":"%s","uuid":"u-%s","parentUuid":null,"cwd":"%s","message":{"role":"user","content":"spawn %s"}}\n' \
+    "$SID" "$N" "$DIR" "$N" >> "$CLAUDE_CONFIG_DIR/projects/fake-slug/$SID.jsonl"
+fi
+
+MODE="$(sed -n "${N}p" "$DIR/plan" 2>/dev/null)"
+MODE="${MODE:-ok}"
+
+emit_init() {
+  echo '{"type":"system","subtype":"init","session_id":"fake-sess","cwd":"/tmp","model":"claude-fable-5","tools":["Bash","Read"],"mcp_servers":[],"permissionMode":"bypassPermissions","slash_commands":["/usage"],"apiKeySource":"none","agents":[]}'
+}
+emit_text() {
+  echo '{"type":"assistant","message":{"id":"msg_resend_'"$N"'","model":"claude-fable-5","content":[{"type":"text","text":"working on it (spawn '"$N"')"}],"usage":{"input_tokens":100,"output_tokens":20,"cache_read_input_tokens":0,"cache_creation_input_tokens":0}}}'
+}
+emit_result() {
+  echo '{"type":"result","subtype":"success","is_error":false,"total_cost_usd":0.01,"num_turns":1,"duration_ms":50,"stop_reason":"end_turn","modelUsage":{"claude-fable-5":{"inputTokens":105,"outputTokens":25,"cacheReadInputTokens":0,"cacheCreationInputTokens":0,"costUSD":0.01}},"session_id":"fake-sess"}'
+}
+
+emit_tool_use() {
+  echo '{"type":"assistant","message":{"id":"msg_resend_'"$N"'_work","model":"claude-fable-5","content":[{"type":"tool_use","id":"toolu_resend_'"$N"'","name":"Bash","input":{"command":"ping -c 150 127.0.0.1"}}],"usage":{"input_tokens":100,"output_tokens":20,"cache_read_input_tokens":0,"cache_creation_input_tokens":0}}}'
+}
+emit_announce() {
+  echo '{"type":"system","subtype":"task_notification","task_id":"bprev'"$N"'","status":"stopped","output_file":"","summary":"Background shell command did not finish before the previous session ended","session_id":"fake-sess"}'
+}
+emit_wake_notice() {
+  echo '{"type":"system","subtype":"task_notification","task_id":"bwake'"$N"'","status":"completed","output_file":"","summary":"Background command completed","session_id":"fake-sess"}'
+}
+emit_trailing_tasks() {
+  echo '{"type":"system","subtype":"background_tasks_changed","tasks":[],"session_id":"fake-sess"}'
+  echo '{"type":"system","subtype":"task_updated","task_id":"bfake'"$N"'","patch":{"status":"killed","end_time":1792951385405},"session_id":"fake-sess"}'
+  echo '{"type":"system","subtype":"task_notification","task_id":"bfake'"$N"'","status":"killed","output_file":"","summary":"Background shell command was stopped","session_id":"fake-sess"}'
+}
+hold_for_release() {
+  for _ in $(seq 1 600); do
+    [[ -f "$DIR/release" ]] && break
+    sleep 0.05
+  done
+}
+
+case "$MODE" in
+  notify_silent_init_hold)
+    emit_announce
+    emit_init; emit_result
+    emit_init
+    hold_for_release
+    emit_text; emit_result
+    exit 0
+    ;;
+  announced_turn_answer_bare_hold)
+    emit_announce
+    emit_init; emit_result
+    emit_wake_notice
+    emit_init; emit_text; emit_result
+    emit_init
+    hold_for_release
+    emit_text; emit_result
+    exit 0
+    ;;
+  folded_notice_answer_hold)
+    emit_announce
+    emit_init; emit_text; emit_wake_notice; emit_result
+    emit_init
+    hold_for_release
+    emit_text; emit_result
+    exit 0
+    ;;
+  answer_wake_work_hold)
+    emit_init; emit_text; emit_result
+    emit_wake_notice
+    emit_init; emit_tool_use
+    hold_for_release
+    emit_result
+    exit 0
+    ;;
+  answer_wake_init_hold)
+    emit_init; emit_text; emit_result
+    emit_wake_notice
+    emit_init
+    hold_for_release
+    emit_text; emit_result
+    exit 0
+    ;;
+  answer_bare_init_hold)
+    emit_init; emit_text; emit_result
+    emit_init
+    hold_for_release
+    emit_text; emit_result
+    exit 0
+    ;;
+  notify_text_init_hold)
+    emit_announce
+    emit_init; emit_text; emit_result
+    emit_init
+    hold_for_release
+    emit_text; emit_result
+    exit 0
+    ;;
+  notify_text_work_hold)
+    emit_announce
+    emit_init; emit_text; emit_result
+    emit_init; emit_tool_use
+    hold_for_release
+    emit_result
+    exit 0
+    ;;
+  notify_then_work_hold)
+    emit_announce
+    emit_init; emit_result
+    emit_init; emit_tool_use
+    hold_for_release
+    emit_result
+    exit 0
+    ;;
+  answer_trailing_hold)
+    emit_init; emit_text; emit_result
+    emit_trailing_tasks
+    hold_for_release
+    exit 0
+    ;;
+  answer_transient)
+    emit_init; emit_text
+    sleep 0.2
+    echo "API Error: 529 Overloaded" >&2
+    exit 1
+    ;;
+  silent_transient)
+    echo "API Error: 529 Overloaded" >&2
+    exit 1
+    ;;
+  answer_credit)
+    emit_init; emit_text
+    sleep 0.2
+    echo "Your credit balance is too low to run this request" >&2
+    exit 1
+    ;;
+  silent_credit)
+    echo "Your credit balance is too low to run this request" >&2
+    exit 1
+    ;;
+  silent_hold)
+    emit_init
+    for _ in $(seq 1 600); do
+      [[ -f "$DIR/release" ]] && break
+      sleep 0.05
+    done
+    emit_result
+    exit 0
+    ;;
+  answer_hold)
+    emit_init; emit_text
+    for _ in $(seq 1 600); do
+      [[ -f "$DIR/release" ]] && break
+      sleep 0.05
+    done
+    emit_result
+    exit 0
+    ;;
+  *)
+    emit_init; emit_text; emit_result
+    exit 0
+    ;;
+esac

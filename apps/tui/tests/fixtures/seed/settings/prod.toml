@@ -1,0 +1,28 @@
+# Seed settings for the `prod` cauldron (design report 0057), on fake data.
+# Read in place of <data>/prod/tui/soup/settings.toml until that file exists;
+# the first edit writes it. Only explicit values: anything absent inherits.
+# What every cauldron shares — the token sources, the machine, the mesh, the
+# identity, the TUI (8e4fca10 msg 186, msg 235) — is GLOBAL: its seed is
+# global.toml.
+#
+# Its own inference endpoint and what it takes of the global ones (design
+# 0199 §5), on fake data: a vLLM server only prod sees, a $60 / month cap on
+# jev, general not used here, and the side-by-side typed answers bound to jev.
+
+[cauldron.endpoints.ep-6]
+template = "local"
+server = "vllm"
+name = "scratch-vllm"
+
+[cauldron.use.ep-1]
+metered_cap_usd = 60
+max_concurrent = 2
+
+[cauldron.use.ep-2]
+enabled = false
+
+[cauldron.use.ep-3]
+metered_cap_usd = 100
+
+[roles."type_one".secondary]
+endpoint = "ep-1"

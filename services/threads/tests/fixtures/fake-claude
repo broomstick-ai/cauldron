@@ -1,0 +1,988 @@
+#!/usr/bin/env bash
+# Fake `claude` binary for threads WS tests (ported from CCW's fixture; NEVER a
+# real invocation). The turn MODE is chosen from the prompt text on stdin so
+# parallel tests never race on a shared env var:
+#   prompt contains "subagent"  — an async Agent still running at parent result
+#   prompt contains "ratelimit" — emits a synthetic SESSION 429 and exits. The
+#                                 reset is time-only prose COMPUTED two hours
+#                                 ahead of now, not a fixed clock time: a reset
+#                                 that has gone by resolves to no window at all
+#                                 (`reset::ResetTime::resolve`), so a literal
+#                                 made every caller clock-dependent.
+#   prompt contains "weeklylimit" — emits the WEEKLY 429 verbatim as the CLI
+#                                 produced it on 2026-08-06, with a reset two
+#                                 days out. The reset instant is COMPUTED from
+#                                 today so the test is stable whenever it runs;
+#                                 the shape of the prose is copied exactly.
+#   prompt contains "failonce"  — first call exits 1 with a transient stderr
+#                                 message; the retry succeeds (per-prompt marker)
+#   prompt contains "compactturn" — work, then an automatic `compact_boundary`,
+#                                 then (after a 1.5s window) MORE assistant text
+#                                 reading "AFTER THE COMPACTION". Whether that
+#                                 last line reaches the ledger is exactly the
+#                                 `resume_after_compaction` question.
+#   prompt contains "compactexit" — a compaction in the turn's LAST breath: the
+#                                 boundary and the result land in one poll, so
+#                                 the stop flag is raised by the final drain
+#                                 and must not survive into the next turn.
+#   prompt contains "slowturn"  — sleeps 0.7s mid-turn (queue-while-busy tests)
+#   prompt contains "chattyturn" — 450 system lines, then text and a result: a
+#                                 turn whose user_message is >400 events back
+#   prompt contains "floodturn" — the child's final top-level words, then a
+#                                 native subagent's narration and 10,200
+#                                 system lines, then the result: a run of more
+#                                 than 10,000 events whose words are far
+#                                 outside any fixed tail (H179, SUBAGENT-WAKE)
+#   prompt contains "holdturn"  — runs until the test creates the file named by
+#                                 `release=<path>` (20s ceiling): a turn that is
+#                                 DEFINITELY still executing, for the
+#                                 self-update tests
+
+#   prompt contains "netdown"   — exits 1 with a DNS-failure stderr (the network
+#                                 is GONE and stays gone; item 73)
+#   prompt contains "servererr" — some work, then a `server_error` API error
+#                                 whose prose names ENOTFOUND (an internal thread)
+#   prompt contains "netresult" — a lost network reported as an errored RESULT
+#                                 on stdout (no stderr race under load)
+#   prompt contains "netflap"   — exits 1 once with ECONNREFUSED, then succeeds:
+#                                 the network comes back on its own
+#   prompt contains "creditfail"— exits 1 with a credit-balance stderr message
+#   prompt contains "schemaexhaust" / "turnsexhaust" / "okthenexit" — a result
+#                                 (error_max_structured_output_retries /
+#                                 error_max_turns / clean success), then exit 1
+#                                 (R11.J2)
+#   prompt contains "creditlate" / "genericlate" — exits 1 at once; the credit /
+#                                 generic stderr line is written 500 ms LATER by
+#                                 a descendant (R9.E1)
+#   prompt contains "creditheld" — credit line on stderr, then a descendant holds
+#                                 stderr open 20 s (pid -> `holdpid=<path>`)
+#   prompt contains "limitpush" — a normal turn carrying a CURRENT-shape
+#                                 rate_limit_event (`push=overage|rejected`,
+#                                 optional `release=<path>` hold) — gap A-4
+#   prompt contains "gaugeturn" — a normal turn PLUS the real rate_limit_event
+#                                 stream line (verbatim shape from the
+#                                 2026-07-27 burn-in) — the DEC-15 push gauge
+#   prompt contains "bigburn"   — streams a huge MessageUsage, launches a
+#                                 long-lived GRANDCHILD (pid written to the
+#                                 path named by `burnfile=...` in the prompt),
+#                                 then SLEEPS, so a budget kill has both a
+#                                 process and a descendant to tear down
+#   argv contains "/usage"      — the zero-cost usage poll (DEC-15 layer 2),
+#                                 answering with CCW's observed prose shape
+#   prompt contains "mcpprobe"  — performs the STREAMABLE-HTTP MCP HANDSHAKE the
+#                                 installed claude 2.1.280 performs, on the real
+#                                 wire, against `mcpurl=<url>` with the run token
+#                                 read from `tokenfile=<path>` (waited for, 20s
+#                                 ceiling), and records every step to
+#                                 `mcpout=<path>`. `agentid=<thread_id>` is the
+#                                 caller's own thread. See the branch for the
+#                                 bundle citations.
+#   argv carries `--json-schema` whose `description` holds `fake:<mode>`
+#                               — STRUCTURED OUTPUT (R11.J4/J5). The answer is a
+#                                 `StructuredOutput` tool_use, shaped as the J1
+#                                 captures (`fixtures/structured/`) show it:
+#                                 `fake:valid` answers {"verdict":"merge"} and
+#                                 the result carries `structured_output`;
+#                                 `fake:always-invalid` answers
+#                                 {"verdict":"maybe"} and the result is
+#                                 `success` with NO `structured_output` (the
+#                                 CLI's "success without value"), so only the
+#                                 tool_use input remains to judge;
+#                                 `fake:fix-on-retry` is invalid unless the
+#                                 prompt is the daemon's corrective turn ("did
+#                                 not match the requested schema"). A
+#                                 `hold=<path>` in the description makes the
+#                                 CORRECTIVE turn wait for that file (20s
+#                                 ceiling) — a retry definitely mid-flight.
+#                                 `fake:fail` fails the turn (badmodel shape);
+#                                 `fake:stall` holds EVERY turn on `hold=`.
+#   otherwise                   — basic: system init, assistant text, result
+set -u
+
+STATE_DIR="${FAKE_STATE_DIR:-/tmp}"
+
+# The `/usage` probe passes the slash command in ARGV with no stdin, so it must
+# be answered before we block on `cat`.
+for arg in "$@"; do
+  if [[ "$arg" == "/usage" ]]; then
+    # PROBE FAILURE (additive; nothing else changes). An account whose own
+    # config dir holds a `usage-fail` file answers NOTHING at all, so the
+    # probe's parse fails and `probe_account` reports the reason. Per config
+    # dir for the same reason as `usage-seq` below: it is how a test makes ONE
+    # account of several fail while its siblings poll cleanly, which is the
+    # only shape that exercises a PARTIAL sweep failure.
+    if [[ -n "${CLAUDE_CONFIG_DIR:-}" && -f "${CLAUDE_CONFIG_DIR}/usage-fail" ]]; then
+      exit 1
+    fi
+    # SLOW PROBE (R10.M2c; additive). A `usage-sleep` file in the account's
+    # config dir holds seconds to sleep before answering — prod's 20-60 s
+    # `/usage` spawns, made injectable.
+    if [[ -n "${CLAUDE_CONFIG_DIR:-}" && -f "${CLAUDE_CONFIG_DIR}/usage-sleep" ]]; then
+      sleep "$(cat "${CLAUDE_CONFIG_DIR}/usage-sleep")"
+    fi
+    # SETTLE-LADDER mode (edge polling). When the account's own config dir holds
+    # a `usage-seq` file — a comma-separated list of session percentages —
+    # successive polls walk it and then hold at the last value: the shape a meter
+    # that lags behind a landed turn and then stops moving actually has.
+    #
+    # Per CONFIG DIR, deliberately, not per env var: the daemon sets
+    # CLAUDE_CONFIG_DIR per account exactly as a real turn spawn does, so two
+    # tests running in one process cannot see each other's sequence, and the
+    # machine-default account (no config dir) keeps the fixed reading.
+    seqfile="${CLAUDE_CONFIG_DIR:-}/usage-seq"
+    if [[ -n "${CLAUDE_CONFIG_DIR:-}" && -f "$seqfile" ]]; then
+      counter="${CLAUDE_CONFIG_DIR}/usage-seq.pos"
+      n=0
+      [[ -f "$counter" ]] && n="$(cat "$counter")"
+      IFS=',' read -r -a seq <<< "$(cat "$seqfile")"
+      last=$(( ${#seq[@]} - 1 ))
+      idx=$n
+      (( idx > last )) && idx=$last
+      session="${seq[$idx]}"
+      echo $(( n + 1 )) > "$counter"
+      reset="$(date -v+2H '+%l:%M%p' 2>/dev/null || date -d '+2 hours' '+%l:%M%p')"
+      reset="${reset# }"
+      cat <<USAGE
+{"type":"result","subtype":"success","is_error":false,"num_turns":0,"total_cost_usd":0,"result":"Current session: ${session}% used · resets ${reset} (America/Chicago)\nCurrent week (all models): 34% used · resets ${reset} (America/Chicago)\nCurrent week (Fable): 56% used · resets ${reset} (America/Chicago)","session_id":"fake-usage-sess"}
+USAGE
+      exit 0
+    fi
+    # The reset instants are computed ~2 hours ahead in LOCAL time rather than
+    # hard-coded. Real claude reports a reset that is by definition inside the
+    # pool it belongs to, and the calibrator now enforces exactly that (msg
+    # #690: every execution in a window has to fall inside ONE session window,
+    # and the session is placed as `resets_at - 5h`). A fixed calendar date
+    # resolves to the NEXT occurrence \u2014 a year out once the date has passed \u2014
+    # which no live session pool could ever report.
+    reset="$(date -v+2H '+%l:%M%p' 2>/dev/null || date -d '+2 hours' '+%l:%M%p')"
+    reset="${reset# }"
+    # WEEKLY OVERRIDE (the 2026-08-14 shape). When the account's own config dir
+    # holds a `usage-weekly` file, its contents are the "Current week (all
+    # models)" percentage. Per config dir for the same reason as `usage-seq`:
+    # two tests in one process must not be able to see each other's meter. This
+    # is how a test makes the gauge report an EXHAUSTED account without a 429
+    # anywhere in sight — which is precisely the fact the poller had and could
+    # not act on.
+    weekly=34
+    wfile="${CLAUDE_CONFIG_DIR:-}/usage-weekly"
+    if [[ -n "${CLAUDE_CONFIG_DIR:-}" && -f "$wfile" ]]; then
+      weekly="$(cat "$wfile")"
+    fi
+    cat <<USAGE
+{"type":"result","subtype":"success","is_error":false,"num_turns":0,"total_cost_usd":0,"result":"Current session: 12% used \u00b7 resets ${reset} (America/Chicago)\nCurrent week (all models): ${weekly}% used \u00b7 resets ${reset} (America/Chicago)\nCurrent week (Fable): 56% used \u00b7 resets ${reset} (America/Chicago)","session_id":"fake-usage-sess"}
+USAGE
+    exit 0
+  fi
+done
+
+PROMPT="$(cat)"
+
+# PROMPT CAPTURE (opt-in, additive — no existing branch changes behaviour).
+# A prompt carrying `promptfile=<path>` gets written VERBATIM to that path,
+# APPENDED with a NUL separator so several turns on one thread can each be
+# inspected. This is the only way a test can assert on what the model actually
+# received, which is the whole subject of the per-message metadata block.
+if [[ "$PROMPT" == *"promptfile="* ]]; then
+  CAPTURE="${PROMPT#*promptfile=}"
+  CAPTURE="${CAPTURE%%[[:space:]]*}"
+  if [[ -n "$CAPTURE" ]]; then
+    printf '%s\0' "$PROMPT" >> "$CAPTURE"
+  fi
+fi
+
+emit_init() {
+  echo '{"type":"system","subtype":"init","session_id":"fake-sess","cwd":"/tmp","model":"claude-fable-5","tools":["Bash","Read"],"mcp_servers":[],"permissionMode":"bypassPermissions","slash_commands":["/usage"],"apiKeySource":"none","agents":[]}'
+}
+emit_text() {
+  echo '{"type":"assistant","message":{"id":"msg_fake_01","model":"claude-fable-5","content":[{"type":"text","text":"Hello from fake claude."}],"usage":{"input_tokens":100,"output_tokens":20,"cache_read_input_tokens":0,"cache_creation_input_tokens":0}}}'
+}
+emit_result() {
+  echo '{"type":"result","subtype":"success","is_error":false,"total_cost_usd":0.01,"num_turns":1,"duration_ms":50,"stop_reason":"end_turn","modelUsage":{"claude-fable-5":{"inputTokens":105,"outputTokens":25,"cacheReadInputTokens":0,"cacheCreationInputTokens":0,"costUSD":0.01}},"session_id":"fake-sess"}'
+}
+
+# ── STRUCTURED OUTPUT (R11.J4/J5): chosen by the SCHEMA, not the prompt ───────
+#
+# The corrective turn's prompt is written by the daemon, so a prompt keyword
+# cannot steer it; the schema rides every turn of the question, so its
+# `description` can. Additive: no turn without `--json-schema` reaches here.
+SCHEMA=""
+prev=""
+for arg in "$@"; do
+  [[ "$prev" == "--json-schema" ]] && SCHEMA="$arg"
+  prev="$arg"
+done
+if [[ "$SCHEMA" == *"fake:"* ]]; then
+  CORRECTIVE=0
+  [[ "$PROMPT" == *"did not match the requested schema"* ]] && CORRECTIVE=1
+  # `fake:fail` — the schema turn FAILS deterministically (the `badmodel`
+  # shape: unclassified stderr, exit 1, no result line), so there is no answer
+  # to judge. `fake:stall` — EVERY turn (not only the corrective one) waits on
+  # `hold=<path>`: a schema turn definitely mid-flight, for a cancel (R11.J5).
+  if [[ "$SCHEMA" == *"fake:fail"* ]]; then
+    echo "Error: The model \"zzz-nonexistent\" is not a valid model" >&2
+    exit 1
+  fi
+  if [[ ( $CORRECTIVE == 1 || "$SCHEMA" == *"fake:stall"* ) && "$SCHEMA" == *"hold="* ]]; then
+    HOLD="${SCHEMA#*hold=}"
+    HOLD="${HOLD%%[\" ]*}"
+    for _ in $(seq 1 400); do [[ -f "$HOLD" ]] && break; sleep 0.05; done
+  fi
+  VALID=0
+  if [[ "$SCHEMA" == *"fake:valid"* ]]; then VALID=1; fi
+  if [[ "$SCHEMA" == *"fake:fix-on-retry"* && $CORRECTIVE == 1 ]]; then VALID=1; fi
+  if [[ $VALID == 1 ]]; then VALUE='{"verdict":"merge"}'; else VALUE='{"verdict":"maybe"}'; fi
+  echo '{"type":"system","subtype":"init","session_id":"fake-sess","cwd":"/tmp","model":"claude-fable-5","tools":["Bash","Read","StructuredOutput"],"mcp_servers":[],"permissionMode":"bypassPermissions","slash_commands":[],"apiKeySource":"none","agents":[]}'
+  emit_text
+  printf '{"type":"assistant","message":{"id":"msg_fake_so","model":"claude-fable-5","content":[{"type":"tool_use","id":"toolu_so1","name":"StructuredOutput","input":%s}],"usage":{"input_tokens":5,"output_tokens":5,"cache_read_input_tokens":0,"cache_creation_input_tokens":0}}}\n' "$VALUE"
+  if [[ $VALID == 1 ]]; then
+    echo '{"type":"user","message":{"role":"user","content":[{"tool_use_id":"toolu_so1","type":"tool_result","content":"Structured output provided successfully"}]}}'
+    printf '{"type":"result","subtype":"success","is_error":false,"total_cost_usd":0.01,"num_turns":2,"duration_ms":50,"stop_reason":"tool_use","result":%s,"structured_output":%s,"modelUsage":{},"session_id":"fake-sess"}\n' "$(printf '%s' "$VALUE" | sed 's/"/\\"/g; s/^/"/; s/$/"/')" "$VALUE"
+  else
+    echo '{"type":"user","message":{"role":"user","content":[{"type":"tool_result","content":"Output does not match required schema: /verdict: must be equal to one of the allowed values","is_error":true,"tool_use_id":"toolu_so1"}]}}'
+    echo '{"type":"result","subtype":"success","is_error":false,"total_cost_usd":0.01,"num_turns":2,"duration_ms":50,"stop_reason":"end_turn","result":"Hello from fake claude.","modelUsage":{},"session_id":"fake-sess"}'
+  fi
+  exit 0
+fi
+
+# ── SUBAGENT USAGE LIMIT (the 2026-08-14 signal that was parsed and dropped) ──
+#
+# The parent turn is perfectly healthy and ENDS SUCCESSFULLY. That is the whole
+# point: on 2026-08-14 six subagents died on the weekly limit between 19:33 and
+# 19:36 while the parent kept streaming, and the parent's own 429 did not arrive
+# until 19:39:37. A fixture whose parent also 429s could not tell the two fixes
+# apart.
+#
+# The `system/task_updated` line is verbatim from the capture
+# (`tests/fixtures/task_lifecycle.jsonl`), with the reset instant computed from
+# today so the test is stable whenever it runs.
+if [[ "$PROMPT" == *"limitsubagent"* ]]; then
+  emit_init
+  emit_text
+  WHEN="$(date -v+2d '+%b %-d at 8pm (America/Chicago)' 2>/dev/null \
+          || date -d '+2 days' '+%b %-d at 8pm (America/Chicago)')"
+  printf '{"type":"system","subtype":"task_updated","task_id":"a47ddba3318c242f1","patch":{"status":"failed","end_time":1785622319569,"error":"Agent terminated early due to an API error: You'"'"'ve hit your weekly limit \u00b7 resets %s"},"uuid":"a6aa7cf5-0000-0000-0000-2cce961f1dc5","session_id":"fake-sess"}\n' "$WHEN"
+  emit_result
+  exit 0
+# ── THE FALSE POSITIVE: a subagent that merely READ rate-limiting code ────────
+#
+# A terminal `failed` patch whose error text contains the bare word "resets",
+# because the agent was quoting the crate's own source back at us. Routine work
+# on this deployment. `classify_message`'s rate-limit branch matches exactly
+# this substring, which is why the `TaskUpdated` arm must not use it: barring an
+# account on this string would take a healthy login — and every label of it —
+# out of service.
+elif [[ "$PROMPT" == *"benignsubagent"* ]]; then
+  emit_init
+  emit_text
+  printf '{"type":"system","subtype":"task_updated","task_id":"a47ddba3318c242f2","patch":{"status":"failed","end_time":1785622319569,"error":"Agent failed while reading retry.rs: the rate-limit branch matches the bare substring resets, see classify_message"},"uuid":"a6aa7cf5-0000-0000-0000-2cce961f1dc6","session_id":"fake-sess"}\n'
+  emit_result
+  exit 0
+# ── A TURN THAT IS DEFINITELY MID-FLIGHT, WITH REAL WORK ON THE TRANSCRIPT ────
+#
+# For the mid-turn interrupt. Two properties the test needs and cannot fake from
+# outside:
+#
+#   * it WRITES A TRANSCRIPT whose last record is an assistant turn, exactly as
+#     real claude does, so the SIGKILL lands on a conversation that has landed
+#     real work. `trimmable_tail` must refuse to roll that back, and `--resume`
+#     must then replay it;
+#   * the FIRST call blocks until it is killed; the SECOND call for the same
+#     prompt (the retry) returns a normal successful turn — and REFUSES unless
+#     it was invoked with `--resume`, so a test cannot pass by restarting fresh.
+#
+# The transcript path is derived exactly as `accounts::locate_transcript` scans
+# for it: `<state_dir>/projects/<slug>/<session>.jsonl`.
+elif [[ "$PROMPT" == *"midturnkill"* ]]; then
+  TOKEN="$(printf '%s' "$PROMPT" | cksum | cut -d' ' -f1)"
+  MARKER="$STATE_DIR/threads-mtk-$TOKEN"
+  SESSION=""
+  RESUMED=0
+  prev=""
+  for arg in "$@"; do
+    case "$prev" in
+      --session-id) SESSION="$arg" ;;
+      --resume) SESSION="$arg"; RESUMED=1 ;;
+    esac
+    prev="$arg"
+  done
+  STATE="${CLAUDE_CONFIG_DIR:-${THREADS_CLAUDE_HOME:-$HOME}/.claude}"
+  # SCAN for the session, exactly as `accounts::locate_transcript` does, so a
+  # transcript the daemon PORTED to another account's store is still found. The
+  # slug dir is only where it starts out.
+  TX="$(find "$STATE/projects" -name "$SESSION.jsonl" -type f 2>/dev/null | head -1)"
+  if [[ -z "$TX" ]]; then
+    TDIR="$STATE/projects/-fake-slug"
+    mkdir -p "$TDIR"
+    TX="$TDIR/$SESSION.jsonl"
+  fi
+  if [[ ! -f "$MARKER" ]]; then
+    : > "$MARKER"
+    emit_init
+    # The conversation, as claude writes it: the prompt, then a REAL assistant
+    # record. This is the tail `trimmable_tail` must refuse to trim.
+    {
+      echo '{"type":"user","message":{"role":"user","content":"midturnkill"},"uuid":"tx-user-1"}'
+      echo '{"type":"assistant","message":{"role":"assistant","model":"claude-fable-5","content":[{"type":"text","text":"half a thought"}]},"uuid":"tx-asst-1"}'
+    } >> "$TX"
+    emit_text
+    # Long enough that only a teardown ends it.
+    sleep 30
+    emit_result
+    exit 0
+  fi
+  if [[ "$RESUMED" != "1" ]]; then
+    echo "fake-claude: the retry did NOT resume — a mid-turn interrupt must not restart fresh" >&2
+    exit 1
+  fi
+  if [[ ! -f "$TX" ]]; then
+    echo "fake-claude: --resume $SESSION but no transcript at $TX" >&2
+    exit 1
+  fi
+  if ! tail -1 "$TX" | grep -q '"type":"assistant"'; then
+    echo "fake-claude: the transcript's last record is not the mid-stream assistant turn" >&2
+    exit 1
+  fi
+  emit_init; emit_text; emit_result; exit 0
+# ── A PROJECTED TURN (R4.S4a, `tests/projected_turn.rs`) ─────────────────────
+#
+# The daemon RENDERED the transcript from its ledger before spawning us, so we
+# behave as real claude does on `--resume`: find the file by scanning
+# `<state>/projects/*/<session>.jsonl` (exactly `accounts::locate_transcript`),
+# then APPEND what the wire never carries — the prompt as delivered under our
+# own uuid, an `attachment`, an `isMeta` line — and the assistant record, whose
+# uuid is the same one we print on stdout. On `--session-id` (no file rendered,
+# the thread is new) the file is created where real claude files it: under the
+# slug of the cwd. Written with python3 because the prompt holds the daemon's
+# metadata block, quotes included, and bash cannot JSON-escape it.
+elif [[ "$PROMPT" == *"projected"* ]]; then
+  SESSION=""
+  RESUMED=0
+  prev=""
+  for arg in "$@"; do
+    case "$prev" in
+      --session-id) SESSION="$arg" ;;
+      --resume) SESSION="$arg"; RESUMED=1 ;;
+    esac
+    prev="$arg"
+  done
+  STATE="${CLAUDE_CONFIG_DIR:-${THREADS_CLAUDE_HOME:-$HOME}/.claude}"
+  TX="$(find "$STATE/projects" -name "$SESSION.jsonl" -type f 2>/dev/null | head -1)"
+  if [[ -z "$TX" ]]; then
+    if [[ "$RESUMED" == "1" ]]; then
+      echo "fake-claude: --resume $SESSION but no transcript under $STATE/projects" >&2
+      exit 1
+    fi
+    SLUG="$(printf '%s' "$PWD" | sed 's/[^a-zA-Z0-9]/-/g')"
+    mkdir -p "$STATE/projects/$SLUG"
+    TX="$STATE/projects/$SLUG/$SESSION.jsonl"
+    : > "$TX"
+  elif [[ "$RESUMED" != "1" ]]; then
+    echo "fake-claude: --session-id $SESSION but a transcript already exists at $TX" >&2
+    exit 1
+  fi
+  emit_init
+  # MID-TURN HOLD (R4.S4a-land): with `release=<path>` in the prompt the turn
+  # stays open after `init` until the test creates that file (20s ceiling),
+  # so another writer can touch the thread's ledger while this turn holds it.
+  # Additive: a projected prompt without `release=` is unchanged.
+  if [[ "$PROMPT" == *"release="* ]]; then
+    REL="${PROMPT#*release=}"
+    REL="${REL%%[[:space:]]*}"
+    for _ in $(seq 1 1000); do
+      [[ -n "$REL" && -f "$REL" ]] && break
+      sleep 0.02
+    done
+  fi
+  FAKE_TX="$TX" FAKE_SESSION="$SESSION" FAKE_PROMPT="$PROMPT" FAKE_CWD="$PWD" python3 - <<'PY'
+import json, os, uuid, datetime
+tx, session, prompt, cwd = os.environ["FAKE_TX"], os.environ["FAKE_SESSION"], os.environ["FAKE_PROMPT"], os.environ["FAKE_CWD"]
+lines = [l for l in open(tx).read().split("\n") if l.strip()]
+parent = None
+n = 0
+for l in lines:
+    try:
+        v = json.loads(l)
+    except Exception:
+        continue
+    if v.get("uuid"):
+        parent = v["uuid"]
+    if v.get("type") == "assistant":
+        n += 1
+def ts():
+    return datetime.datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z"
+def stamp(d, parent):
+    d.update({"parentUuid": parent, "isSidechain": False, "userType": "external", "cwd": cwd,
+              "sessionId": session, "version": "2.1.280-fake", "gitBranch": None, "timestamp": ts()})
+    return d
+out = []
+u_prompt = str(uuid.uuid4())
+out.append(stamp({"type": "user", "uuid": u_prompt, "message": {"role": "user", "content": prompt}}, parent))
+# The attachment hangs BESIDE the prompt as a side child (a branch point in
+# the real file — `thread-adapters.md` §2.2); the conversation chain runs
+# prompt → meta → assistant.
+u_att = str(uuid.uuid4())
+out.append(stamp({"type": "attachment", "uuid": u_att, "attachment": {"type": "environment", "text": "fake environment"}}, u_prompt))
+u_meta = str(uuid.uuid4())
+out.append(stamp({"type": "user", "uuid": u_meta, "isMeta": True, "message": {"role": "user", "content": [{"type": "text", "text": "fake skill listing"}]}}, u_prompt))
+u_asst = str(uuid.uuid4())
+msg = {"id": "msg_fake_proj_%d" % (n + 1), "model": "claude-fable-5", "role": "assistant",
+       "content": [{"type": "text", "text": "projected reply %d" % (n + 1)}],
+       "usage": {"input_tokens": 100, "output_tokens": 20, "cache_read_input_tokens": 0, "cache_creation_input_tokens": 0}}
+asst = stamp({"type": "assistant", "uuid": u_asst, "requestId": "req_fake_%d" % (n + 1), "message": msg}, u_meta)
+out.append(asst)
+with open(tx, "a") as f:
+    for d in out:
+        f.write(json.dumps(d, separators=(",", ":")) + "\n")
+# The wire line for the same assistant record, in the wire's spelling.
+wire = {"type": "assistant", "uuid": u_asst, "session_id": session, "request_id": asst["requestId"],
+        "timestamp": asst["timestamp"], "parent_tool_use_id": None, "message": msg}
+print(json.dumps(wire, separators=(",", ":")))
+PY
+  emit_result
+  exit 0
+elif [[ "$PROMPT" == *"weeklylimit"* ]]; then
+  emit_init
+  # Verbatim shape, live capture 2026-08-06T21:09:13Z:
+  #   "You've hit your weekly limit \u00b7 resets Aug 8 at 1pm (America/Chicago)"
+  # A WEEKLY window is up to seven days out, which is the whole point of this
+  # fixture: it is the case a thirty-hour sanity cap silently discarded.
+  WHEN="$(date -v+2d '+%b %-d at 1pm (America/Chicago)' 2>/dev/null \
+          || date -d '+2 days' '+%b %-d at 1pm (America/Chicago)')"
+  printf '{"type":"assistant","message":{"model":"<synthetic>","content":[{"type":"text","text":"You'"'"'ve hit your weekly limit resets %s"}],"usage":{}},"error":"rate_limit","isApiErrorMessage":true,"apiErrorStatus":429}\n' "$WHEN"
+  exit 0
+elif [[ "$PROMPT" == *"farlimit"* ]]; then
+  # AN IMPLAUSIBLE WINDOW, from prose that parses perfectly. A 429 whose reset
+  # is THIRTY DAYS out: no pool the CLI has is longer than seven days, so this
+  # cannot be a real limit, and writing it into `accounts.limit_until` would
+  # take the account out of service for a month with nothing able to bring it
+  # back (`MAX_PARSED_RESET`, and the 2027 bar of 2026-08-15).
+  emit_init
+  WHEN="$(date -v+30d '+%b %-d at 1pm (America/Chicago)' 2>/dev/null \
+          || date -d '+30 days' '+%b %-d at 1pm (America/Chicago)')"
+  printf '{"type":"assistant","message":{"model":"<synthetic>","content":[{"type":"text","text":"You'"'"'ve hit your weekly limit · resets %s"}],"usage":{}},"error":"rate_limit","isApiErrorMessage":true,"apiErrorStatus":429}\n' "$WHEN"
+  exit 0
+elif [[ "$PROMPT" == *"errorresult"* ]]; then
+  # ── THE CONTRADICTION: `subtype:"success"` WITH `is_error:true` ─────────────
+  #
+  # Verbatim shape from an internal thread, 2026-08-18T17:45:00Z, and 45 others
+  # like it. The CLI burned all ten of its own internal `api_retry` attempts
+  # against a 529, printed the overload as an assistant message, and then ended
+  # the run with a result that calls itself a success and flags itself an error
+  # at the same time. The daemon used to classify that by SUBTYPE and throw the
+  # operator's turn away as a fatal `claude_error` reading "result subtype
+  # success".
+  emit_init
+  echo '{"type":"assistant","message":{"id":"6633a4dc-a35a-48eb-8687-0e0ecc5b5a50","model":"<synthetic>","content":[{"type":"text","text":"API Error: 529 Overloaded. This is a server-side issue, usually temporary — try again in a moment. If it persists, check https://status.claude.com."}],"usage":{"input_tokens":0,"output_tokens":0}}}'
+  echo '{"type":"result","subtype":"success","is_error":true,"total_cost_usd":0.0164,"num_turns":1,"duration_ms":213338,"stop_reason":"stop_sequence","modelUsage":{},"session_id":"fake-sess"}'
+  exit 1
+elif [[ "$PROMPT" == *"ratelimit"* ]]; then
+  emit_init
+  # ── THE RESET IS COMPUTED, NOT HARD-CODED ───────────────────────────────────
+  #
+  # This branch read a literal `2:40am (America/Chicago)` until 2026-10-06, and
+  # it was the last 429 branch in this file still breaking the rule the `/usage`
+  # branch above states in full and that `weeklylimit`, `farlimit` and
+  # `limitsubagent` all already follow.
+  #
+  # `reset::ResetTime::resolve` answers `None` for time-only prose whose clock
+  # time has already gone by and is not a genuine midnight wrap
+  # (`MAX_MIDNIGHT_ROLL`, six hours — the session cadence). That is CORRECT, it
+  # is what stopped a passed reset becoming a 24-hour bar, and `reset.rs` pins
+  # it with THIS VERY STRING: its
+  # `time_only_prose_that_went_by_this_morning_is_no_window`
+  # asserts `2:40am` resolved at `03:00` is no window at all.
+  #
+  # So the literal made every test that drives a 429 through this fixture
+  # CLOCK-DEPENDENT. `note_account_limit_for` early-returns when the reset does
+  # not resolve, writing no window, no identity and no axis — which is the
+  # honest answer to prose that names a window already over, and is exactly
+  # what the three recording tests in `account_limit_subject.rs` assert must
+  # NOT happen. They passed only while the machine clock sat in the six hours
+  # before 2:40am local and failed the other eighteen hours of every day.
+  #
+  # A SESSION reset is by definition inside the five-hour session pool, so two
+  # hours ahead of `now` is both the honest shape and always resolvable —
+  # today's occurrence when it is still ahead, and a real two-hour midnight
+  # wrap when it is not. Whenever the suite runs, this reset is a live window.
+  WHEN="$(date -v+2H '+%l:%M%p' 2>/dev/null || date -d '+2 hours' '+%l:%M%p')"
+  WHEN="${WHEN# }"
+  printf '{"type":"assistant","message":{"model":"<synthetic>","content":[{"type":"text","text":"You have hit your session limit resets %s (America/Chicago)"}],"usage":{}},"error":"rate_limit","isApiErrorMessage":true,"apiErrorStatus":429}\n' "$WHEN"
+  exit 0
+elif [[ "$PROMPT" == *"failonce"* ]]; then
+  TOKEN="$(printf '%s' "$PROMPT" | cksum | cut -d' ' -f1)"
+  MARKER="$STATE_DIR/threads-fo-$TOKEN"
+  if [[ ! -f "$MARKER" ]]; then
+    : > "$MARKER"
+    echo "API Error: 529 Overloaded" >&2
+    exit 1
+  fi
+  emit_init; emit_text; emit_result; exit 0
+elif [[ "$PROMPT" == *"servererr"* ]]; then
+  # A SERVER ERROR, verbatim from an internal thread's ledger (2026-10-14): the CLI
+  # names the cause `server_error` while its prose talks about the network. Some
+  # work happens first (an assistant line) — the turn HAD the network, which is
+  # why this must be the small server-error budget and not connectivity's.
+  emit_init; emit_text
+  printf '{"type":"assistant","message":{"model":"<synthetic>","role":"assistant","content":[{"type":"text","text":"API Error: Can'"'"'t reach the API server \u2014 check your internet or DNS (ENOTFOUND)"}],"usage":{}},"parent_tool_use_id":null,"error":"server_error","is_api_error_message":true,"session_id":"fake-sess"}\n'
+  printf '{"type":"result","subtype":"success","is_error":true,"terminal_reason":"api_error","api_error_status":null,"result":"API Error: Can'"'"'t reach the API server \u2014 check your internet or DNS (ENOTFOUND)","duration_ms":1045,"num_turns":1,"total_cost_usd":0,"modelUsage":{},"session_id":"fake-sess"}\n'
+  exit 1
+elif [[ "$PROMPT" == *"netresult"* ]]; then
+  # A LOST NETWORK reported on STDOUT, as the CLI's errored result (one of the
+  # real shapes `classify_errored_result` documents). Unlike `netdown`, nothing
+  # depends on stderr being drained before the exit is read, so a test that must
+  # see "connectivity" on every run under load uses this one.
+  emit_init
+  printf '{"type":"assistant","message":{"id":"msg_fake_net","model":"<synthetic>","content":[{"type":"text","text":"API Error: Unable to connect to API (ENOTFOUND)"}],"usage":{}}}\n'
+  printf '{"type":"result","subtype":"success","is_error":true,"result":"API Error: Unable to connect to API (ENOTFOUND)","duration_ms":40,"num_turns":1,"total_cost_usd":0,"modelUsage":{},"session_id":"fake-sess"}\n'
+  exit 1
+elif [[ "$PROMPT" == *"netdown"* ]]; then
+  # THE NETWORK IS GONE (intent item 73). Verbatim undici/node shape for a DNS
+  # failure, which is what a laptop that lost its wifi actually produces. Note
+  # it contains neither "connection" nor "timeout" — that is exactly why the
+  # old classifier called this Fatal and let the thread die.
+  echo "TypeError: fetch failed" >&2
+  echo "  cause: Error: getaddrinfo ENOTFOUND api.anthropic.com" >&2
+  exit 1
+elif [[ "$PROMPT" == *"netflap"* ]]; then
+  # The network is down for exactly ONE attempt, then comes back — a router
+  # reboot or a tunnel flap. Proves the thread RECOVERS on its own rather than
+  # needing him to re-send hours later.
+  TOKEN="$(printf '%s' "$PROMPT" | cksum | cut -d' ' -f1)"
+  MARKER="$STATE_DIR/threads-nf-$TOKEN"
+  if [[ ! -f "$MARKER" ]]; then
+    : > "$MARKER"
+    echo "Error: connect ECONNREFUSED 160.79.104.10:443" >&2
+    exit 1
+  fi
+  emit_init; emit_text; emit_result; exit 0
+elif [[ "$PROMPT" == *"schemaexhaust"* || "$PROMPT" == *"turnsexhaust"* || "$PROMPT" == *"okthenexit"* ]]; then
+  # R11.J2: a result flagged is_error, then exit 1 — the shape the live CLI
+  # produces when a model exhausts its StructuredOutput retries (fields from
+  # tests/fixtures/structured/invalid-retries-exhausted.jsonl, claude 2.1.280).
+  # "turnsexhaust" is the SAME line and exit with a genuine ceiling subtype,
+  # so a test can show its instrument does see a laddered turn.
+  # "okthenexit" is a CLEAN success result and the same exit 1: only the
+  # schema subtype is exempt from the exit-code door, not every delivered turn.
+  ERR=true
+  if [[ "$PROMPT" == *"schemaexhaust"* ]]; then
+    SUB="error_max_structured_output_retries"
+  elif [[ "$PROMPT" == *"okthenexit"* ]]; then
+    SUB="success"; ERR=false
+  else
+    SUB="error_max_turns"
+  fi
+  emit_init; emit_text
+  printf '{"type":"result","subtype":"%s","is_error":%s,"num_turns":7,"duration_ms":50,"stop_reason":"tool_use","terminal_reason":"structured_output_retry_exhausted","errors":["Failed to provide valid structured output after 5 attempts"],"total_cost_usd":0.01,"modelUsage":{},"session_id":"fake-sess"}\n' "$SUB" "$ERR"
+  exit 1
+elif [[ "$PROMPT" == *"creditlate"* || "$PROMPT" == *"genericlate"* ]]; then
+  # STDERR THAT ARRIVES AFTER THE EXIT (R9.E1, R9.F2-3). The child exits at
+  # once; a descendant that inherited its stderr writes the line 500 ms later.
+  # Read before the stderr reader is joined, the buffer is empty.
+  if [[ "$PROMPT" == *"creditlate"* ]]; then
+    LINE="Your credit balance is too low to run this request"
+  else
+    LINE="Error: The model \"zzz-nonexistent\" is not a valid model"
+  fi
+  ( sleep 0.5; echo "$LINE" >&2 ) </dev/null >/dev/null &
+  exit 1
+elif [[ "$PROMPT" == *"creditheld"* ]]; then
+  # STDERR HELD OPEN PAST THE DRAIN BOUND (R9.E1). The credit line is written
+  # before the exit; a descendant then keeps stderr open for 20 s. Its pid is
+  # appended to `holdpid=<path>` so the test kills what it started.
+  echo "Your credit balance is too low to run this request" >&2
+  sleep 20 </dev/null >/dev/null &
+  HOLDPID="$(printf '%s' "$PROMPT" | sed -n 's/.*holdpid=\([^ ]*\).*/\1/p')"
+  [[ -n "$HOLDPID" ]] && echo "$!" >> "$HOLDPID"
+  exit 1
+elif [[ "$PROMPT" == *"creditfail"* ]]; then
+  echo "Your credit balance is too low to run this request" >&2
+  exit 1
+elif [[ "$PROMPT" == *"badmodel"* ]]; then
+  # A DETERMINISTIC failure — the token-furnace shape. It fails identically
+  # every single time, and its text deliberately matches NOTHING in
+  # `classify_message`, so it lands on the `Fatal` arm ("unclassified error").
+  # That is the arm that used to end a delivery outright and now climbs the
+  # bounded deterministic ladder instead.
+  #
+  # Worded carefully: it must contain none of the classifier's substrings —
+  # no "connection"/"timeout"/"dns"/"tls"/"ssl"/"network", no 5xx, no "limit",
+  # no "credit". A model name that does not exist is the real-world example the
+  # operator named, and it is genuinely unfixable by retrying.
+  echo "Error: The model \"zzz-nonexistent\" is not a valid model" >&2
+  exit 1
+elif [[ "$PROMPT" == *"noconvo"* ]]; then
+  # THE RESUME TARGET IS GONE — the `RestartFresh` verdict. Verbatim shape of
+  # what the CLI says when `--resume <id>` names a session it cannot find.
+  echo "No conversation found with session ID: fake-sess" >&2
+  exit 1
+elif [[ "$PROMPT" == *"authresult"* ]]; then
+  # ── AN EXPIRED LOGIN THROUGH THE DOOR THE REAL CLI ACTUALLY USES ───────────
+  #
+  # Verbatim from the operator's own capture, an internal thread, three attempts at
+  # 2026-08-26T23:41:36.817Z / :41.007Z / :47.236Z. This is the shape that broke
+  # him, and it is NOT the shape `authfail` below produces.
+  #
+  # `authfail` writes to stderr and exits 1, which takes the `classify_message`
+  # door. Real claude does not do that for an auth failure: it prints the message
+  # as a synthetic assistant line and then ends with a `result` that says
+  # `subtype:"success"` and `is_error:true` at the same time — the self-
+  # contradicting shape wave one taught `classify_errored_result` to read. The
+  # verdict from that door was being DISCARDED (only Retry/CreditBalance/
+  # RestartFresh were passed through), so the failure was downgraded to
+  # `ErrorDuringExecution`: wire tag "transient", ceiling 3, no bar, no failover.
+  #
+  # That divergence is why the existing dead-login test stayed green for months
+  # while this was completely broken in production. A fixture that agrees with
+  # the code instead of with the wire proves nothing — the same lesson the
+  # subagent-liveness fixture learned on 2026-08-12.
+  #
+  # A login that has been RE-AUTHENTICATED is modelled per config dir, exactly
+  # like `usage-seq`: an account whose own dir holds `auth-live` answers
+  # normally. Per dir rather than per env var so parallel tests cannot see each
+  # other's fleet, and so a test can say "this login works and that one does
+  # not" — which is the only way to prove the turn moved somewhere real.
+  if [[ -n "${CLAUDE_CONFIG_DIR:-}" && -f "${CLAUDE_CONFIG_DIR}/auth-live" ]]; then
+    emit_init; emit_text; emit_result; exit 0
+  fi
+  emit_init
+  printf '{"type":"assistant","message":{"model":"<synthetic>","role":"assistant","content":[{"type":"text","text":"Failed to authenticate: OAuth session expired and could not be refreshed"}],"usage":{}},"parent_tool_use_id":null,"error":"authentication_failed","is_api_error_message":true,"session_id":"fake-sess"}\n'
+  printf '{"type":"result","subtype":"success","is_error":true,"terminal_reason":"api_error","api_error_status":null,"result":"Failed to authenticate: OAuth session expired and could not be refreshed","duration_ms":1045,"num_turns":1,"total_cost_usd":0,"modelUsage":{},"session_id":"fake-sess"}\n'
+  exit 1
+elif [[ "$PROMPT" == *"authfail"* ]]; then
+  # A DEAD LOGIN, verbatim from the 2026-07-29 account-visibility run against the
+  # `primary` snapshot: Claude Code rotates the refresh token on refresh, so a
+  # cloned session is rejected permanently the moment the original refreshes.
+  # No retry, no reset and no other thread can fix it — only a human `/login`.
+  echo "Failed to authenticate: OAuth session expired and could not be refreshed" >&2
+  exit 1
+elif [[ "$PROMPT" == *"gaugeturn"* ]]; then
+  emit_init
+  # Verbatim shape captured from real claude 2.1.220 (gauge-scout-report §1):
+  # utilization is a 0-1 FRACTION, resetsAt is epoch seconds.
+  echo '{"type":"rate_limit_event","rate_limit_info":{"status":"allowed_warning","resetsAt":1785607200,"rateLimitType":"seven_day","utilization":0.73,"isUsingOverage":false},"uuid":"6d6d03fb-0d63-454f-bf75-17d8ff74398e","session_id":"fake-sess"}'
+  emit_text
+  emit_result
+  exit 0
+elif [[ "$PROMPT" == *"bigburn"* ]]; then
+  emit_init
+  # A long-lived GRANDCHILD, standing in for a tool call / subagent execution
+  # claude spawned. The process-group teardown must reap it too (D-8); a
+  # child-only teardown would orphan it.
+  sleep 30 &
+  CHILD=$!
+  # The caller names the file to record the grandchild pid in, so parallel
+  # tests never collide: `burnfile=/path/to/file` anywhere in the prompt.
+  BURNFILE="$(printf '%s' "$PROMPT" | sed -n 's/.*burnfile=\([^ ]*\).*/\1/p' | head -1)"
+  if [[ -n "$BURNFILE" ]]; then echo "$CHILD" > "$BURNFILE"; fi
+  # A single assistant message that consumes an enormous number of tokens,
+  # streamed BEFORE the work finishes — the mid-turn enforcement window.
+  echo '{"type":"assistant","message":{"id":"msg_fake_burn","model":"claude-fable-5","content":[{"type":"text","text":"burning"}],"usage":{"input_tokens":5000000,"output_tokens":0,"cache_read_input_tokens":0,"cache_creation_input_tokens":0}}}'
+  sleep 5
+  emit_result
+  exit 0
+elif [[ "$PROMPT" == *"killcheap"* ]]; then
+  # The kill/park LIVELOCK condition, reproduced from the live 2026-07-29 run.
+  #
+  # Real claude handles SIGTERM: a turn torn down mid-execution still flushes a
+  # `result_turn`, and its authoritative `costUSD` is far LOWER than the live
+  # per-message estimate that justified the kill. The epilogue's signed
+  # reconciliation therefore drops the meter back UNDER the limit, and the
+  # prompt that was just parked looks admissible again.
+  emit_init
+  trap 'echo "{\"type\":\"result\",\"subtype\":\"error_during_execution\",\"is_error\":true,\"total_cost_usd\":0.0001,\"num_turns\":2,\"duration_ms\":50,\"stop_reason\":null,\"modelUsage\":{\"claude-fable-5\":{\"inputTokens\":10,\"outputTokens\":1,\"cacheReadInputTokens\":0,\"cacheCreationInputTokens\":0,\"costUSD\":0.0001}},\"session_id\":\"fake-sess\"}"; exit 143' TERM
+  # An expensive-looking message: 2M cache-CREATION tokens on a fable model
+  # price at $2/M x 2.0 = tens of dollars, so any small cash budget trips at
+  # once — on an estimate the aggregate above will contradict.
+  echo '{"type":"assistant","message":{"id":"msg_fake_killcheap","model":"claude-fable-5","content":[{"type":"text","text":"expensive"}],"usage":{"input_tokens":0,"output_tokens":0,"cache_read_input_tokens":0,"cache_creation_input_tokens":2000000}}}'
+  sleep 5 &
+  wait $!
+  exit 0
+elif [[ "$PROMPT" == *"dupeusage"* ]]; then
+  # The REAL shape of a multi-block assistant message, captured 2026-07-29:
+  # claude emits one `assistant` line per content block and repeats the SAME
+  # `message.usage` payload byte for byte on every one of them. Both lines
+  # below carry `msg_fake_dupe`, so the message's 1,000,000 tokens must be
+  # charged ONCE — charging per line is what made the meters read ~2x high.
+  emit_init
+  echo '{"type":"assistant","message":{"id":"msg_fake_dupe","model":"claude-fable-5","content":[{"type":"thinking","thinking":"pondering"}],"usage":{"input_tokens":1000000,"output_tokens":0,"cache_read_input_tokens":0,"cache_creation_input_tokens":0}}}'
+  echo '{"type":"assistant","message":{"id":"msg_fake_dupe","model":"claude-fable-5","content":[{"type":"text","text":"done"}],"usage":{"input_tokens":1000000,"output_tokens":0,"cache_read_input_tokens":0,"cache_creation_input_tokens":0}}}'
+  # The authoritative aggregate agrees with ONE charge, not two.
+  echo '{"type":"result","subtype":"success","is_error":false,"total_cost_usd":0.5,"num_turns":1,"duration_ms":50,"stop_reason":"end_turn","modelUsage":{"claude-fable-5":{"inputTokens":1000000,"outputTokens":0,"cacheReadInputTokens":0,"cacheCreationInputTokens":0,"costUSD":0.5}},"session_id":"fake-sess"}'
+  exit 0
+elif [[ "$PROMPT" == *"multiresult"* ]]; then
+  # THE SUBAGENT DOUBLE-COUNT SHAPE, reproduced from the live store
+  # (2026-07-31, an internal thread, seq 11504-11520 and 14187-14456).
+  #
+  # A turn that spawned subagents emits ONE `result` line per subagent plus the
+  # parent's own, and every one of them carries `modelUsage` — which is the
+  # CUMULATIVE per-model total for the whole claude process as of that instant,
+  # NOT that result's own share. Two properties of the real data are reproduced
+  # here because the fix depends on both:
+  #
+  #   * WITHIN a burst the payload is byte-identical (the real burst of 17 was
+  #     flushed inside 30 ms at process teardown, all quoting the final total);
+  #   * BETWEEN bursts it GROWS (the real execution read 38,337,547 opus
+  #     cache-read tokens at 03:59 and 53,569,874 at 04:11, same process).
+  #
+  # So "record every result" over-counts and "record only the last" under-counts
+  # the earlier burst; only a DELTA against the previous snapshot is right.
+  #
+  # The truth for this turn is 4,800 tokens and $4.00. Recording each snapshot
+  # verbatim reads 70,800 tokens and $59.00 — 14.75x, the same order as the
+  # ~14.7x measured live.
+  emit_init
+  echo '{"type":"assistant","message":{"id":"msg_mr_01","model":"claude-fable-5","content":[{"type":"text","text":"dispatching"}],"usage":{"input_tokens":100,"output_tokens":20,"cache_read_input_tokens":0,"cache_creation_input_tokens":0}}}'
+  # Burst A — three subagents flush together, all quoting the running total.
+  for _ in 1 2 3; do
+    echo '{"type":"result","subtype":"success","is_error":false,"total_cost_usd":1.0,"num_turns":1,"duration_ms":50,"stop_reason":"end_turn","modelUsage":{"claude-fable-5":{"inputTokens":1000,"outputTokens":200,"cacheReadInputTokens":0,"cacheCreationInputTokens":0,"costUSD":1.0}},"session_id":"fake-sess"}'
+  done
+  echo '{"type":"assistant","message":{"id":"msg_mr_02","model":"claude-fable-5","content":[{"type":"text","text":"more work"}],"usage":{"input_tokens":200,"output_tokens":40,"cache_read_input_tokens":0,"cache_creation_input_tokens":0}}}'
+  # Burst B — fourteen more, at the GROWN total. Three plus fourteen is the
+  # seventeen the live smoke counted.
+  for _ in 1 2 3 4 5 6 7 8 9 10 11 12 13 14; do
+    echo '{"type":"result","subtype":"success","is_error":false,"total_cost_usd":4.0,"num_turns":1,"duration_ms":50,"stop_reason":"end_turn","modelUsage":{"claude-fable-5":{"inputTokens":4000,"outputTokens":800,"cacheReadInputTokens":0,"cacheCreationInputTokens":0,"costUSD":4.0}},"session_id":"fake-sess"}'
+  done
+  exit 0
+elif [[ "$PROMPT" == *"limitpush"* ]]; then
+  # A-4. A turn whose stream carries a `rate_limit_event` in the CURRENT shape
+  # (`unifiedWindows`, no top-level `utilization`), copied from the ledger line
+  # in `libs/shapewire/seam/conformance/one_thread.jsonl` with the resets
+  # COMPUTED from now. `push=overage` sets isUsingOverage:true (five-hour window
+  # exhausted); `push=rejected` sets status:"rejected"; anything else is the
+  # verbatim benign line — status "allowed", overage false, and the decoy
+  # `overageStatus:"rejected"` that must NOT bar. `release=<path>` holds the
+  # turn after the event until the test creates that file (20s ceiling).
+  emit_init
+  now_s="$(date +%s)"
+  five=$(( now_s + 7200 ))
+  seven=$(( now_s + 3 * 86400 ))
+  over=false; status=allowed; u5=0.2; ostat=rejected
+  if [[ "$PROMPT" == *"push=overage"* ]]; then over=true; u5=1.0; ostat=allowed; fi
+  if [[ "$PROMPT" == *"push=rejected"* ]]; then status=rejected; u5=1.0; fi
+  echo "{\"rate_limit_info\":{\"isUsingOverage\":${over},\"overageDisabledReason\":\"org_level_disabled\",\"overageStatus\":\"${ostat}\",\"rateLimitType\":\"five_hour\",\"resetsAt\":${five},\"status\":\"${status}\",\"unifiedWindows\":{\"five_hour\":{\"resetsAt\":${five},\"utilization\":${u5}},\"seven_day\":{\"resetsAt\":${seven},\"utilization\":0.03}}},\"session_id\":\"fake-sess\",\"type\":\"rate_limit_event\",\"uuid\":\"88383f1d-cebc-4bda-8c91-5e23fba48323\"}"
+  emit_text
+  if [[ "$PROMPT" == *"release="* ]]; then
+    REL="${PROMPT#*release=}"
+    REL="${REL%%[[:space:]]*}"
+    for _ in $(seq 1 1000); do
+      [[ -n "$REL" && -f "$REL" ]] && break
+      sleep 0.02
+    done
+  fi
+  emit_result
+  exit 0
+elif [[ "$PROMPT" == *"holdturn"* ]]; then
+  # A turn that runs until the TEST releases it: it waits for the file named by
+  # `release=<path>` to appear (20s ceiling). Additive — no existing branch
+  # changes behaviour.
+  #
+  # Why this exists: the self-update tests need a turn that is DEFINITELY still
+  # executing while a 27 MB preflight runs beside it, and under a parallel
+  # `cargo test` (eighteen tests each copying and hashing a 27 MB binary) a
+  # fixed 0.7s sleep is not definitely anything. A fixed sleep there was a race;
+  # this is not.
+  emit_init
+  emit_text
+  REL="${PROMPT#*release=}"
+  REL="${REL%%[[:space:]]*}"
+  for _ in $(seq 1 1000); do
+    [[ -n "$REL" && -f "$REL" ]] && break
+    sleep 0.02
+  done
+  emit_result
+  exit 0
+elif [[ "$PROMPT" == *"handoffturn"* ]]; then
+  # R9.C7c: a turn that must SURVIVE ITS DAEMON. Appends its pid to the file
+  # named by `starts=<path>` (so a test counts starts from the child itself,
+  # not from the ledger), then runs until `release=<path>` exists (a ~120 s
+  # ceiling — a daemon restart sits inside it), then lands a result. With
+  # `stderrafter` in the prompt it first writes a line to STDERR, which after
+  # its daemon has died is a pipe with no reader.
+  ST="${PROMPT#*starts=}"
+  ST="${ST%%[[:space:]]*}"
+  [[ "$PROMPT" == *"starts="* && -n "$ST" ]] && echo "$$" >> "$ST"
+  emit_init
+  emit_text
+  REL="${PROMPT#*release=}"
+  REL="${REL%%[[:space:]]*}"
+  for _ in $(seq 1 6000); do
+    [[ -n "$REL" && -f "$REL" ]] && break
+    sleep 0.02
+  done
+  if [[ "$PROMPT" == *"stderrafter"* ]]; then
+    echo "fake-claude: a warning written after the handoff" >&2
+  fi
+  echo '{"type":"assistant","message":{"id":"msg_fake_handoff","model":"claude-fable-5","content":[{"type":"text","text":"HANDOFF TURN DONE"}],"usage":{"input_tokens":10,"output_tokens":5,"cache_read_input_tokens":0,"cache_creation_input_tokens":0}}}'
+  emit_result
+  exit 0
+elif [[ "$PROMPT" == *"compactturn"* ]]; then
+  # ── AN AUTOMATIC COMPACTION, AND THE MOMENTUM AFTER IT ──────────────────
+  #
+  # Three phases, in this order, because the whole subject is the boundary
+  # BETWEEN them:
+  #
+  #   1. real work, BEFORE the compaction — it must survive whatever happens
+  #      next, because the operator's rule is that nothing he or the thread
+  #      produced is lost;
+  #   2. the `compact_boundary` line, in the shape `stream.rs` actually parses
+  #      (snake-case `compact_metadata`/`pre_tokens`, which is the spelling the
+  #      real CLI emits and the one the camelCase-only reader used to miss);
+  #   3. the momentum — a sleep long enough for the daemon's 150 ms tail poll
+  #      to see the boundary and act, and THEN more assistant text.
+  #
+  # That third phase is the thing under test. `AFTER THE COMPACTION` reaching
+  # the ledger means the thread kept going under its own steam; its absence
+  # means the turn ended at the boundary. The sleep is what makes the two
+  # outcomes distinguishable rather than a race — without it the post-compaction
+  # text would already be written before any supervisor could possibly react,
+  # and the test would pass for the wrong reason.
+  emit_init
+  emit_text
+  # A window BEFORE the boundary, so a test can get a message onto the queue
+  # while the turn is demonstrably mid-flight and the compaction has not
+  # happened yet. Without it the boundary lands within a millisecond or two of
+  # the turn starting, and a durability test that waits for `turn_started`
+  # before speaking is racing — it enqueues AFTER the ending has already been
+  # decided, so it cannot observe a queue being swallowed even if one is.
+  sleep 0.6
+  echo '{"type":"system","subtype":"compact_boundary","uuid":"cb-fake-1","compact_metadata":{"trigger":"auto","pre_tokens":150},"session_id":"fake-sess"}'
+  sleep 1.5
+  echo '{"type":"assistant","message":{"id":"msg_fake_post_compact","model":"claude-fable-5","content":[{"type":"text","text":"AFTER THE COMPACTION"}],"usage":{"input_tokens":10,"output_tokens":5,"cache_read_input_tokens":0,"cache_creation_input_tokens":0}}}'
+  emit_result
+  exit 0
+elif [[ "$PROMPT" == *"compactexit"* ]]; then
+  # A compaction in the LAST breath of the turn: the boundary and the result
+  # are written together and the process exits at once, so the daemon reads
+  # both in the same poll — the final drain after `try_wait` returns, which is
+  # the one read that happens after the supervisor's teardown checks. A flag
+  # raised there meets no consumer inside the loop, and if it is not drained
+  # afterwards it stays raised on the THREAD and ends the next, innocent turn.
+  emit_init
+  emit_text
+  echo '{"type":"system","subtype":"compact_boundary","uuid":"cb-fake-2","compact_metadata":{"trigger":"auto","pre_tokens":150},"session_id":"fake-sess"}'
+  emit_result
+  exit 0
+elif [[ "$PROMPT" == *"floodturn"* ]]; then
+  # More than 10,000 events, with the run's last TOP-LEVEL words near the
+  # start: what a long managed child looks like when its report is read out of
+  # a fixed-size tail (H179). The native-subagent lines carry
+  # `parent_tool_use_id` and are NOT the child's words.
+  emit_init
+  echo '{"type":"assistant","message":{"id":"msg_flood_final","model":"claude-fable-5","content":[{"type":"text","text":"FLOOD-FINAL-WORDS from the long child."}],"usage":{"input_tokens":100,"output_tokens":20,"cache_read_input_tokens":0,"cache_creation_input_tokens":0}}}'
+  for i in 1 2 3; do
+    printf '{"type":"assistant","parent_tool_use_id":"toolu_native_1","message":{"id":"msg_native_%d","model":"claude-fable-5","content":[{"type":"text","text":"native subagent narration %d"}],"usage":{"input_tokens":1,"output_tokens":1,"cache_read_input_tokens":0,"cache_creation_input_tokens":0}}}\n' "$i" "$i"
+  done
+  awk 'BEGIN { for (i = 1; i <= 10200; i++) printf "{\"type\":\"system\",\"subtype\":\"thinking_tokens\",\"estimated_tokens\":%d,\"estimated_tokens_delta\":1,\"session_id\":\"fake-sess\",\"uuid\":\"flood-%d\"}\n", i, i }'
+  emit_result
+  exit 0
+elif [[ "$PROMPT" == *"chattyturn"* ]]; then
+  # A turn that emits MORE THAN 400 EVENTS before its result: the shape of a
+  # real managed child (bd062063, 2026-10-16, 495 events in a 74 s turn), whose
+  # `user_message` falls out of any fixed-size tail by the time the turn ends.
+  emit_init
+  for i in $(seq 1 450); do
+    printf '{"type":"system","subtype":"thinking_tokens","estimated_tokens":%d,"estimated_tokens_delta":1,"session_id":"fake-sess","uuid":"chatty-%d"}\n' "$i" "$i"
+  done
+  emit_text
+  emit_result
+  exit 0
+elif [[ "$PROMPT" == *"slowturn"* ]]; then
+  emit_init
+  emit_text
+  sleep 0.7
+  emit_result
+  exit 0
+elif [[ "$PROMPT" == *"mcpprobe"* ]]; then
+  # ── THE INSTALLED CLIENT'S MCP HANDSHAKE, ON THE REAL WIRE (R4.S1) ────────
+  #
+  # This is NOT a mock of the daemon's door: it is the sequence the `claude`
+  # 2.1.280 binary at /opt/homebrew/Caskroom/claude-code@latest/2.1.280/claude
+  # performs against a streamable-HTTP MCP server, read out of the bundle
+  # (`strings` over the Mach-O; the embedded @modelcontextprotocol/sdk):
+  #
+  #   * `Client.connect`: `request({method:"initialize",params:{protocolVersion:
+  #     Sae, capabilities, clientInfo}})` with `Sae = "2025-11-25"`; the answer's
+  #     `protocolVersion` must be in `zG = ["2025-11-25","2025-06-18",
+  #     "2025-03-26","2024-11-05","2024-10-07"]` or it throws "Server's protocol
+  #     version is not supported"; then `transport.setProtocolVersion(…)`, then
+  #     `notification({method:"notifications/initialized"})`.
+  #   * `StreamableHTTPClientTransport._commonHeaders`: `Authorization: Bearer
+  #     <token>` from the auth provider (or the configured `headers`), and
+  #     `mcp-protocol-version: <negotiated>` once set; every POST carries
+  #     `Accept: application/json, text/event-stream` and
+  #     `content-type: application/json`, and `mcp-session-id` once the server
+  #     has answered one.
+  #   * A notification is answered 202 with no body; a request is answered
+  #     200 `application/json` (this door never answers `text/event-stream`).
+  #
+  # A probe must not witness itself: nothing here reads the daemon's code or
+  # key. The token is minted by the TEST (which holds the manager) for the turn
+  # this very process is, written to `tokenfile=` once the turn is running —
+  # which is why this branch waits for the file rather than taking the token off
+  # the prompt: the spawn cookie does not exist until the spawn has happened.
+  emit_init
+  emit_text
+  URL="${PROMPT#*mcpurl=}";           URL="${URL%%[[:space:]]*}"
+  TOKENFILE="${PROMPT#*tokenfile=}"; TOKENFILE="${TOKENFILE%%[[:space:]]*}"
+  OUT="${PROMPT#*mcpout=}";          OUT="${OUT%%[[:space:]]*}"
+  SELF="${PROMPT#*agentid=}";        SELF="${SELF%%[[:space:]]*}"
+  for _ in $(seq 1 1000); do
+    [[ -f "$TOKENFILE" ]] && break
+    sleep 0.02
+  done
+  TOKEN="$(cat "$TOKENFILE" 2>/dev/null || true)"
+  : > "$OUT"
+  PV=""
+  SID=""
+  # One POST, exactly as the SDK's transport sends it. Records
+  #   STEP <name> <http status> session=<mcp-session-id or none>
+  #   BODY <name> <response body on one line>
+  mcp_post() {
+    local step="$1" body="$2" hdr="$OUT.$1.hdr" resp="$OUT.$1.body" code sid
+    local -a extra=()
+    [[ -n "$PV" ]] && extra+=(-H "mcp-protocol-version: $PV")
+    [[ -n "$SID" ]] && extra+=(-H "mcp-session-id: $SID")
+    code="$(curl -s -o "$resp" -D "$hdr" -w '%{http_code}' -X POST "$URL" \
+      -H 'content-type: application/json' \
+      -H 'accept: application/json, text/event-stream' \
+      -H "authorization: Bearer $TOKEN" \
+      ${extra[@]+"${extra[@]}"} \
+      --data-binary "$body" 2>/dev/null || echo 000)"
+    sid="$(tr -d '\r' < "$hdr" | awk -F': ' 'tolower($1)=="mcp-session-id"{print $2}' | tail -1)"
+    [[ -n "$sid" ]] && SID="$sid"
+    printf 'STEP %s %s session=%s\n' "$step" "$code" "${sid:-none}" >> "$OUT"
+    printf 'BODY %s %s\n' "$step" "$(tr -d '\n' < "$resp" 2>/dev/null)" >> "$OUT"
+  }
+  mcp_post initialize '{"jsonrpc":"2.0","id":0,"method":"initialize","params":{"protocolVersion":"2025-11-25","capabilities":{},"clientInfo":{"name":"claude-code","version":"2.1.280"}}}'
+  PV="$(tr -d '\n' < "$OUT.initialize.body" 2>/dev/null | sed -n 's/.*"protocolVersion":"\([^"]*\)".*/\1/p')"
+  mcp_post initialized '{"jsonrpc":"2.0","method":"notifications/initialized"}'
+  mcp_post ping '{"jsonrpc":"2.0","id":1,"method":"ping"}'
+  mcp_post tools_list '{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}'
+  mcp_post call_log "{\"jsonrpc\":\"2.0\",\"id\":3,\"method\":\"tools/call\",\"params\":{\"name\":\"agents_log\",\"arguments\":{\"agent\":\"$SELF\",\"limit\":50}}}"
+  mcp_post call_spawn '{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"agents_spawn","arguments":{"task":"probe"}}}'
+  mcp_post call_spawn_budget '{"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"agents_spawn","arguments":{"task":"probe","budget_key":"k"}}}'
+  emit_result
+  exit 0
+elif [[ "$PROMPT" == *"subagent"* ]]; then
+  OUT="$STATE_DIR/threads-agent-$(printf '%s' "$PROMPT" | cksum | cut -d' ' -f1).jsonl"
+  echo '{"type":"assistant","message":{"model":"claude-fable-5","content":[{"type":"text","text":"working"}]}}' > "$OUT"
+  emit_init
+  emit_text
+  echo '{"type":"assistant","message":{"id":"msg_fake_02","model":"claude-fable-5","content":[{"type":"tool_use","id":"toolu_agent1","name":"Agent","input":{"description":"do work","subagent_type":"general-purpose","run_in_background":true,"prompt":"go"}}],"usage":{"input_tokens":5,"output_tokens":5,"cache_read_input_tokens":0,"cache_creation_input_tokens":0}}}'
+  # THE SHAPE THE REAL CLI EMITS, corrected 2026-08-12 against the capture in
+  # `lib/threads/turns/`. This line used to say `toolUseResult` with a
+  # `toolUseId` inside it — a shape that occurs ZERO times in 371,702 captured
+  # lines. It was written to match the parser instead of the wire, and that is
+  # precisely why `subagent_liveness_outlasts_parent_result` stayed green for
+  # months while subagent liveness was completely dead in production. A double
+  # that agrees with the code it is testing proves nothing.
+  #
+  # Two corrections: the envelope key is `tool_use_result` (snake), and there is
+  # no `toolUseId` anywhere inside it — the id lives on the sibling
+  # `tool_result` block, which is where the parser now reads it from.
+  printf '{"type":"user","tool_use_result":{"isAsync":true,"status":"async_launched","agentId":"agent-abc","outputFile":"%s","canReadOutputFile":true},"message":{"content":[{"type":"tool_result","tool_use_id":"toolu_agent1","content":"launched"}]}}\n' "$OUT"
+  emit_result
+  exit 0
+else
+  emit_init; emit_text; emit_result; exit 0
+fi

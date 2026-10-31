@@ -1,0 +1,35 @@
+# ═══════════════════════════════════════════════════════════════════════════
+#  agents — the threads `agents_*` façade. AN MCP TOOL SERVER THE SUPERVISOR
+#  HOLDS (R5.S2, DEC-34), and one that is OURS, so it is IN-PROCESS.
+# ═══════════════════════════════════════════════════════════════════════════
+#
+# The operator's ruling (#H135): the cauldron supervisor owns ALL MCP tools,
+# version-controlled, at most one awake at a time, woken on demand, routing
+# to libs/crates rather than a resident binary — "I'm open to being wrong on
+# the last point."
+#
+# Every MCP tool server a thread can be given is declared in this directory,
+# one file per server, and this directory is in git: that is what
+# "version-controlled" means here. `cauldron daemon` loads it at start
+# (`<root>/mcp/` first, for the operator's overrides, then this one).
+#
+# WHY IN-PROCESS. These tools are code in `services/threads/src/agents.rs`,
+# served by the threads daemon's own `/mcp` door through the same `handle`
+# the `/ws` door reaches. There is no process to wake and nothing for the
+# at-most-one slot to hold; routing them through a second process would add a
+# hop and a failure mode and buy no isolation. So the supervisor HOLDS this
+# declaration, reports it under `MCP_STATUS`, and refuses to serve it itself
+# (`in_process`) — and the threads façade serves it in-process.
+#
+# An EXTERNAL tool server is declared `residency = "process"` with a
+# `[process]` command and its `[[tools]]`; the supervisor wakes it on the
+# first call that names one of its tools and puts any other awake server to
+# sleep first. See `libs/mcp-host/src/decl.rs` for the full form.
+#
+# The tool list is NOT restated here: the provider is the authority on its
+# own surface (`threads::agents::SURFACE`), and a second copy would drift.
+
+name        = "agents"
+description = "The threads agents_* façade: spawn, gather, log and networks for a turn's own children."
+residency   = "in-process"
+provider    = "threads"

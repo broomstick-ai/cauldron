@@ -1,0 +1,28 @@
+[package]
+name = "term-shell"
+version.workspace = true
+edition.workspace = true
+description = "Terminal ownership for a ratatui face: the DEC private-mode claims, entry, panic-safe restore, and OSC 52 clipboard. Extracted from the harness TUI shell; see PROVENANCE.md."
+autotests = false
+
+[package.metadata.provenance]
+source_repo = "~/code/harness"
+source_paths = ["apps/tui/src/term.rs"]
+source_sha = "fede50693c3eb45ee0ff1c5b6c23e7c16c5cff7b"
+extracted = "2026-10-05"
+
+# One test binary for the crate (core:cargo-lease). It needs its own process
+# anyway: it re-executes itself as a child that takes a pty and is signalled.
+[[test]]
+name = "it"
+path = "tests/it/main.rs"
+
+[dependencies]
+ratatui = { workspace = true, features = ["crossterm"] }
+anyhow = { workspace = true }
+# Restore on SIGTERM/SIGHUP/SIGINT/SIGQUIT (IS-59). Already in the tree via
+# crossterm, so this adds no crate to the lockfile — only an edge.
+signal-hook = "0.3.18"
+
+[lints.rust]
+unsafe_code = "forbid"

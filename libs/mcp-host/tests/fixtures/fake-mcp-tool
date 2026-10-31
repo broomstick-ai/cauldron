@@ -1,0 +1,42 @@
+#!/bin/bash
+# A stdio MCP tool server for tests — R5.S2. Answers initialize and tools/call,
+# ignores notifications, refuses everything else. It never exits on its own
+# while stdin is open, so "is it still running" measures the HOST, not this.
+#
+# FAKE_MCP_NAME     the name it reports as `served_by`
+# FAKE_MCP_PID_DIR  if set, it writes $$ to <dir>/<name>.pid on start — the
+#                   test's evidence that a spawn happened, independent of
+#                   anything the host reports about itself.
+# FAKE_MCP_HANG     a method name (`initialize`, `tools/call`): that request
+#                   is read and NEVER answered — a wedged server (R5.S2b). It
+#                   keeps reading stdin, so it does not exit on its own.
+# FAKE_MCP_SLOW     seconds to take over each `tools/call` before answering —
+#                   a healthy but busy server (R5.S2b).
+set -u
+name="${FAKE_MCP_NAME:-fake}"
+if [ -n "${FAKE_MCP_PID_DIR:-}" ]; then
+  echo $$ >> "$FAKE_MCP_PID_DIR/$name.pid"
+fi
+while IFS= read -r line; do
+  # The host writes `id` first, so anchor on the head of the line: an `id`
+  # nested in `arguments` can never be the one matched.
+  id=$(printf '%s' "$line" | sed -n 's/^{"id":\([0-9][0-9]*\),.*/\1/p')
+  method=$(printf '%s' "$line" | sed -n 's/^{\("id":[0-9]*,\)\{0,1\}"jsonrpc":"2.0","method":"\([^"]*\)".*/\2/p')
+  if [ -n "${FAKE_MCP_HANG:-}" ] && [ "$method" = "$FAKE_MCP_HANG" ]; then
+    continue
+  fi
+  case "$method" in
+    initialize)
+      printf '{"jsonrpc":"2.0","id":%s,"result":{"protocolVersion":"2025-06-18","capabilities":{"tools":{}},"serverInfo":{"name":"%s","version":"0"}}}\n' "$id" "$name" ;;
+    notifications/*) ;;
+    tools/call)
+      if [ -n "${FAKE_MCP_SLOW:-}" ]; then sleep "$FAKE_MCP_SLOW"; fi
+      echo "this line is not JSON and must be skipped"
+      printf '{"jsonrpc":"2.0","method":"notifications/message","params":{}}\n'
+      printf '{"jsonrpc":"2.0","id":%s,"result":{"content":[{"type":"text","text":"served"}],"structuredContent":{"served_by":"%s","pid":%s},"isError":false}}\n' "$id" "$name" "$$" ;;
+    *)
+      if [ -n "$id" ]; then
+        printf '{"jsonrpc":"2.0","id":%s,"error":{"code":-32601,"message":"no %s here"}}\n' "$id" "$method"
+      fi ;;
+  esac
+done

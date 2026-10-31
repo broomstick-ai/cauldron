@@ -1,0 +1,37 @@
+# RUNTIME DATA of the update protocol (src/update.rs, intent item 64).
+#
+# THREADS_HOME points at this directory on the operator's machine — exactly as
+# TTS_HOME does for lib/tts — so the daemon's own state lands beside its source.
+# None of it is a repo artifact:
+#
+#   threads.last-good     — a 26 MB copy of the last binary known to boot, so a
+#                           bad build can never leave him with no daemon.
+#   pending-restart.json  — the durable queued restart and its reason.
+#   restarts.jsonl        — one line per restart decision (deferred / firing /
+#                           refused), so the next person can see why it waited.
+threads.last-good
+pending-restart.json
+restarts.jsonl
+
+# THE CONVERSATIONS THEMSELVES, and they are not small.
+#
+# `turns/` is the per-execution stdout the daemon streams each `claude` child
+# into; `backups/` is where a repair takes its snapshot before touching a
+# transcript. On the operator's machine on 2026-08-06 those were 393 MB and
+# 742 MB — and they sat UNTRACKED next to source that several agents edit and
+# commit with a broad `git add`. One of those sweeps had already picked up
+# another agent's in-progress work that day; the only reason it did not also
+# pick up a gigabyte of the operator's private conversations is that nobody
+# happened to run `git add -A` while they were there.
+#
+# Naming them here is the cheap half of that lesson.
+turns/
+backups/
+
+# Captured Claude account snapshots and the name -> CLAUDE_CONFIG_DIR registry.
+# Carried over from substrate's ROOT .gitignore (`lib/threads/accounts/`,
+# `lib/threads/accounts.toml`) when this crate moved (R3.S2.M): per-account
+# login state and machine-local paths, never a repo artifact. `add-account`
+# refuses to write a snapshot that `git check-ignore` does not cover.
+accounts/
+accounts.toml

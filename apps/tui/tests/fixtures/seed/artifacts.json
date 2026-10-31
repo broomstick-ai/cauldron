@@ -1,0 +1,2748 @@
+{
+ "_note": "FAKE DATA for the Soup tab's ARTIFACTS, REPOS and DIRECTORIES bands (design 0146; merged into Soup by msg 186): the soup's WORKTREE nodes (repo schema, as the machine would write them from git — read from the real ~/code/cauldron on 2026-10-24, plus one MISSING one, and from ~/code/harness and ~/code/broomstick on 2026-10-25), its ARTIFACT nodes (the files schema: intent, then verified fact; file bytes never here), and the plain DIRECTORIES the registry holds, each with the clusters that claim it. A face that reads git (the live one) replaces a repo's worktrees with what git says; the rest stays seed. An artifact is a SOUP NODE wrapping a file (msg 186): `regions` are the regions it sits in.",
+ "directories": [
+  {
+   "name": "tui",
+   "path": "/Users/demo/.cauldron/data/prod/tui",
+   "claimed_by": [
+    "X-1",
+    "X-2"
+   ]
+  },
+  {
+   "name": "plan",
+   "path": "/Users/demo/plan",
+   "claimed_by": [
+    "X-1"
+   ]
+  },
+  {
+   "name": "interface artifacts",
+   "path": "/Users/demo/code/harness/.mind/workspaces/cauldron-interface/artifacts",
+   "claimed_by": [
+    "X-2"
+   ]
+  },
+  {
+   "name": "splash redesign",
+   "path": "/Users/demo/code/broomstick-splash-redesign",
+   "claimed_by": [
+    "X-6",
+    "X-7"
+   ]
+  },
+  {
+   "name": "relocation",
+   "path": "/Users/demo/relocation",
+   "claimed_by": [
+    "X-6"
+   ]
+  },
+  {
+   "name": "harness tui",
+   "path": "/Users/demo/code/harness/apps/tui",
+   "claimed_by": [
+    "X-10"
+   ]
+  },
+  {
+   "name": "blueprint workspace",
+   "path": "/Users/demo/code/harness/.mind/workspaces/blueprint",
+   "claimed_by": [
+    "X-11",
+    "X-5"
+   ]
+  },
+  {
+   "name": "agent runtime artifacts",
+   "path": "/Users/demo/code/harness/.mind/workspaces/threads-agent-runtime/artifacts",
+   "claimed_by": [
+    "X-3",
+    "X-4"
+   ]
+  },
+  {
+   "name": "broomstick reports",
+   "path": "/Users/demo/code/broomstick/reports",
+   "claimed_by": [
+    "X-8"
+   ]
+  },
+  {
+   "name": "broomstick plans",
+   "path": "/Users/demo/code/broomstick/plans",
+   "claimed_by": [
+    "X-6",
+    "X-8"
+   ]
+  },
+  {
+   "name": "workspaces",
+   "path": "/Users/demo/code/harness/.mind/workspaces",
+   "claimed_by": [
+    "X-9"
+   ]
+  },
+  {
+   "name": "supervisor artifacts",
+   "path": "/Users/demo/code/harness/.mind/workspaces/cauldron-supervisor/artifacts",
+   "claimed_by": [
+    "X-9"
+   ]
+  }
+ ],
+ "worktrees": [
+  {
+   "id": "WT-1",
+   "repo": "cauldron",
+   "path": "/Users/demo/code/cauldron-wt-availability",
+   "branch": "fix/one-availability-predicate",
+   "head": "45a3ad7459adfedc1d5c92a4298994ae6278bdbe",
+   "base": "45a3ad7459adfedc1d5c92a4298994ae6278bdbe",
+   "ahead": 0,
+   "behind": 357,
+   "dirty": 0,
+   "present": true,
+   "last_commit": {
+    "sha": "45a3ad7459adfedc1d5c92a4298994ae6278bdbe",
+    "at": "2026-10-16T22:53:16Z",
+    "subject": "merge fix/one-availability-predicate 477f4026: one availability predicate; an unavailable account is never tried (H179)"
+   }
+  },
+  {
+   "id": "WT-2",
+   "repo": "cauldron",
+   "path": "/Users/demo/code/cauldron-wt-globs2",
+   "branch": "r9/globs-iteration-2",
+   "head": "e3bec726b62d8eb49dd5002c55c7eafd17360199",
+   "base": "e9a97a22f06c38f995c8c5b58221525c3342a6ae",
+   "ahead": 17,
+   "behind": 548,
+   "dirty": 26,
+   "present": true,
+   "last_commit": {
+    "sha": "e3bec726b62d8eb49dd5002c55c7eafd17360199",
+    "at": "2026-10-25T01:49:44Z",
+    "subject": "cauldron tui: his msg-165 review — Work · Status · System · Config, bands, boxes, the dump (8e4fca10 msg 165; task 0147)"
+   }
+  },
+  {
+   "id": "WT-3",
+   "repo": "cauldron",
+   "path": "/Users/demo/code/cauldron-wt-land-main",
+   "branch": "main",
+   "head": "7d485a74893a1134578a995f928e14257b119e88",
+   "base": "7d485a74893a1134578a995f928e14257b119e88",
+   "ahead": 0,
+   "behind": 0,
+   "dirty": 1,
+   "present": true,
+   "last_commit": {
+    "sha": "7d485a74893a1134578a995f928e14257b119e88",
+    "at": "2026-10-25T02:30:27Z",
+    "subject": "docs: merge docs/r9-ps0-pending-promises (R9.PS0 pending promises spec; docs only)"
+   }
+  },
+  {
+   "id": "WT-4",
+   "repo": "cauldron",
+   "path": "/Users/demo/code/cauldron-wt-pl-compat",
+   "branch": "pl-compat",
+   "head": "09f0284a071e82e5b55846ce12f8344b34d2f0d0",
+   "base": "e31c77a5aef53a62968186ce30324ef876fe195f",
+   "ahead": 1,
+   "behind": 213,
+   "dirty": 0,
+   "present": true,
+   "last_commit": {
+    "sha": "09f0284a071e82e5b55846ce12f8344b34d2f0d0",
+    "at": "2026-10-19T08:45:13Z",
+    "subject": "R6.S1 implements R-1..R-7: protoledger compat check for services/threads"
+   }
+  },
+  {
+   "id": "WT-5",
+   "repo": "cauldron",
+   "path": "/Users/demo/code/cauldron-wt-r12-0-doc",
+   "branch": "docs/r12-account-email",
+   "head": "c3644d147bc3efbee2cc0110a77df91ef6671212",
+   "base": "facae2dfa8f9fbd04716ff2ff0634b04ae655d56",
+   "ahead": 1,
+   "behind": 14,
+   "dirty": 0,
+   "present": true,
+   "last_commit": {
+    "sha": "c3644d147bc3efbee2cc0110a77df91ef6671212",
+    "at": "2026-10-25T00:56:08Z",
+    "subject": "R12.0 implements R12: account email id design"
+   }
+  },
+  {
+   "id": "WT-6",
+   "repo": "cauldron",
+   "path": "/Users/demo/code/cauldron-wt-r31",
+   "branch": "r31/signals-read",
+   "head": "d50f0dde8ef10792532713be8d5e3d6a94372d4d",
+   "base": "f52a94e45d7e73cfff2cadd69aed6973952ece95",
+   "ahead": 10,
+   "behind": 23,
+   "dirty": 0,
+   "present": true,
+   "last_commit": {
+    "sha": "d50f0dde8ef10792532713be8d5e3d6a94372d4d",
+    "at": "2026-10-25T02:30:45Z",
+    "subject": "MERGE-52: R9.C7f7 implements C-7"
+   }
+  },
+  {
+   "id": "WT-7",
+   "repo": "cauldron",
+   "path": "/Users/demo/code/cauldron-wt-r31-pl",
+   "branch": "r31/thread-ledger-protoledger",
+   "head": "90573856b7bd3b710381fce5a28d16867d9eeebd",
+   "base": "90573856b7bd3b710381fce5a28d16867d9eeebd",
+   "ahead": 0,
+   "behind": 343,
+   "dirty": 0,
+   "present": true,
+   "last_commit": {
+    "sha": "90573856b7bd3b710381fce5a28d16867d9eeebd",
+    "at": "2026-10-17T00:36:29Z",
+    "subject": "merge docs/protoledger-integration: PROTOLEDGER-INTEGRATION plan (H179, docs only)"
+   }
+  },
+  {
+   "id": "WT-8",
+   "repo": "cauldron",
+   "path": "/Users/demo/code/cauldron-wt-r31-pl0",
+   "branch": "r31/pl0-import",
+   "head": "9ac624919ec03da30b697fdebf31346c3755f33d",
+   "base": "90573856b7bd3b710381fce5a28d16867d9eeebd",
+   "ahead": 1,
+   "behind": 343,
+   "dirty": 0,
+   "present": true,
+   "last_commit": {
+    "sha": "9ac624919ec03da30b697fdebf31346c3755f33d",
+    "at": "2026-10-17T03:07:52Z",
+    "subject": "PL-0 implements Q-16 (Q-24-3): pin protoledger 5cf091b5 (default-features off) + serde unification probes"
+   }
+  },
+  {
+   "id": "WT-9",
+   "repo": "cauldron",
+   "path": "/Users/demo/code/cauldron-wt-r31-pl1",
+   "branch": "r31/pl1-adapter",
+   "head": "5fae96e42d78a1bef5d3c1c0044e99b306aa2991",
+   "base": "90573856b7bd3b710381fce5a28d16867d9eeebd",
+   "ahead": 2,
+   "behind": 343,
+   "dirty": 0,
+   "present": true,
+   "last_commit": {
+    "sha": "5fae96e42d78a1bef5d3c1c0044e99b306aa2991",
+    "at": "2026-10-17T03:35:33Z",
+    "subject": "PL-1 implements Q-16: services/threads/src/pl/ maps every thread event to and from protoledger; nothing calls it yet"
+   }
+  },
+  {
+   "id": "WT-10",
+   "repo": "cauldron",
+   "path": "/Users/demo/code/cauldron-wt-r34-c1c",
+   "branch": "r34/c1c-daemon-owned-rows",
+   "head": "7ec93051a50982dce753b1fcd3c661614b9b3bc1",
+   "base": "7ec93051a50982dce753b1fcd3c661614b9b3bc1",
+   "ahead": 0,
+   "behind": 201,
+   "dirty": 1,
+   "present": true,
+   "last_commit": {
+    "sha": "7ec93051a50982dce753b1fcd3c661614b9b3bc1",
+    "at": "2026-10-19T14:37:00Z",
+    "subject": "R9.C1c: wait for the first launch record before counting relaunches (test race)"
+   }
+  },
+  {
+   "id": "WT-11",
+   "repo": "cauldron",
+   "path": "/Users/demo/code/cauldron-wt-r35-n1b",
+   "branch": "r35/n1b-cancel-withdraws-queued",
+   "head": "f3483afd8e4fb2f774fc35624942bfe7c6f1316a",
+   "base": "f3483afd8e4fb2f774fc35624942bfe7c6f1316a",
+   "ahead": 0,
+   "behind": 175,
+   "dirty": 0,
+   "present": true,
+   "last_commit": {
+    "sha": "f3483afd8e4fb2f774fc35624942bfe7c6f1316a",
+    "at": "2026-10-19T23:05:00Z",
+    "subject": "R9.N1b implements N-1, L-8: merge release r31/signals-read 5abfd0d2"
+   }
+  },
+  {
+   "id": "WT-12",
+   "repo": "cauldron",
+   "path": "/Users/demo/code/cauldron-wt-r35-n3b",
+   "branch": "r35/n3b-retry-bounds",
+   "head": "9de470b8998c4596b388e42890acb96eb91eb9b4",
+   "base": "87cc08a419c500516cc9e0e70dd8dadd20003fb2",
+   "ahead": 9,
+   "behind": 145,
+   "dirty": 0,
+   "present": true,
+   "last_commit": {
+    "sha": "9de470b8998c4596b388e42890acb96eb91eb9b4",
+    "at": "2026-10-20T18:26:56Z",
+    "subject": "R9.N3b implements N-3: merge r31/signals-read 87cc08a4 (float re-merge)"
+   }
+  },
+  {
+   "id": "WT-13",
+   "repo": "cauldron",
+   "path": "/Users/demo/code/cauldron-wt-r36-n5",
+   "branch": "r36/n5-wake-on-followup",
+   "head": "6eac7b29bee046bb0806f38f2eb27aece1657802",
+   "base": "e6531cb0740e28c98edb5c4ec258f584c816d65f",
+   "ahead": 4,
+   "behind": 157,
+   "dirty": 0,
+   "present": true,
+   "last_commit": {
+    "sha": "6eac7b29bee046bb0806f38f2eb27aece1657802",
+    "at": "2026-10-20T18:25:49Z",
+    "subject": "R9.N5 WIP — held: operator withdrew N-5"
+   }
+  },
+  {
+   "id": "WT-14",
+   "repo": "cauldron",
+   "path": "/Users/demo/code/cauldron-wt-r39-c7f6-base",
+   "branch": null,
+   "head": "27bf898dbd1fa2326a381aa51cb4ad922e7f724f",
+   "base": "27bf898dbd1fa2326a381aa51cb4ad922e7f724f",
+   "ahead": 0,
+   "behind": 47,
+   "dirty": 0,
+   "present": true,
+   "last_commit": {
+    "sha": "27bf898dbd1fa2326a381aa51cb4ad922e7f724f",
+    "at": "2026-10-21T15:56:57Z",
+    "subject": "R9.C7f5 implements C-7: merge r38/c7f5-manifest-race e4283c67 (inspect PASS 31ad644)"
+   }
+  },
+  {
+   "id": "WT-15",
+   "repo": "cauldron",
+   "path": "/Users/demo/code/cauldron-wt-r40-c7f7",
+   "branch": "r40/c7f7-rollback-owed",
+   "head": "4361943f4bc8276a59e89c75b788d7b2a0be5b65",
+   "base": "6626cf9cb462ed5fbf1da84834f4dbe3c4c123f5",
+   "ahead": 4,
+   "behind": 32,
+   "dirty": 0,
+   "present": true,
+   "last_commit": {
+    "sha": "4361943f4bc8276a59e89c75b788d7b2a0be5b65",
+    "at": "2026-10-25T01:28:33Z",
+    "subject": "R9.C7f7 implements C-7: a vacant data root must carry the kept lock file (an empty dir stays an environment)"
+   }
+  },
+  {
+   "id": "WT-16",
+   "repo": "cauldron",
+   "path": "/Users/demo/code/cauldron-wt-r40-m1b",
+   "branch": "r40/m1b-migration-refuses-live",
+   "head": "95d46aa5c112dc04ad6b0151b1a7b47a8838ddfe",
+   "base": "63f1eae7742c47b2f300247225340e65fd961078",
+   "ahead": 4,
+   "behind": 30,
+   "dirty": 0,
+   "present": true,
+   "last_commit": {
+    "sha": "95d46aa5c112dc04ad6b0151b1a7b47a8838ddfe",
+    "at": "2026-10-21T22:17:05Z",
+    "subject": "Merge r31/signals-read 63f1eae7 into r40/m1b-migration-refuses-live"
+   }
+  },
+  {
+   "id": "WT-17",
+   "repo": "cauldron",
+   "path": "/Users/demo/code/cauldron-wt-r40-sh-a2c",
+   "branch": "r40/sh-a2c-attach-missing-notfound",
+   "head": "a582ac2acb089a656e9272181868c29064890570",
+   "base": "f52a94e45d7e73cfff2cadd69aed6973952ece95",
+   "ahead": 15,
+   "behind": 23,
+   "dirty": 5,
+   "present": true,
+   "last_commit": {
+    "sha": "a582ac2acb089a656e9272181868c29064890570",
+    "at": "2026-10-25T02:34:08Z",
+    "subject": "SH-A2c: merge r31/signals-read d50f0dde"
+   }
+  },
+  {
+   "id": "WT-18",
+   "repo": "cauldron",
+   "path": "/Users/demo/code/cauldron-wt-r40-sh-a5",
+   "branch": "r40/sh-a5-recover-attached",
+   "head": "8231a8d628f357a1388bd3d9ea249574864a6615",
+   "base": "f52a94e45d7e73cfff2cadd69aed6973952ece95",
+   "ahead": 4,
+   "behind": 23,
+   "dirty": 0,
+   "present": true,
+   "last_commit": {
+    "sha": "8231a8d628f357a1388bd3d9ea249574864a6615",
+    "at": "2026-10-25T01:13:35Z",
+    "subject": "SH-A5: the test's wrapper stand-ins are reaped on drop (a red run leaked a sleep 600)"
+   }
+  },
+  {
+   "id": "WT-19",
+   "repo": "cauldron",
+   "path": "/Users/demo/code/cauldron-wt-r40-sh-a8",
+   "branch": "r40/sh-a8-cauldron-claude-wrapper",
+   "head": "6626cf9cb462ed5fbf1da84834f4dbe3c4c123f5",
+   "base": "6626cf9cb462ed5fbf1da84834f4dbe3c4c123f5",
+   "ahead": 0,
+   "behind": 32,
+   "dirty": 6,
+   "present": true,
+   "last_commit": {
+    "sha": "6626cf9cb462ed5fbf1da84834f4dbe3c4c123f5",
+    "at": "2026-10-21T20:27:57Z",
+    "subject": "SH-A4 implements SHIMS SH-A4: merge r40/sh-a4-detach 3ccccfa6 (inspect PASS c1906bf)"
+   }
+  },
+  {
+   "id": "WT-20",
+   "repo": "cauldron",
+   "path": "/Users/demo/code/cauldron-wt-r41-c7l",
+   "branch": "r41/c7l-health-pre-ready",
+   "head": "8cf60ecc25caaec477dfee501f9a82acc06d06fb",
+   "base": "f52a94e45d7e73cfff2cadd69aed6973952ece95",
+   "ahead": 12,
+   "behind": 23,
+   "dirty": 0,
+   "present": true,
+   "last_commit": {
+    "sha": "8cf60ecc25caaec477dfee501f9a82acc06d06fb",
+    "at": "2026-10-25T02:32:58Z",
+    "subject": "Merge commit 'd50f0dde' into r41/c7l-health-pre-ready"
+   }
+  },
+  {
+   "id": "WT-21",
+   "repo": "cauldron",
+   "path": "/Users/demo/code/cauldron-wt-r41-ps",
+   "branch": "r41/pending-promises",
+   "head": "f52a94e45d7e73cfff2cadd69aed6973952ece95",
+   "base": "f52a94e45d7e73cfff2cadd69aed6973952ece95",
+   "ahead": 0,
+   "behind": 23,
+   "dirty": 0,
+   "present": true,
+   "last_commit": {
+    "sha": "f52a94e45d7e73cfff2cadd69aed6973952ece95",
+    "at": "2026-10-25T01:08:45Z",
+    "subject": "R9.C7i implements C-7: list health_off_runtime.rs as a daemon-spawning test (F2h merge condition)"
+   }
+  },
+  {
+   "id": "WT-22",
+   "repo": "cauldron",
+   "path": "/Users/demo/code/cauldron-wt-r41-ps0-doc",
+   "branch": "docs/r9-ps0-pending-promises",
+   "head": "863a01f8a0a85a295df84d2cc671cb4d0c8a0789",
+   "base": "863a01f8a0a85a295df84d2cc671cb4d0c8a0789",
+   "ahead": 0,
+   "behind": 1,
+   "dirty": 0,
+   "present": true,
+   "last_commit": {
+    "sha": "863a01f8a0a85a295df84d2cc671cb4d0c8a0789",
+    "at": "2026-10-25T02:30:24Z",
+    "subject": "R9.PS0 implements operator ruling r41-3: pending promises spec"
+   }
+  },
+  {
+   "id": "WT-23",
+   "repo": "cauldron",
+   "path": "/Users/demo/code/cauldron-wt-r41-ps1",
+   "branch": "r41/ps1-pending-types",
+   "head": "f52a94e45d7e73cfff2cadd69aed6973952ece95",
+   "base": "f52a94e45d7e73cfff2cadd69aed6973952ece95",
+   "ahead": 0,
+   "behind": 23,
+   "dirty": 8,
+   "present": true,
+   "last_commit": {
+    "sha": "f52a94e45d7e73cfff2cadd69aed6973952ece95",
+    "at": "2026-10-25T01:08:45Z",
+    "subject": "R9.C7i implements C-7: list health_off_runtime.rs as a daemon-spawning test (F2h merge condition)"
+   }
+  },
+  {
+   "id": "WT-24",
+   "repo": "cauldron",
+   "path": "/Users/demo/code/cauldron-wt-r41-r12-1",
+   "branch": "r41/r12-1-identity-guard",
+   "head": "8a21f43e2e2f49e2371cd7a2d3189dd8e4067eb0",
+   "base": "f52a94e45d7e73cfff2cadd69aed6973952ece95",
+   "ahead": 1,
+   "behind": 23,
+   "dirty": 0,
+   "present": true,
+   "last_commit": {
+    "sha": "8a21f43e2e2f49e2371cd7a2d3189dd8e4067eb0",
+    "at": "2026-10-25T02:08:13Z",
+    "subject": "R12.1 implements R12: AccountId (normalised email) and IdentityGuard"
+   }
+  },
+  {
+   "id": "WT-25",
+   "repo": "cauldron",
+   "path": "/Users/demo/code/cauldron-wt-r41-r12-1-insp",
+   "branch": null,
+   "head": "8a21f43e2e2f49e2371cd7a2d3189dd8e4067eb0",
+   "base": "f52a94e45d7e73cfff2cadd69aed6973952ece95",
+   "ahead": 1,
+   "behind": 23,
+   "dirty": 0,
+   "present": true,
+   "last_commit": {
+    "sha": "8a21f43e2e2f49e2371cd7a2d3189dd8e4067eb0",
+    "at": "2026-10-25T02:08:13Z",
+    "subject": "R12.1 implements R12: AccountId (normalised email) and IdentityGuard"
+   }
+  },
+  {
+   "id": "WT-26",
+   "repo": "cauldron",
+   "path": "/Users/demo/code/cauldron-wt-r41-r12-5",
+   "branch": "r41/r12-5-crossed-login",
+   "head": "f52a94e45d7e73cfff2cadd69aed6973952ece95",
+   "base": "f52a94e45d7e73cfff2cadd69aed6973952ece95",
+   "ahead": 0,
+   "behind": 23,
+   "dirty": 2,
+   "present": true,
+   "last_commit": {
+    "sha": "f52a94e45d7e73cfff2cadd69aed6973952ece95",
+    "at": "2026-10-25T01:08:45Z",
+    "subject": "R9.C7i implements C-7: list health_off_runtime.rs as a daemon-spawning test (F2h merge condition)"
+   }
+  },
+  {
+   "id": "WT-27",
+   "repo": "cauldron",
+   "path": "/Users/demo/code/cauldron-wt-r41-sh-a2c-base",
+   "branch": null,
+   "head": "a582ac2acb089a656e9272181868c29064890570",
+   "base": "f52a94e45d7e73cfff2cadd69aed6973952ece95",
+   "ahead": 15,
+   "behind": 23,
+   "dirty": 0,
+   "present": true,
+   "last_commit": {
+    "sha": "a582ac2acb089a656e9272181868c29064890570",
+    "at": "2026-10-25T02:34:08Z",
+    "subject": "SH-A2c: merge r31/signals-read d50f0dde"
+   }
+  },
+  {
+   "id": "WT-28",
+   "repo": "cauldron",
+   "path": "/Users/demo/code/cauldron-wt-r4s16",
+   "branch": "sv1/R4.S16",
+   "head": "7b2d897a0e2f724a3cf72febe74095f95030841c",
+   "base": "e31c77a5aef53a62968186ce30324ef876fe195f",
+   "ahead": 10,
+   "behind": 213,
+   "dirty": 0,
+   "present": true,
+   "last_commit": {
+    "sha": "7b2d897a0e2f724a3cf72febe74095f95030841c",
+    "at": "2026-10-20T20:17:07Z",
+    "subject": "R4.S16 implements R4.S16 (ripple initiator, flag rule; gen-22 rulings): door_e2e question_id filters by title in the test, not the pattern"
+   }
+  },
+  {
+   "id": "WT-29",
+   "repo": "cauldron",
+   "path": "/Users/demo/code/cauldron-wt-r4s7",
+   "branch": "r5/ledger-asks",
+   "head": "63ea19dd7e8f9fffaa419bf795e686e15b48872a",
+   "base": "b6b75484deb538578af6673cf415731f54014256",
+   "ahead": 5,
+   "behind": 532,
+   "dirty": 0,
+   "present": true,
+   "last_commit": {
+    "sha": "63ea19dd7e8f9fffaa419bf795e686e15b48872a",
+    "at": "2026-10-15T20:23:26Z",
+    "subject": "R4.S7 (IS-27): write_ledgers — the wire archive into one immutable ledger file per thread"
+   }
+  },
+  {
+   "id": "WT-30",
+   "repo": "cauldron",
+   "path": "/Users/demo/code/cauldron-wt-r5s1",
+   "branch": "sv1/R5.S1",
+   "head": "3308dcf1fe6ec1944de582ae59405e2e812d3509",
+   "base": "e31c77a5aef53a62968186ce30324ef876fe195f",
+   "ahead": 18,
+   "behind": 213,
+   "dirty": 0,
+   "present": true,
+   "last_commit": {
+    "sha": "3308dcf1fe6ec1944de582ae59405e2e812d3509",
+    "at": "2026-10-21T15:36:45Z",
+    "subject": "spine: re-issued gen-25 rulings — meta.imported_from carries v5_id and admits_by_edge, a carried id never trips the provisional landing check, import_v5_pool cites operator #407 \"regeneration\" — R5.S1"
+   }
+  },
+  {
+   "id": "WT-31",
+   "repo": "cauldron",
+   "path": "/Users/demo/code/cauldron-wt-r6s2",
+   "branch": "sv1/R6.S2",
+   "head": "605398788c8deb4cee65bd2e06a03c4f42ec3e3f",
+   "base": "e31c77a5aef53a62968186ce30324ef876fe195f",
+   "ahead": 7,
+   "behind": 213,
+   "dirty": 0,
+   "present": true,
+   "last_commit": {
+    "sha": "605398788c8deb4cee65bd2e06a03c4f42ec3e3f",
+    "at": "2026-10-20T20:42:23Z",
+    "subject": "events: test fixes from the first run — R6.S2"
+   }
+  },
+  {
+   "id": "WT-32",
+   "repo": "cauldron",
+   "path": "/Users/demo/code/cauldron-wt-r6s3",
+   "branch": "sv1/R6.S3",
+   "head": "65bdad6fbc2b267e8eede02cd74c738cd5a487d2",
+   "base": "e31c77a5aef53a62968186ce30324ef876fe195f",
+   "ahead": 12,
+   "behind": 213,
+   "dirty": 0,
+   "present": true,
+   "last_commit": {
+    "sha": "65bdad6fbc2b267e8eede02cd74c738cd5a487d2",
+    "at": "2026-10-20T22:36:20Z",
+    "subject": "events: guard 6 precondition independent of the ack line — R6.S3"
+   }
+  },
+  {
+   "id": "WT-33",
+   "repo": "cauldron",
+   "path": "/Users/demo/code/cauldron-wt-r6s4",
+   "branch": "sv1/R6.S4",
+   "head": "c3a1516ec7d284a91c7399ed8d017390a7a23283",
+   "base": "e31c77a5aef53a62968186ce30324ef876fe195f",
+   "ahead": 15,
+   "behind": 213,
+   "dirty": 0,
+   "present": true,
+   "last_commit": {
+    "sha": "c3a1516ec7d284a91c7399ed8d017390a7a23283",
+    "at": "2026-10-21T02:51:46Z",
+    "subject": "events: live-frame rows in the test client; serve is no longer bad usage — R6.S4"
+   }
+  },
+  {
+   "id": "WT-34",
+   "repo": "cauldron",
+   "path": "/Users/demo/code/cauldron-wt-r6s5",
+   "branch": "sv1/R6.S5",
+   "head": "30f901310d2cbb0086e52f75f7fa92c6f5497c80",
+   "base": "e31c77a5aef53a62968186ce30324ef876fe195f",
+   "ahead": 17,
+   "behind": 213,
+   "dirty": 0,
+   "present": true,
+   "last_commit": {
+    "sha": "30f901310d2cbb0086e52f75f7fa92c6f5497c80",
+    "at": "2026-10-21T15:52:28Z",
+    "subject": "events: nags — raise, cadence, ack, auto-ack, the nags shape, consumer-lag and pinned-retention nags — R6.S5"
+   }
+  },
+  {
+   "id": "WT-35",
+   "repo": "cauldron",
+   "path": "/Users/demo/code/cauldron-wt-ripple",
+   "branch": "ripple/v2",
+   "head": "44f87a5e084fa06ad43f2dd895071d0144f2dd2a",
+   "base": "e31c77a5aef53a62968186ce30324ef876fe195f",
+   "ahead": 36,
+   "behind": 213,
+   "dirty": 0,
+   "present": true,
+   "last_commit": {
+    "sha": "44f87a5e084fa06ad43f2dd895071d0144f2dd2a",
+    "at": "2026-10-21T15:49:46Z",
+    "subject": "Merge ripple/v2-w14-placer into ripple/v2"
+   }
+  },
+  {
+   "id": "WT-36",
+   "repo": "cauldron",
+   "path": "/Users/demo/code/cauldron-wt-run-ended",
+   "branch": "fix/managed-run-ended-tail",
+   "head": "bb22b2fa1992dc269ad9c9ff193699f7aff143e9",
+   "base": "bb22b2fa1992dc269ad9c9ff193699f7aff143e9",
+   "ahead": 0,
+   "behind": 367,
+   "dirty": 0,
+   "present": true,
+   "last_commit": {
+    "sha": "bb22b2fa1992dc269ad9c9ff193699f7aff143e9",
+    "at": "2026-10-16T20:39:48Z",
+    "subject": "threads: a managed child's run ends by kind, not inside a 400-event tail (H179)"
+   }
+  },
+  {
+   "id": "WT-37",
+   "repo": "cauldron",
+   "path": "/Users/demo/code/cauldron-wt-seed-wiped",
+   "branch": "fix/seed-wiped-slots-at-boot",
+   "head": "fb63eca00944170113d1d7c6b74b003b27dfef0a",
+   "base": "fb63eca00944170113d1d7c6b74b003b27dfef0a",
+   "ahead": 0,
+   "behind": 365,
+   "dirty": 0,
+   "present": true,
+   "last_commit": {
+    "sha": "fb63eca00944170113d1d7c6b74b003b27dfef0a",
+    "at": "2026-10-16T20:43:01Z",
+    "subject": "threads: seed wiped login slots at boot so the first placement skips them (H179)"
+   }
+  },
+  {
+   "id": "WT-38",
+   "repo": "cauldron",
+   "path": "/Users/demo/code/cauldron-wt-soup-phase-a",
+   "branch": "soup/phase-a",
+   "head": "8fd964ed420dee238c6d59f7ae01c389932ffc30",
+   "base": "e31c77a5aef53a62968186ce30324ef876fe195f",
+   "ahead": 11,
+   "behind": 213,
+   "dirty": 0,
+   "present": true,
+   "last_commit": {
+    "sha": "8fd964ed420dee238c6d59f7ae01c389932ffc30",
+    "at": "2026-10-20T20:57:53Z",
+    "subject": "merge R4.S16: ripple initiator + flag rule (R4.S16 implements R4.S16; gen-22 rulings, Q-22a ripple-only)"
+   }
+  },
+  {
+   "id": "WT-39",
+   "repo": "cauldron",
+   "path": "/Users/demo/code/cauldron-wt-soup-phase-b",
+   "branch": "soup/phase-b",
+   "head": "8fd964ed420dee238c6d59f7ae01c389932ffc30",
+   "base": "e31c77a5aef53a62968186ce30324ef876fe195f",
+   "ahead": 11,
+   "behind": 213,
+   "dirty": 0,
+   "present": true,
+   "last_commit": {
+    "sha": "8fd964ed420dee238c6d59f7ae01c389932ffc30",
+    "at": "2026-10-20T20:57:53Z",
+    "subject": "merge R4.S16: ripple initiator + flag rule (R4.S16 implements R4.S16; gen-22 rulings, Q-22a ripple-only)"
+   }
+  },
+  {
+   "id": "WT-40",
+   "repo": "cauldron",
+   "path": "/Users/demo/code/cauldron-wt-soup-phase-c",
+   "branch": "soup/phase-c",
+   "head": "a35015279abd38477a9f24e24b2463c0717b2d98",
+   "base": "e31c77a5aef53a62968186ce30324ef876fe195f",
+   "ahead": 16,
+   "behind": 213,
+   "dirty": 0,
+   "present": true,
+   "last_commit": {
+    "sha": "a35015279abd38477a9f24e24b2463c0717b2d98",
+    "at": "2026-10-21T08:43:17Z",
+    "subject": "merge R6.S4: the events producer's door — identity, handshake, six methods, consumers + bus shapes, binding table (R6.S4 implements DEC-174)"
+   }
+  },
+  {
+   "id": "WT-41",
+   "repo": "cauldron",
+   "path": "/Users/demo/code/cauldron-wt-sv1-base-4b4ce7d9",
+   "branch": null,
+   "head": "4b4ce7d91bf96854309c3613855d2c76a10ec4ea",
+   "base": "e31c77a5aef53a62968186ce30324ef876fe195f",
+   "ahead": 8,
+   "behind": 213,
+   "dirty": 0,
+   "present": true,
+   "last_commit": {
+    "sha": "4b4ce7d91bf96854309c3613855d2c76a10ec4ea",
+    "at": "2026-10-20T20:57:54Z",
+    "subject": "merge R6.S2: events log, durable-before-ack append, dedup (R6.S2 implements DEC-174, DEC-316)"
+   }
+  },
+  {
+   "id": "WT-42",
+   "repo": "cauldron",
+   "path": "/Users/demo/code/cauldron-wt-sv1-base-8577f9a9",
+   "branch": null,
+   "head": "8577f9a99c5ef16bbca05483daf4c5dea86fbe6c",
+   "base": "e31c77a5aef53a62968186ce30324ef876fe195f",
+   "ahead": 13,
+   "behind": 213,
+   "dirty": 0,
+   "present": true,
+   "last_commit": {
+    "sha": "8577f9a99c5ef16bbca05483daf4c5dea86fbe6c",
+    "at": "2026-10-21T00:17:55Z",
+    "subject": "merge R6.S3: consumers, selectors, pull/ack, control events in the log, retention (R6.S3 implements DEC-316, DEC-174)"
+   }
+  },
+  {
+   "id": "WT-43",
+   "repo": "cauldron",
+   "path": "/Users/demo/code/cauldron-wt-sv1-base-8fd964ed",
+   "branch": null,
+   "head": "8fd964ed420dee238c6d59f7ae01c389932ffc30",
+   "base": "e31c77a5aef53a62968186ce30324ef876fe195f",
+   "ahead": 11,
+   "behind": 213,
+   "dirty": 0,
+   "present": true,
+   "last_commit": {
+    "sha": "8fd964ed420dee238c6d59f7ae01c389932ffc30",
+    "at": "2026-10-20T20:57:53Z",
+    "subject": "merge R4.S16: ripple initiator + flag rule (R4.S16 implements R4.S16; gen-22 rulings, Q-22a ripple-only)"
+   }
+  },
+  {
+   "id": "WT-44",
+   "repo": "cauldron",
+   "path": "/Users/demo/code/cauldron-wt-sv1-base-a3501527",
+   "branch": null,
+   "head": "a35015279abd38477a9f24e24b2463c0717b2d98",
+   "base": "e31c77a5aef53a62968186ce30324ef876fe195f",
+   "ahead": 16,
+   "behind": 213,
+   "dirty": 0,
+   "present": true,
+   "last_commit": {
+    "sha": "a35015279abd38477a9f24e24b2463c0717b2d98",
+    "at": "2026-10-21T08:43:17Z",
+    "subject": "merge R6.S4: the events producer's door — identity, handshake, six methods, consumers + bus shapes, binding table (R6.S4 implements DEC-174)"
+   }
+  },
+  {
+   "id": "WT-45",
+   "repo": "cauldron",
+   "path": "/Users/demo/code/cauldron-wt-sv1-base-ae45061d",
+   "branch": null,
+   "head": "ae45061dff43a4f2287466b0f589f176fa453ab0",
+   "base": "e31c77a5aef53a62968186ce30324ef876fe195f",
+   "ahead": 4,
+   "behind": 213,
+   "dirty": 0,
+   "present": true,
+   "last_commit": {
+    "sha": "ae45061dff43a4f2287466b0f589f176fa453ab0",
+    "at": "2026-10-19T12:47:16Z",
+    "subject": "soup daemon: pass-c inspection fixes — R4.S14 pass c2"
+   }
+  },
+  {
+   "id": "WT-46",
+   "repo": "cauldron",
+   "path": "/Users/demo/code/cauldron-wt-tui-bltest0",
+   "branch": "tui/bltest0",
+   "head": "d7148802286543f6420a0c46187219630e6c39e3",
+   "base": "7764dc555ac0ec851f7d63e2fc5c66c444f20ae9",
+   "ahead": 15,
+   "behind": 127,
+   "dirty": 2,
+   "present": true,
+   "last_commit": {
+    "sha": "d7148802286543f6420a0c46187219630e6c39e3",
+    "at": "2026-10-21T09:34:10Z",
+    "subject": "BL.DEV.1 implements IS-1: tui --dev takes its binaries out of the slot through cargo-lease build-out"
+   }
+  },
+  {
+   "id": "WT-47",
+   "repo": "cauldron",
+   "path": "/Users/demo/code/cauldron-wt-tui-r1",
+   "branch": "tui/r1",
+   "head": "d3123833dc18082797c983ed84cd2f8969e1aafd",
+   "base": "7764dc555ac0ec851f7d63e2fc5c66c444f20ae9",
+   "ahead": 16,
+   "behind": 127,
+   "dirty": 0,
+   "present": true,
+   "last_commit": {
+    "sha": "d3123833dc18082797c983ed84cd2f8969e1aafd",
+    "at": "2026-10-21T12:57:47Z",
+    "subject": "R1.S6 implements IS-6, IS-7: mirror::window holds the newest 32 named threads so a relaunched face keeps the TUI-born threads on recents and their project's list"
+   }
+  },
+  {
+   "id": "WT-48",
+   "repo": "cauldron",
+   "path": "/Users/demo/code/cauldron-wt-tui-r1s5p",
+   "branch": "tui/r1s5p",
+   "head": "37a5cc625d1918edd9d4c76ec176ad0d2ff61b9f",
+   "base": "7764dc555ac0ec851f7d63e2fc5c66c444f20ae9",
+   "ahead": 16,
+   "behind": 127,
+   "dirty": 0,
+   "present": true,
+   "last_commit": {
+    "sha": "37a5cc625d1918edd9d4c76ec176ad0d2ff61b9f",
+    "at": "2026-10-21T09:15:11Z",
+    "subject": "R1.S5p implements IS-5, IS-8, DEC-2: un-ignore R1.S4's two name tests, assertions unchanged"
+   }
+  },
+  {
+   "id": "WT-49",
+   "repo": "cauldron",
+   "path": "/Users/demo/code/cauldron-wt-tui-r2",
+   "branch": "tui/r2",
+   "head": "c8f2330f29daebfed716cf82a544b810f631cb38",
+   "base": "7764dc555ac0ec851f7d63e2fc5c66c444f20ae9",
+   "ahead": 17,
+   "behind": 127,
+   "dirty": 0,
+   "present": true,
+   "last_commit": {
+    "sha": "c8f2330f29daebfed716cf82a544b810f631cb38",
+    "at": "2026-10-21T09:54:02Z",
+    "subject": "R2.S2 implements IS-9, CON-3: managed rows at any depth, the window holds the active subtree"
+   }
+  },
+  {
+   "id": "WT-50",
+   "repo": "cauldron",
+   "path": "/Users/demo/code/cauldron-wt-tui-r2s4",
+   "branch": "tui/r2s4",
+   "head": "71163f87a007044309b099f5e6dec65b709159b2",
+   "base": "7764dc555ac0ec851f7d63e2fc5c66c444f20ae9",
+   "ahead": 18,
+   "behind": 127,
+   "dirty": 1,
+   "present": true,
+   "last_commit": {
+    "sha": "71163f87a007044309b099f5e6dec65b709159b2",
+    "at": "2026-10-21T14:46:17Z",
+    "subject": "R2.S4 implements IS-9, CON-3: asserted live-tree probe on his real ledger; an ended thread's last word reaches the store; running-first subtree bound with the cut logged"
+   }
+  },
+  {
+   "id": "WT-51",
+   "repo": "cauldron",
+   "path": "/Users/demo/code/cauldron-wt-tui-r4",
+   "branch": "tui/r4",
+   "head": "831aa21b08b199a40b98003ea62149bb2593cf2f",
+   "base": "7764dc555ac0ec851f7d63e2fc5c66c444f20ae9",
+   "ahead": 25,
+   "behind": 127,
+   "dirty": 0,
+   "present": true,
+   "last_commit": {
+    "sha": "831aa21b08b199a40b98003ea62149bb2593cf2f",
+    "at": "2026-10-21T11:36:28Z",
+    "subject": "R4.M1 implements IS-11, CON-4: merge tui/r1 d7148802 into tui/r4 (R4 floats on R1)"
+   }
+  },
+  {
+   "id": "WT-52",
+   "repo": "cauldron",
+   "path": "/Users/demo/code/cauldron-wt-tui-r6",
+   "branch": "tui/r6",
+   "head": "985678aaaca917ede8599e2d0e9fb63528754fba",
+   "base": "7764dc555ac0ec851f7d63e2fc5c66c444f20ae9",
+   "ahead": 25,
+   "behind": 127,
+   "dirty": 0,
+   "present": true,
+   "last_commit": {
+    "sha": "985678aaaca917ede8599e2d0e9fb63528754fba",
+    "at": "2026-10-21T10:28:21Z",
+    "subject": "R6.S3 implements IS-29, CON-8, L-20: re-cut r5b, the mirror emits no bare post-reset rows; only a page with the link up ends staleness"
+   }
+  },
+  {
+   "id": "WT-53",
+   "repo": "cauldron",
+   "path": "/Users/demo/code/cauldron-wt-tui-subagents-producer",
+   "branch": "feat/tui-subagents-producer",
+   "head": "5abdfaddfb7e8118dab1ad10762fd1b16302c6d1",
+   "base": "7f8baeb290aae89ca67d00244eced140cb820225",
+   "ahead": 2,
+   "behind": 362,
+   "dirty": 0,
+   "present": true,
+   "last_commit": {
+    "sha": "5abdfaddfb7e8118dab1ad10762fd1b16302c6d1",
+    "at": "2026-10-16T22:39:02Z",
+    "subject": "seam: re-take inventory --declared at 8b141f3 (threads.children, non-idle parent_id)"
+   }
+  },
+  {
+   "id": "WT-54",
+   "repo": "cauldron",
+   "path": "/Users/demo/code/cauldron-wt-w1-multi",
+   "branch": "ripple/v2-w1-multi",
+   "head": "f3fbea3db0000eb9814f22bb7bc9fc4dbf6fd5f0",
+   "base": "e31c77a5aef53a62968186ce30324ef876fe195f",
+   "ahead": 15,
+   "behind": 213,
+   "dirty": 0,
+   "present": true,
+   "last_commit": {
+    "sha": "f3fbea3db0000eb9814f22bb7bc9fc4dbf6fd5f0",
+    "at": "2026-10-21T02:51:03Z",
+    "subject": "ripple v2 W1: wire type-one's MultiDecision into the ripple runtime"
+   }
+  },
+  {
+   "id": "WT-55",
+   "repo": "cauldron",
+   "path": "/Users/demo/code/cauldron-wt-w10-fixtures",
+   "branch": "ripple/v2-w10-fixtures",
+   "head": "191030d2799affafb481efec588e2b3fcb7002d2",
+   "base": "e31c77a5aef53a62968186ce30324ef876fe195f",
+   "ahead": 28,
+   "behind": 213,
+   "dirty": 0,
+   "present": true,
+   "last_commit": {
+    "sha": "191030d2799affafb481efec588e2b3fcb7002d2",
+    "at": "2026-10-21T09:02:43Z",
+    "subject": "ripple-curator corpus_build/corpus_receipts: read frozen source copies, never the live jev-system-one board"
+   }
+  },
+  {
+   "id": "WT-56",
+   "repo": "cauldron",
+   "path": "/Users/demo/code/cauldron-wt-w11-iou",
+   "branch": "ripple/v2-w11-iou",
+   "head": "70ad5b79af8544ca784f8f30562363ce68709567",
+   "base": "e31c77a5aef53a62968186ce30324ef876fe195f",
+   "ahead": 28,
+   "behind": 213,
+   "dirty": 0,
+   "present": true,
+   "last_commit": {
+    "sha": "70ad5b79af8544ca784f8f30562363ce68709567",
+    "at": "2026-10-21T12:46:04Z",
+    "subject": "ripple-curator W11: capacity refusals park an IOU instead of costing the fold; OpenJev shadow in curator v1; pen test off the live board"
+   }
+  },
+  {
+   "id": "WT-57",
+   "repo": "cauldron",
+   "path": "/Users/demo/code/cauldron-wt-w12-openjev",
+   "branch": "ripple/v2-w12-openjev",
+   "head": "bed4cd5eaadbd140d2b93a90051461a9e6cd2406",
+   "base": "e31c77a5aef53a62968186ce30324ef876fe195f",
+   "ahead": 28,
+   "behind": 213,
+   "dirty": 0,
+   "present": true,
+   "last_commit": {
+    "sha": "bed4cd5eaadbd140d2b93a90051461a9e6cd2406",
+    "at": "2026-10-21T14:13:50Z",
+    "subject": "ripple v2 W12: openjev_replay, replay a backtest's recorded type-one asks through OpenJev vs Jev and Haiku"
+   }
+  },
+  {
+   "id": "WT-58",
+   "repo": "cauldron",
+   "path": "/Users/demo/code/cauldron-wt-w13-carve",
+   "branch": "ripple/v2-w13-carve",
+   "head": "b48fe482969af345bf513f7503673a32ba187fe6",
+   "base": "e31c77a5aef53a62968186ce30324ef876fe195f",
+   "ahead": 29,
+   "behind": 213,
+   "dirty": 0,
+   "present": true,
+   "last_commit": {
+    "sha": "b48fe482969af345bf513f7503673a32ba187fe6",
+    "at": "2026-10-21T14:57:58Z",
+    "subject": "ripple-curator W13: curator v1 discharges a parked capacity IOU (dispatch, region judgment, settle) so round close passes"
+   }
+  },
+  {
+   "id": "WT-59",
+   "repo": "cauldron",
+   "path": "/Users/demo/code/cauldron-wt-w14-placer",
+   "branch": "ripple/v2-w14-placer",
+   "head": "88eff6c164f6c8f58ae89799e7f8c84fe237b86f",
+   "base": "e31c77a5aef53a62968186ce30324ef876fe195f",
+   "ahead": 30,
+   "behind": 213,
+   "dirty": 0,
+   "present": true,
+   "last_commit": {
+    "sha": "88eff6c164f6c8f58ae89799e7f8c84fe237b86f",
+    "at": "2026-10-21T15:48:33Z",
+    "subject": "ripple-curator W14: curator v1 dispatches the PLACER for regionless nodes so round close passes"
+   }
+  },
+  {
+   "id": "WT-60",
+   "repo": "cauldron",
+   "path": "/Users/demo/code/cauldron-wt-w2-usage",
+   "branch": "ripple/v2-w2-usage",
+   "head": "0ac567e0070bc6ec6ace3f2e26e52e8c90a96239",
+   "base": "e31c77a5aef53a62968186ce30324ef876fe195f",
+   "ahead": 15,
+   "behind": 213,
+   "dirty": 0,
+   "present": true,
+   "last_commit": {
+    "sha": "0ac567e0070bc6ec6ace3f2e26e52e8c90a96239",
+    "at": "2026-10-21T02:59:04Z",
+    "subject": "ripple v2 V9: OpenRouter usage accounting, subscription usage second per budget key"
+   }
+  },
+  {
+   "id": "WT-61",
+   "repo": "cauldron",
+   "path": "/Users/demo/code/cauldron-wt-w3-inference",
+   "branch": "ripple/v2-w3-inference",
+   "head": "2712dcb7ccc47771326a7477efc2c0a91dd12823",
+   "base": "e31c77a5aef53a62968186ce30324ef876fe195f",
+   "ahead": 15,
+   "behind": 213,
+   "dirty": 0,
+   "present": true,
+   "last_commit": {
+    "sha": "2712dcb7ccc47771326a7477efc2c0a91dd12823",
+    "at": "2026-10-21T02:36:59Z",
+    "subject": "ripple v2 W3: host substrate's inference daemon (services/inference.toml)"
+   }
+  },
+  {
+   "id": "WT-62",
+   "repo": "cauldron",
+   "path": "/Users/demo/code/cauldron-wt-w4-threads",
+   "branch": "ripple/v2-w4-threads",
+   "head": "2f3745aa4ba8880f3d958d91cf22fdaa7af3c8c1",
+   "base": "e31c77a5aef53a62968186ce30324ef876fe195f",
+   "ahead": 16,
+   "behind": 213,
+   "dirty": 0,
+   "present": true,
+   "last_commit": {
+    "sha": "2f3745aa4ba8880f3d958d91cf22fdaa7af3c8c1",
+    "at": "2026-10-21T04:42:49Z",
+    "subject": "ripple v2 W4: port threads-client to the live threads daemon's chassis door"
+   }
+  },
+  {
+   "id": "WT-63",
+   "repo": "cauldron",
+   "path": "/Users/demo/code/cauldron-wt-w5-engineer",
+   "branch": "ripple/v2-w5-engineer",
+   "head": "196bb7068da80bdf078e02c55a63aaebd10615a7",
+   "base": "e31c77a5aef53a62968186ce30324ef876fe195f",
+   "ahead": 16,
+   "behind": 213,
+   "dirty": 0,
+   "present": true,
+   "last_commit": {
+    "sha": "196bb7068da80bdf078e02c55a63aaebd10615a7",
+    "at": "2026-10-21T03:28:13Z",
+    "subject": "ripple v2 V12: config-engineer on v2 packages - ConfigRef/fragment set/bundle hashes in its state, Write/Edit path-fenced to the slot, OpenRouter-first cost columns with subscription per budget key"
+   }
+  },
+  {
+   "id": "WT-64",
+   "repo": "cauldron",
+   "path": "/Users/demo/code/cauldron-wt-w7-host",
+   "branch": "ripple/v2-w7-host",
+   "head": "b9ba1e17e27b7f72cad1a62d3798453277eec593",
+   "base": "e31c77a5aef53a62968186ce30324ef876fe195f",
+   "ahead": 16,
+   "behind": 213,
+   "dirty": 0,
+   "present": true,
+   "last_commit": {
+    "sha": "b9ba1e17e27b7f72cad1a62d3798453277eec593",
+    "at": "2026-10-21T04:45:06Z",
+    "subject": "ripple v2 W7: the ripples host asks the registered type-one producer"
+   }
+  },
+  {
+   "id": "WT-65",
+   "repo": "cauldron",
+   "path": "/private/tmp/r4s14-c-base",
+   "branch": null,
+   "head": "4be1c0de9a1f2b3c4d5e6f708192a3b4c5d6e7f8",
+   "base": "4be1c0de9a1f2b3c4d5e6f708192a3b4c5d6e7f8",
+   "ahead": 2,
+   "behind": 510,
+   "dirty": 0,
+   "present": false,
+   "last_commit": {
+    "sha": "4be1c0de9a1f2b3c4d5e6f708192a3b4c5d6e7f8",
+    "at": "2026-10-18T09:12:00Z",
+    "subject": "r4 s14: base for the c lane"
+   }
+  },
+  {
+   "id": "WT-66",
+   "repo": "harness",
+   "path": "/Users/demo/code/harness-sv1/R3.S11",
+   "branch": "sv1/R3.S11",
+   "head": "4d7e27b001a1c3ebf7dde827027f059d1a9ff70b",
+   "base": "33dfd08738c8d7034fb80ae266826f8d4330ed55",
+   "ahead": 7,
+   "behind": 47,
+   "dirty": 0,
+   "present": true,
+   "last_commit": {
+    "sha": "4d7e27b001a1c3ebf7dde827027f059d1a9ff70b",
+    "at": "2026-10-12T13:48:14Z",
+    "subject": "mind-index-v5 conformance: DS phase exercises daemon-address discovery (seam table via CAULDRON_SEAMS and HOME, nothing advertised, no threads row, THREADS_WS_URL override) against two stub listeners; unset every CAULDRON_*/THREADS_* var"
+   }
+  },
+  {
+   "id": "WT-67",
+   "repo": "harness",
+   "path": "/Users/demo/code/harness-sv1/R3.S12",
+   "branch": "sv1/R3.S12",
+   "head": "02048c1f2166f7bf9d895cfe35612559f1ca2bab",
+   "base": "33dfd08738c8d7034fb80ae266826f8d4330ed55",
+   "ahead": 8,
+   "behind": 47,
+   "dirty": 0,
+   "present": true,
+   "last_commit": {
+    "sha": "02048c1f2166f7bf9d895cfe35612559f1ca2bab",
+    "at": "2026-10-12T16:54:58Z",
+    "subject": "mind-index-v5 conformance: DS transport stub connects only to an explicit allowlist of the suite's own listeners (DS_ALLOW from the listeners' bound ports); refuses+logs anything else without connecting; DSg/DSh prove it with a kernel-port canary that must record 0 accepts"
+   }
+  },
+  {
+   "id": "WT-68",
+   "repo": "harness",
+   "path": "/Users/demo/code/harness-sv1/R3.S13",
+   "branch": "sv1/R3.S13",
+   "head": "6529d956be7b328b95b2331cb618ff0597d22e27",
+   "base": "33dfd08738c8d7034fb80ae266826f8d4330ed55",
+   "ahead": 12,
+   "behind": 47,
+   "dirty": 0,
+   "present": true,
+   "last_commit": {
+    "sha": "6529d956be7b328b95b2331cb618ff0597d22e27",
+    "at": "2026-10-13T10:07:04Z",
+    "subject": "R3.S13: live-off guard keeps its own exit status (trap wait under set -e returned 143)"
+   }
+  },
+  {
+   "id": "WT-69",
+   "repo": "harness",
+   "path": "/Users/demo/code/harness-sv1/R3.S14",
+   "branch": "sv1/R3.S14",
+   "head": "fd675ba6895e40b4b8fe8876726d0a2b21e82bea",
+   "base": "33dfd08738c8d7034fb80ae266826f8d4330ed55",
+   "ahead": 14,
+   "behind": 47,
+   "dirty": 0,
+   "present": true,
+   "last_commit": {
+    "sha": "fd675ba6895e40b4b8fe8876726d0a2b21e82bea",
+    "at": "2026-10-13T15:06:29Z",
+    "subject": "R3.S14: fake-teardown guard - dedupe survivor listing, header first"
+   }
+  },
+  {
+   "id": "WT-70",
+   "repo": "harness",
+   "path": "/Users/demo/code/harness-sv1/R3.S2",
+   "branch": "sv1/R3.S2",
+   "head": "66c58b922ef5a290b5e0513d51b29844281c0dc2",
+   "base": "5a913c4068dcfe24177e074a4b07eed44cdb214d",
+   "ahead": 1,
+   "behind": 29,
+   "dirty": 0,
+   "present": true,
+   "last_commit": {
+    "sha": "66c58b922ef5a290b5e0513d51b29844281c0dc2",
+    "at": "2026-10-12T06:22:27Z",
+    "subject": "principles: the no-op principle is about code, not application semantics — strike the three application-level examples (constraint rejecting nothing, sweep matching none, migration against zero rows) and scope it to code, citing 7a2bb4c2#369 (soup-v1 R3.S2)"
+   }
+  },
+  {
+   "id": "WT-71",
+   "repo": "harness",
+   "path": "/Users/demo/code/harness-sv1/R3.S9",
+   "branch": "sv1/R3.S9",
+   "head": "2e4180bfdadb631b867a774e4fe5f9b71555d8f5",
+   "base": "33dfd08738c8d7034fb80ae266826f8d4330ed55",
+   "ahead": 6,
+   "behind": 47,
+   "dirty": 0,
+   "present": true,
+   "last_commit": {
+    "sha": "2e4180bfdadb631b867a774e4fe5f9b71555d8f5",
+    "at": "2026-10-12T09:27:10Z",
+    "subject": "mind-index-v5: the context_id read discovers the daemon from its seam row (no :3651 default); suite pins a stub URL"
+   }
+  },
+  {
+   "id": "WT-72",
+   "repo": "harness",
+   "path": "/Users/demo/code/harness-sv1/R4.S15",
+   "branch": "sv1/R4.S15",
+   "head": "6ab83b98abf4a9e5a53bf4138c80d3bba438473d",
+   "base": "883204b42c440bae3e9eccd0fc2c00a482d6a79f",
+   "ahead": 8,
+   "behind": 6,
+   "dirty": 0,
+   "present": true,
+   "last_commit": {
+    "sha": "6ab83b98abf4a9e5a53bf4138c80d3bba438473d",
+    "at": "2026-10-25T10:46:12Z",
+    "subject": "R4.S19 pass 2: the two refusal rows move out of the self-checked tables into a gen-25 addendum (inspect finding)"
+   }
+  },
+  {
+   "id": "WT-73",
+   "repo": "harness",
+   "path": "/Users/demo/code/harness-sv1/R4.S7",
+   "branch": "sv1/R4.S7",
+   "head": "88a4fe29511141e4e2c7e593adc432fb42620de6",
+   "base": "33dfd08738c8d7034fb80ae266826f8d4330ed55",
+   "ahead": 10,
+   "behind": 47,
+   "dirty": 0,
+   "present": true,
+   "last_commit": {
+    "sha": "88a4fe29511141e4e2c7e593adc432fb42620de6",
+    "at": "2026-10-13T07:01:27Z",
+    "subject": "R4.S7 pass 2: mind-index-v5 + thread-messages log in with the per-spawn token"
+   }
+  },
+  {
+   "id": "WT-74",
+   "repo": "harness",
+   "path": "/Users/demo/code/harness-wt-land-main",
+   "branch": "main",
+   "head": "c4e0df9265c1695ec461153b47bcc81308e3b2b9",
+   "base": "c4e0df9265c1695ec461153b47bcc81308e3b2b9",
+   "ahead": 0,
+   "behind": 0,
+   "dirty": 0,
+   "present": true,
+   "last_commit": {
+    "sha": "c4e0df9265c1695ec461153b47bcc81308e3b2b9",
+    "at": "2026-10-16T05:12:39Z",
+    "subject": "SB-2 implements H179-1 (SB-1 N5): guard soup-backup's LC_ALL=C lstart pin"
+   }
+  },
+  {
+   "id": "WT-75",
+   "repo": "harness",
+   "path": "/Users/demo/code/harness/.claude/worktrees/agent-a00c5765",
+   "branch": "worktree-agent-a00c5765",
+   "head": "f806a0786396f9346c8766a6b322580cc6596a32",
+   "base": null,
+   "ahead": 16,
+   "behind": 439,
+   "dirty": 20,
+   "present": true,
+   "last_commit": {
+    "sha": "f806a0786396f9346c8766a6b322580cc6596a32",
+    "at": "2026-06-26T19:54:39Z",
+    "subject": "Add libs/substrate — local LLM scheduling and execution layer"
+   }
+  },
+  {
+   "id": "WT-76",
+   "repo": "harness",
+   "path": "/Users/demo/code/harness/.claude/worktrees/coordinator-refactor",
+   "branch": "coordinator-refactor",
+   "head": "16c3d673907dd197ccfae282637057d1777927b7",
+   "base": "16c3d673907dd197ccfae282637057d1777927b7",
+   "ahead": 0,
+   "behind": 216,
+   "dirty": 3,
+   "present": true,
+   "last_commit": {
+    "sha": "16c3d673907dd197ccfae282637057d1777927b7",
+    "at": "2026-08-07T04:57:46Z",
+    "subject": "aui: the delivery mark survives a restart, so a thread is not read back to him"
+   }
+  },
+  {
+   "id": "WT-77",
+   "repo": "harness",
+   "path": "/Users/demo/code/harness/.claude/worktrees/ideas",
+   "branch": "ideas",
+   "head": "c5a4209e785534ab7ff2e2bd5213c7ff2ba95953",
+   "base": "9e75afe5a750c29387d335f4c78f80cd4bfd52f9",
+   "ahead": 4,
+   "behind": 343,
+   "dirty": 2,
+   "present": true,
+   "last_commit": {
+    "sha": "c5a4209e785534ab7ff2e2bd5213c7ff2ba95953",
+    "at": "2026-07-17T05:45:27Z",
+    "subject": "ideas workspace: capture Ripple system research (artifact 0003)"
+   }
+  },
+  {
+   "id": "WT-78",
+   "repo": "broomstick",
+   "path": "/Users/demo/code/broomstick-db-crate",
+   "branch": "feat/db-crate-migration",
+   "head": "ef968e41743ede5c34f375d871b8cf34a0ca1c06",
+   "base": "ef968e41743ede5c34f375d871b8cf34a0ca1c06",
+   "ahead": 0,
+   "behind": 7,
+   "dirty": 87,
+   "present": true,
+   "last_commit": {
+    "sha": "ef968e41743ede5c34f375d871b8cf34a0ca1c06",
+    "at": "2026-07-07T17:25:37Z",
+    "subject": "platform/db: add db.toml config + 9 migration units for substrate db tool"
+   }
+  },
+  {
+   "id": "WT-79",
+   "repo": "broomstick",
+   "path": "/Users/demo/code/broomstick-gen-image-widget",
+   "branch": "feat/generative-unification",
+   "head": "96d45d7fd8c8d1c3f850a158621681a8baa4ae28",
+   "base": "96d45d7fd8c8d1c3f850a158621681a8baa4ae28",
+   "ahead": 0,
+   "behind": 2,
+   "dirty": 4,
+   "present": true,
+   "last_commit": {
+    "sha": "96d45d7fd8c8d1c3f850a158621681a8baa4ae28",
+    "at": "2026-07-08T09:23:24Z",
+    "subject": "content-curation: document hard-won gen-image-pipeline STORAGE rule"
+   }
+  },
+  {
+   "id": "WT-80",
+   "repo": "broomstick",
+   "path": "/Users/demo/code/broomstick-marketing-design",
+   "branch": "design/marketing-campaign",
+   "head": "a293b69397717808e9161c811a315b65cbdf3209",
+   "base": "1e75627da70d95098571b944f412e537fa244901",
+   "ahead": 6,
+   "behind": 1,
+   "dirty": 3,
+   "present": true,
+   "last_commit": {
+    "sha": "a293b69397717808e9161c811a315b65cbdf3209",
+    "at": "2026-08-13T02:47:38Z",
+    "subject": "marketing: the June workspace is settled and the headline has a head"
+   }
+  },
+  {
+   "id": "WT-81",
+   "repo": "broomstick",
+   "path": "/Users/demo/code/broomstick-scheduling-pipeline",
+   "branch": "scheduling-pipeline",
+   "head": "3ab89a61d5d121e5e50a10040b561731e7595f51",
+   "base": "6fe35f7ce39087716b9d7c138f6f6ebcf2634d1e",
+   "ahead": 20,
+   "behind": 11,
+   "dirty": 3,
+   "present": true,
+   "last_commit": {
+    "sha": "3ab89a61d5d121e5e50a10040b561731e7595f51",
+    "at": "2026-07-27T22:48:20Z",
+    "subject": "scheduling-pipeline: I4 — per-round model/temperature/reasoning escalation"
+   }
+  },
+  {
+   "id": "WT-82",
+   "repo": "broomstick",
+   "path": "/Users/demo/code/broomstick-schema-staging",
+   "branch": "feat/schema-staging-framework",
+   "head": "fc8f6faaf5bb3842409161dd9d622f88c9590fb0",
+   "base": "fc8f6faaf5bb3842409161dd9d622f88c9590fb0",
+   "ahead": 0,
+   "behind": 12,
+   "dirty": 5,
+   "present": true,
+   "last_commit": {
+    "sha": "fc8f6faaf5bb3842409161dd9d622f88c9590fb0",
+    "at": "2026-06-25T22:21:51Z",
+    "subject": "fix(admin): resolve publish-to-week target from events not legacy classes"
+   }
+  },
+  {
+   "id": "WT-83",
+   "repo": "broomstick",
+   "path": "/Users/demo/code/broomstick-shared-mm",
+   "branch": "shared-meta-markdown",
+   "head": "8e72ef95ea479efe167ec6c60cfc72ece3c6cfef",
+   "base": "8e72ef95ea479efe167ec6c60cfc72ece3c6cfef",
+   "ahead": 0,
+   "behind": 16,
+   "dirty": 3,
+   "present": true,
+   "last_commit": {
+    "sha": "8e72ef95ea479efe167ec6c60cfc72ece3c6cfef",
+    "at": "2026-06-25T01:30:02Z",
+    "subject": "Refine shared meta-markdown plan with Task 1 learnings"
+   }
+  },
+  {
+   "id": "WT-84",
+   "repo": "broomstick",
+   "path": "/Users/demo/code/broomstick-sms-reminders",
+   "branch": "feat/sms-reminders-staff-data-model",
+   "head": "55ac02e8748c2def3cdca12f1ba203dcbd23a479",
+   "base": "6fe35f7ce39087716b9d7c138f6f6ebcf2634d1e",
+   "ahead": 3,
+   "behind": 11,
+   "dirty": 60,
+   "present": true,
+   "last_commit": {
+    "sha": "55ac02e8748c2def3cdca12f1ba203dcbd23a479",
+    "at": "2026-07-08T07:53:46Z",
+    "subject": "feat(agent-v3): request system + two channel-baked respond tools + event-change log + Ghost roles/tool-box"
+   }
+  },
+  {
+   "id": "WT-85",
+   "repo": "broomstick",
+   "path": "/Users/demo/code/broomstick-splash-redesign",
+   "branch": "feat/splash-redesign",
+   "head": "0884bcadf889dbbba1688bea4275dd1088e13a4a",
+   "base": "d21152b04c287b35db8791dde29f70cee96a1014",
+   "ahead": 84,
+   "behind": 6,
+   "dirty": 177,
+   "present": true,
+   "last_commit": {
+    "sha": "0884bcadf889dbbba1688bea4275dd1088e13a4a",
+    "at": "2026-09-28T20:23:20Z",
+    "subject": "legal: v3 publishes the terms and privacy policy as current — no interim banner"
+   }
+  },
+  {
+   "id": "WT-86",
+   "repo": "broomstick",
+   "path": "/Users/demo/code/broomstick-wt-protoledger-page",
+   "branch": "protoledger-launch-page",
+   "head": "7783910ff66c84b7b71c9b483ff291d907ca6a9b",
+   "base": "d21152b04c287b35db8791dde29f70cee96a1014",
+   "ahead": 85,
+   "behind": 6,
+   "dirty": 0,
+   "present": true,
+   "last_commit": {
+    "sha": "7783910ff66c84b7b71c9b483ff291d907ca6a9b",
+    "at": "2026-10-21T01:31:13Z",
+    "subject": "protoledger: a launch page for the open-source release (DRAFT, not for deploy)"
+   }
+  },
+  {
+   "id": "WT-87",
+   "repo": "broomstick",
+   "path": "/Users/demo/code/ewing",
+   "branch": "ewing",
+   "head": "20b309c076d2235a7053f83db2690748e5f63d53",
+   "base": "0a90d86645c766981d17caff4d2d0b1c4cf40f02",
+   "ahead": 41,
+   "behind": 0,
+   "dirty": 5,
+   "present": true,
+   "last_commit": {
+    "sha": "20b309c076d2235a7053f83db2690748e5f63d53",
+    "at": "2026-08-13T05:55:57Z",
+    "subject": "ewing: round 12 record — payloads, lessons, blueprint deltas and the work-cluster report"
+   }
+  }
+ ],
+ "artifacts": [
+  {
+   "id": "ART-120",
+   "handle": "build audit fixes",
+   "kind": "report",
+   "location": "/Users/demo/code/harness/.mind/workspaces/cauldron-interface/artifacts/0120-report-build-audit-fixes.md",
+   "made_by": "0119-task-build-audit-fixes",
+   "for": "T-9",
+   "created": "2026-10-20T19:05:43.349201Z",
+   "verified": {
+    "sha256": "6bf9b55a31b27cbc6f198d0ee2b9137bb2f4f7cb16d6d41753728755e8d03337",
+    "bytes": 13218,
+    "at": "2026-10-20T19:05:43.349201Z"
+   },
+   "regions": [
+    "R-1"
+   ]
+  },
+  {
+   "id": "ART-121",
+   "handle": "Install type-one durably and prove a live seeding from the plain global command",
+   "kind": "task",
+   "location": "/Users/demo/code/harness/.mind/workspaces/cauldron-interface/artifacts/0121-task-durable-type-one.md",
+   "made_by": "orchestrator",
+   "for": "T-9",
+   "created": "2026-10-20T19:06:12.845433Z",
+   "verified": {
+    "sha256": "9b17c1ff396e8c9b2004db4a78e0cfef1df7ccb70238bbefbec71715a85b9c70",
+    "bytes": 1825,
+    "at": "2026-10-20T19:06:12.845433Z"
+   },
+   "regions": [
+    "R-1"
+   ]
+  },
+  {
+   "id": "ART-122",
+   "handle": "durable type one",
+   "kind": "report",
+   "location": "/Users/demo/code/harness/.mind/workspaces/cauldron-interface/artifacts/0122-report-durable-type-one.md",
+   "made_by": "0121-task-durable-type-one",
+   "for": "T-9",
+   "created": "2026-10-20T19:12:54.406406Z",
+   "verified": {
+    "sha256": "91f7356dd9948e2ee16d6fc632c80cfab5bf9dd1a68b5b2be4c421bd00b72fb6",
+    "bytes": 6342,
+    "at": "2026-10-20T19:12:54.406406Z"
+   },
+   "regions": [
+    "R-1"
+   ]
+  },
+  {
+   "id": "ART-123",
+   "handle": "Close the last audit items: the log view (F4), env-name typo guard (F13), grabber-only drag (F52)",
+   "kind": "task",
+   "location": "/Users/demo/code/harness/.mind/workspaces/cauldron-interface/artifacts/0123-task-build-log-view.md",
+   "made_by": "orchestrator",
+   "for": "T-9",
+   "created": "2026-10-20T19:06:23.657211Z",
+   "verified": {
+    "sha256": "38e3d4f9a3d6b044dd47a1ec89a82196ac793aa483e303a170adce28903f8e8f",
+    "bytes": 1491,
+    "at": "2026-10-20T19:06:23.657211Z"
+   },
+   "regions": [
+    "R-1"
+   ]
+  },
+  {
+   "id": "ART-124",
+   "handle": "build log view",
+   "kind": "report",
+   "location": "/Users/demo/code/harness/.mind/workspaces/cauldron-interface/artifacts/0124-report-build-log-view.md",
+   "made_by": "0123-task-build-log-view",
+   "for": "T-9",
+   "created": "2026-10-20T19:32:09.765725Z",
+   "verified": {
+    "sha256": "4711eed1195b2c80ab8a0365560aba735a75e5698577cc986c80f9d7fa3aaf08",
+    "bytes": 8016,
+    "at": "2026-10-20T19:32:09.765725Z"
+   },
+   "regions": [
+    "R-1"
+   ]
+  },
+  {
+   "id": "ART-125",
+   "handle": "Re-audit: verify every non-DONE audit item is now DONE in the live build",
+   "kind": "task",
+   "location": "/Users/demo/code/harness/.mind/workspaces/cauldron-interface/artifacts/0125-task-reaudit.md",
+   "made_by": "orchestrator",
+   "for": "T-9",
+   "created": "2026-10-20T19:32:37.824174Z",
+   "verified": {
+    "sha256": "6fa6c0545c3e3ab55a392038ba0255e054ecca5bc74edf3571a7a240b9df148a",
+    "bytes": 1322,
+    "at": "2026-10-20T19:32:37.824174Z"
+   },
+   "regions": [
+    "R-1"
+   ]
+  },
+  {
+   "id": "ART-126",
+   "handle": "reaudit",
+   "kind": "report",
+   "location": "/Users/demo/code/harness/.mind/workspaces/cauldron-interface/artifacts/0126-report-reaudit.md",
+   "made_by": "0125-task-reaudit",
+   "for": "T-9",
+   "created": "2026-10-20T19:44:07.977386Z",
+   "verified": {
+    "sha256": "ba04abb2d359691d52059538f4c75f680628fd97d89549b91d98f04b849c3625",
+    "bytes": 11717,
+    "at": "2026-10-20T19:44:07.977386Z"
+   },
+   "regions": [
+    "R-1"
+   ]
+  },
+  {
+   "id": "ART-127",
+   "handle": "Curator-v5: fold the msg-138 round (cheap)",
+   "kind": "task",
+   "location": "/Users/demo/code/harness/.mind/workspaces/cauldron-interface/artifacts/0127-task-curator-v5-fold-after.md",
+   "made_by": "orchestrator",
+   "for": "T-9",
+   "created": "2026-10-20T19:32:37.827370Z",
+   "verified": {
+    "sha256": "19336d4086df1e29c0f506207ad0fe020307d9af7a12cdd8874811e3991c546c",
+    "bytes": 1388,
+    "at": "2026-10-20T19:32:37.827370Z"
+   },
+   "regions": [
+    "R-1"
+   ]
+  },
+  {
+   "id": "ART-128",
+   "handle": "curator v5 fold after",
+   "kind": "report",
+   "location": "/Users/demo/code/harness/.mind/workspaces/cauldron-interface/artifacts/0128-report-curator-v5-fold-after.md",
+   "made_by": "0127-task-curator-v5-fold-after",
+   "for": "T-9",
+   "created": "2026-10-20T19:53:23.613325Z",
+   "verified": {
+    "sha256": "db543a031ba72f04a2cf9f5dc30247248bd11be5e79003237b113261e8782fcb",
+    "bytes": 10164,
+    "at": "2026-10-20T19:53:23.613325Z"
+   },
+   "regions": [
+    "R-1"
+   ]
+  },
+  {
+   "id": "ART-129",
+   "handle": "Close the re-audit's last two partials (F10 footer on Regions/Repos; F61 new type-two prompt)",
+   "kind": "task",
+   "location": "/Users/demo/code/harness/.mind/workspaces/cauldron-interface/artifacts/0129-task-fix-last-two.md",
+   "made_by": "orchestrator",
+   "for": "T-9",
+   "created": "2026-10-20T20:22:37.772120Z",
+   "verified": {
+    "sha256": "35d45f07b4d6d130e9ee6786d9b6243d4c1e9dae58bf3f842f3f10c6df861852",
+    "bytes": 2119,
+    "at": "2026-10-20T20:22:37.772120Z"
+   },
+   "regions": [
+    "R-1"
+   ]
+  },
+  {
+   "id": "ART-130",
+   "handle": "fix last two",
+   "kind": "report",
+   "location": "/Users/demo/code/harness/.mind/workspaces/cauldron-interface/artifacts/0130-report-fix-last-two.md",
+   "made_by": "0129-task-fix-last-two",
+   "for": "T-9",
+   "created": "2026-10-20T20:37:12.097507Z",
+   "verified": {
+    "sha256": "ab0d3cd96754125909618cc2b2639796b4104a41bb896890134fe0c735007e06",
+    "bytes": 6571,
+    "at": "2026-10-20T20:37:12.097507Z"
+   },
+   "regions": [
+    "R-1"
+   ]
+  },
+  {
+   "id": "ART-131",
+   "handle": "Intake msg 155 — respect the cargo-lease shim; dispatch through the threads agents tool",
+   "kind": "task",
+   "location": "/Users/demo/code/harness/.mind/workspaces/cauldron-interface/artifacts/0131-task-intake-msg155.md",
+   "made_by": "orchestrator",
+   "for": "T-9",
+   "created": "2026-10-20T20:22:37.736594Z",
+   "verified": {
+    "sha256": "276e473d523151840295180f5bf54f2a22b036943156456d202f0a59e2babc4b",
+    "bytes": 1235,
+    "at": "2026-10-20T20:22:37.736594Z"
+   },
+   "regions": [
+    "R-1"
+   ]
+  },
+  {
+   "id": "ART-132",
+   "handle": "intake msg155",
+   "kind": "report",
+   "location": "/Users/demo/code/harness/.mind/workspaces/cauldron-interface/artifacts/0132-report-intake-msg155.md",
+   "made_by": "orchestrator",
+   "for": "T-9",
+   "created": "2026-10-20T20:26:46.035443Z",
+   "verified": {
+    "sha256": "d760485fd801efcd36e6fffbc63d2a9e89230605b5151acd96facda497026417",
+    "bytes": 1920,
+    "at": "2026-10-20T20:26:46.035443Z"
+   },
+   "regions": [
+    "R-1"
+   ]
+  },
+  {
+   "id": "ART-133",
+   "handle": "Curator-v5: fold the close-out round (cheap)",
+   "kind": "task",
+   "location": "/Users/demo/code/harness/.mind/workspaces/cauldron-interface/artifacts/0133-task-curator-v5-fold-after.md",
+   "made_by": "orchestrator",
+   "for": "T-9",
+   "created": "2026-10-20T20:37:41.861910Z",
+   "verified": {
+    "sha256": "6cc34bc04846643b7909840b24e2a07dc3d028a14bdb75997d0e0d2c594a63b3",
+    "bytes": 1465,
+    "at": "2026-10-20T20:37:41.861910Z"
+   },
+   "regions": [
+    "R-1"
+   ]
+  },
+  {
+   "id": "ART-134",
+   "handle": "curator v5 fold after",
+   "kind": "report",
+   "location": "/Users/demo/code/harness/.mind/workspaces/cauldron-interface/artifacts/0134-report-curator-v5-fold-after.md",
+   "made_by": "0133-task-curator-v5-fold-after",
+   "for": "T-9",
+   "created": "2026-10-20T20:55:55.631188Z",
+   "verified": {
+    "sha256": "b0c46992ba1e201d779583b3a0360eb26c51a02288849f47ed3946b509aec615",
+    "bytes": 7093,
+    "at": "2026-10-20T20:55:55.631188Z"
+   },
+   "regions": [
+    "R-1"
+   ]
+  },
+  {
+   "id": "ART-135",
+   "handle": "Intake msg 165 — the big interface review",
+   "kind": "task",
+   "location": "/Users/demo/code/harness/.mind/workspaces/cauldron-interface/artifacts/0135-task-intake-msg165.md",
+   "made_by": "orchestrator",
+   "for": "T-9",
+   "created": "2026-10-25T00:39:11.409949Z",
+   "verified": {
+    "sha256": "af9581691953760231c5215a202e524f1853756167be064c54daf1ca341e95e8",
+    "bytes": 2403,
+    "at": "2026-10-25T00:39:11.409949Z"
+   },
+   "regions": [
+    "R-1"
+   ]
+  },
+  {
+   "id": "ART-136",
+   "handle": "intake msg165",
+   "kind": "report",
+   "location": "/Users/demo/code/harness/.mind/workspaces/cauldron-interface/artifacts/0136-report-intake-msg165.md",
+   "made_by": "curator-v5",
+   "for": "T-9",
+   "created": "2026-10-25T00:57:54.656187Z",
+   "verified": {
+    "sha256": "5f6196ff4a018f94bc28655b276c5e0629179fbfcf933c71e16611331788a51b",
+    "bytes": 2683,
+    "at": "2026-10-25T00:57:54.656187Z"
+   },
+   "regions": [
+    "R-1"
+   ]
+  },
+  {
+   "id": "ART-137",
+   "handle": "Fable design: the DUMP — how he drops thoughts into a cluster, and the ripple that processes a dump",
+   "kind": "task",
+   "location": "/Users/demo/code/harness/.mind/workspaces/cauldron-interface/artifacts/0137-task-design-dump.md",
+   "made_by": "orchestrator",
+   "for": "T-9",
+   "created": "2026-10-25T00:40:03.949733Z",
+   "verified": {
+    "sha256": "c0ce9b94a4d5f8b2aa32836317dd8e65d486fdf4254c31e9f387671fdf18f600",
+    "bytes": 2281,
+    "at": "2026-10-25T00:40:03.949733Z"
+   },
+   "regions": [
+    "R-1"
+   ]
+  },
+  {
+   "id": "ART-138",
+   "handle": "Design: the DUMP — how he drops thoughts into a cluster, and the aggregate ripple that processes a dump",
+   "kind": "report",
+   "location": "/Users/demo/code/harness/.mind/workspaces/cauldron-interface/artifacts/0138-report-design-dump.md",
+   "made_by": "0137-task-design-dump",
+   "for": "T-9",
+   "created": "2026-10-25T01:17:09.152399Z",
+   "verified": {
+    "sha256": "b3896c6337d0d1cae15d982b2907adeb89b008a806ccc62c49a54000113dc083",
+    "bytes": 92362,
+    "at": "2026-10-25T01:17:09.152399Z"
+   },
+   "regions": [
+    "R-1"
+   ]
+  },
+  {
+   "id": "ART-139",
+   "handle": "Fable design: the SYSTEM tab — root categories and how a ripple's flow is shown",
+   "kind": "task",
+   "location": "/Users/demo/code/harness/.mind/workspaces/cauldron-interface/artifacts/0139-task-design-system-tab.md",
+   "made_by": "orchestrator",
+   "for": "T-9",
+   "created": "2026-10-25T00:40:03.950083Z",
+   "verified": {
+    "sha256": "3324fb6d7b9ea3aee7bc06ed238de201cd038d1044f4c1b751aaae8168e5540a",
+    "bytes": 2138,
+    "at": "2026-10-25T00:40:03.950083Z"
+   },
+   "regions": [
+    "R-1"
+   ]
+  },
+  {
+   "id": "ART-140",
+   "handle": "Design: the SYSTEM tab — root categories, and how an aggregate ripple's flow is shown",
+   "kind": "report",
+   "location": "/Users/demo/code/harness/.mind/workspaces/cauldron-interface/artifacts/0140-report-design-system-tab.md",
+   "made_by": "0139-task-design-system-tab",
+   "for": "T-9",
+   "created": "2026-10-25T01:16:23.703097Z",
+   "verified": {
+    "sha256": "eefc4e1b68ca9ac2035948e0cba256e6cd77e6849318a933cdd745593c823968",
+    "bytes": 133850,
+    "at": "2026-10-25T01:16:23.703097Z"
+   },
+   "regions": [
+    "R-1"
+   ]
+  },
+  {
+   "id": "ART-141",
+   "handle": "Fable design: how RUNNING, PARKED and PENDING work is shown in Status — a stress test",
+   "kind": "task",
+   "location": "/Users/demo/code/harness/.mind/workspaces/cauldron-interface/artifacts/0141-task-design-running-parked.md",
+   "made_by": "orchestrator",
+   "for": "T-9",
+   "created": "2026-10-25T00:40:03.950403Z",
+   "verified": {
+    "sha256": "c65998846914581e06d04dcf2f4f4fa3d3db9d0c771bc21e5b7ed1fb4627f116",
+    "bytes": 1672,
+    "at": "2026-10-25T00:40:03.950403Z"
+   },
+   "regions": [
+    "R-1"
+   ]
+  },
+  {
+   "id": "ART-142",
+   "handle": "Design: how RUNNING, PARKED and PENDING work is shown in Status — a stress test",
+   "kind": "report",
+   "location": "/Users/demo/code/harness/.mind/workspaces/cauldron-interface/artifacts/0142-report-design-running-parked.md",
+   "made_by": "0141-task-design-running-parked",
+   "for": "T-9",
+   "created": "2026-10-25T01:08:45.923088Z",
+   "verified": {
+    "sha256": "adbfd28ed25c6af9c6f55fcf890ac95dcfd73af2704cd62323fe87eef0afe02d",
+    "bytes": 49911,
+    "at": "2026-10-25T01:08:45.923088Z"
+   },
+   "regions": [
+    "R-1"
+   ]
+  },
+  {
+   "id": "ART-143",
+   "handle": "Fable design: the TOKENS settings band structure (Claude Code, Codex, OpenRouter, and what comes later)",
+   "kind": "task",
+   "location": "/Users/demo/code/harness/.mind/workspaces/cauldron-interface/artifacts/0143-task-design-tokens.md",
+   "made_by": "orchestrator",
+   "for": "T-9",
+   "created": "2026-10-25T00:40:03.950666Z",
+   "verified": {
+    "sha256": "f4390e8307b9c7823e64bb46a80d29a42fb012dad8cfedee8476445c4d0ad024",
+    "bytes": 1762,
+    "at": "2026-10-25T00:40:03.950666Z"
+   },
+   "regions": [
+    "R-1"
+   ]
+  },
+  {
+   "id": "ART-144",
+   "handle": "Design: the TOKENS band structure — Claude Code, Codex, OpenRouter, and what comes later",
+   "kind": "report",
+   "location": "/Users/demo/code/harness/.mind/workspaces/cauldron-interface/artifacts/0144-report-design-tokens.md",
+   "made_by": "0143-task-design-tokens",
+   "for": "T-9",
+   "created": "2026-10-25T01:09:06.831104Z",
+   "verified": {
+    "sha256": "2864c06c31795af43da446ff3c198147d1430e316e8b0c315e4768cff817b648",
+    "bytes": 53246,
+    "at": "2026-10-25T01:09:06.831104Z"
+   },
+   "regions": [
+    "R-1"
+   ]
+  },
+  {
+   "id": "ART-145",
+   "handle": "Fable design: the ARTIFACTS tab — repos, worktrees, the file system, and artifact nodes",
+   "kind": "task",
+   "location": "/Users/demo/code/harness/.mind/workspaces/cauldron-interface/artifacts/0145-task-design-artifacts.md",
+   "made_by": "orchestrator",
+   "for": "T-9",
+   "created": "2026-10-25T00:40:03.950934Z",
+   "verified": {
+    "sha256": "dbf27baf141489d7c99217ba5cb8c4e3ac2eefddf59afa7b0d1d55d9e9b3f12e",
+    "bytes": 1938,
+    "at": "2026-10-25T00:40:03.950934Z"
+   },
+   "regions": [
+    "R-1"
+   ]
+  },
+  {
+   "id": "ART-146",
+   "handle": "Design: the ARTIFACTS tab — repos, worktrees, the file system, and artifact nodes",
+   "kind": "report",
+   "location": "/Users/demo/code/harness/.mind/workspaces/cauldron-interface/artifacts/0146-report-design-artifacts.md",
+   "made_by": "0145-task-design-artifacts",
+   "for": "T-9",
+   "created": "2026-10-25T01:15:46.943658Z",
+   "verified": {
+    "sha256": "375f0212c0ab154283b85936809ffa698e3d647cc348740d78461800b8332755",
+    "bytes": 83604,
+    "at": "2026-10-25T01:15:46.943658Z"
+   },
+   "regions": [
+    "R-1"
+   ]
+  },
+  {
+   "id": "ART-147",
+   "handle": "Build the clear parts of his msg-165 review (the designed parts follow later)",
+   "kind": "task",
+   "location": "/Users/demo/code/harness/.mind/workspaces/cauldron-interface/artifacts/0147-task-build-review-165.md",
+   "made_by": "orchestrator",
+   "for": "T-9",
+   "created": "2026-10-25T00:40:35.907457Z",
+   "verified": {
+    "sha256": "efef2bc3c6a7e9c75b5a83785808b0e9e119af256591fdcd8d1b1333fd044d8a",
+    "bytes": 7320,
+    "at": "2026-10-25T00:40:35.907457Z"
+   },
+   "regions": [
+    "R-1"
+   ]
+  },
+  {
+   "id": "ART-148",
+   "handle": "build review 165",
+   "kind": "report",
+   "location": "/Users/demo/code/harness/.mind/workspaces/cauldron-interface/artifacts/0148-report-build-review-165.md",
+   "made_by": "0147-task-build-review-165",
+   "for": "T-9",
+   "created": "2026-10-25T01:50:39.845329Z",
+   "verified": {
+    "sha256": "1907305517351fe0677a90de062571740d2b7853c57daf20d3f7299663a443fe",
+    "bytes": 13765,
+    "at": "2026-10-25T01:50:39.845329Z"
+   },
+   "regions": [
+    "R-1"
+   ]
+  },
+  {
+   "id": "ART-150",
+   "handle": "Shared: a Fable design pass for the Cauldron TUI (msg 165)",
+   "kind": "task",
+   "location": "/Users/demo/code/harness/.mind/workspaces/cauldron-interface/artifacts/0150-task-design-shared.md",
+   "made_by": "orchestrator",
+   "for": "T-9",
+   "created": "2026-10-25T00:40:03.944563Z",
+   "verified": {
+    "sha256": "4f4e82f38d29cfc96dde5d27bcf8b1872dc551eabb95651eb3b31faf3ccc479d",
+    "bytes": 1879,
+    "at": "2026-10-25T00:40:03.944563Z"
+   },
+   "regions": [
+    "R-1"
+   ]
+  },
+  {
+   "id": "ART-151",
+   "handle": "Curator-v5 interim fold: carve R-10, settle msg 165's two IOUs, mint T for 0147",
+   "kind": "task",
+   "location": "/Users/demo/code/harness/.mind/workspaces/cauldron-interface/artifacts/0151-task-curator-v5-interim-r10.md",
+   "made_by": "orchestrator",
+   "for": "T-9",
+   "created": "2026-10-25T00:58:29.366103Z",
+   "verified": {
+    "sha256": "bb8c9ecbd34f6f7f041054630410cba9407fb0f8ebf32bede55277fd7953ca13",
+    "bytes": 1129,
+    "at": "2026-10-25T00:58:29.366103Z"
+   },
+   "regions": [
+    "R-1"
+   ]
+  },
+  {
+   "id": "ART-153",
+   "handle": "Build three msg-165 designs: the dump (C), artifacts (four bands), running/parked (A)",
+   "kind": "task",
+   "location": "/Users/demo/code/harness/.mind/workspaces/cauldron-interface/artifacts/0153-task-build-designs-165.md",
+   "made_by": "orchestrator",
+   "for": "T-9",
+   "created": "2026-10-25T01:51:57.662060Z",
+   "verified": {
+    "sha256": "31caf8dbf81aba7bdcd273ae40b79755a8b164ac20dd80f7f802306d54976bb5",
+    "bytes": 3988,
+    "at": "2026-10-25T01:51:57.662060Z"
+   },
+   "regions": [
+    "R-1"
+   ]
+  },
+  {
+   "id": "ART-155",
+   "handle": "Intake msg 176 (one build at a time, a DAG sidecar, disk cleanup); dispose 169 and 172",
+   "kind": "task",
+   "location": "/Users/demo/code/harness/.mind/workspaces/cauldron-interface/artifacts/0155-task-intake-msg176.md",
+   "made_by": "orchestrator",
+   "for": "T-9",
+   "created": "2026-10-25T02:12:49.429760Z",
+   "verified": {
+    "sha256": "b130bc59a3f343944770e61f5b1da2bf57d061dfc7ccc246e38553402971fec1",
+    "bytes": 1440,
+    "at": "2026-10-25T02:12:49.429760Z"
+   },
+   "regions": [
+    "R-1"
+   ]
+  },
+  {
+   "id": "ART-156",
+   "handle": "intake msg176",
+   "kind": "report",
+   "location": "/Users/demo/code/harness/.mind/workspaces/cauldron-interface/artifacts/0156-report-intake-msg176.md",
+   "made_by": "orchestrator",
+   "for": "T-9",
+   "created": "2026-10-25T02:32:16.450807Z",
+   "verified": {
+    "sha256": "2b3970188b315d7cc96014ab5cbc3c1d49ae4ca801160624724c3f9f855b8448",
+    "bytes": 2113,
+    "at": "2026-10-25T02:32:16.450807Z"
+   },
+   "regions": [
+    "R-1"
+   ]
+  },
+  {
+   "id": "ART-157",
+   "handle": "DAG sidecar for the cauldron-interface board — one build at a time",
+   "kind": "task",
+   "location": "/Users/demo/code/harness/.mind/workspaces/cauldron-interface/artifacts/0157-task-dag-sidecar.md",
+   "made_by": "orchestrator",
+   "for": "T-9",
+   "created": "2026-10-25T02:12:49.433400Z",
+   "verified": {
+    "sha256": "41df9f75746cf381dcf7537567a07cef98398d637ca251a3e17b2f6b3a13ac7e",
+    "bytes": 2552,
+    "at": "2026-10-25T02:12:49.433400Z"
+   },
+   "regions": [
+    "R-1"
+   ]
+  },
+  {
+   "id": "ART-154",
+   "handle": "Build three msg-165 designs: the report",
+   "kind": "report",
+   "location": "/Users/demo/code/harness/.mind/workspaces/cauldron-interface/artifacts/0154-report-build-designs-165.md",
+   "made_by": "T-3",
+   "for": "T-3",
+   "created": "2026-10-24T19:52:00Z",
+   "verified": null,
+   "regions": [
+    "R-6"
+   ]
+  },
+  {
+   "id": "ART-901",
+   "handle": "The cauldron interface, one page",
+   "kind": "page",
+   "location": "/Users/demo/.cauldron/data/prod/artifacts/interface.html",
+   "made_by": "T-2",
+   "for": "T-2",
+   "created": "2026-10-23T15:00:00Z",
+   "verified": {
+    "sha256": "9f2c000000000000000000000000000000000000000000000000000000000000",
+    "bytes": 48211,
+    "at": "2026-10-23T15:00:00Z"
+   },
+   "regions": [
+    "R-6"
+   ]
+  },
+  {
+   "id": "ART-902",
+   "handle": "Cauldron for the operator — the deck",
+   "kind": "deck",
+   "location": "/Users/demo/.cauldron/data/prod/artifacts/cauldron-deck.pdf",
+   "made_by": "T-2",
+   "for": "T-2",
+   "created": "2026-10-22T11:00:00Z",
+   "verified": {
+    "sha256": "4a1d000000000000000000000000000000000000000000000000000000000000",
+    "bytes": 1204331,
+    "at": "2026-10-22T11:00:00Z"
+   },
+   "regions": [
+    "R-6"
+   ]
+  },
+  {
+   "id": "ART-201",
+   "handle": "landing page vision",
+   "kind": "doc",
+   "location": "/Users/demo/code/broomstick-splash-redesign/LANDING-PAGE-VISION.md",
+   "made_by": "T-19",
+   "for": "T-19",
+   "created": "2026-10-21T15:12:00Z",
+   "regions": [
+    "R-20"
+   ],
+   "verified": {
+    "sha256": "2b9fd2c5df68cc85904756de2dbbb0e9023dd065af1aa9ba7aaceb80eef1e2d4",
+    "bytes": 13242,
+    "at": "2026-10-21T15:12:00Z"
+   }
+  },
+  {
+   "id": "ART-202",
+   "handle": "landing colour options",
+   "kind": "page",
+   "location": "/Users/demo/code/broomstick-splash-redesign/LANDING-COLOR-OPTIONS.md",
+   "made_by": "T-20",
+   "for": "T-20",
+   "created": "2026-10-22T09:40:00Z",
+   "regions": [
+    "R-20"
+   ],
+   "verified": {
+    "sha256": "1011041ceb36bf14504e976fd6fb7d32cac3f1787d289779be404f5bce5566a3",
+    "bytes": 6740,
+    "at": "2026-10-22T09:40:00Z"
+   }
+  },
+  {
+   "id": "ART-203",
+   "handle": "what users said about the landing page",
+   "kind": "report",
+   "location": "/Users/demo/code/broomstick-splash-redesign/USER-LANDING-FEEDBACK.md",
+   "made_by": "operator",
+   "for": "Q-18",
+   "created": "2026-10-22T18:03:00Z",
+   "regions": [
+    "R-20"
+   ],
+   "verified": {
+    "sha256": "5f73d000e636b01a443e37421696a5cc85039b7cb4123e05dfe403cba3e1e919",
+    "bytes": 4572,
+    "at": "2026-10-22T18:03:00Z"
+   }
+  },
+  {
+   "id": "ART-204",
+   "handle": "the program, synthesised",
+   "kind": "doc",
+   "location": "/Users/demo/code/broomstick-splash-redesign/PROGRAM-SYNTHESIS.md",
+   "made_by": "T-17",
+   "for": "T-17",
+   "created": "2026-10-20T11:30:00Z",
+   "regions": [
+    "R-20",
+    "R-21"
+   ],
+   "verified": {
+    "sha256": "060b5f46aa3540eee00fe0deaef489baec1d66889b0dbc53abf158028d4df4af",
+    "bytes": 8470,
+    "at": "2026-10-20T11:30:00Z"
+   }
+  },
+  {
+   "id": "ART-205",
+   "handle": "the calendar, as data",
+   "kind": "data",
+   "location": "/Users/demo/code/broomstick-splash-redesign/broomstick-calendar.json",
+   "made_by": "T-22",
+   "for": "T-22",
+   "created": "2026-10-23T08:15:00Z",
+   "regions": [
+    "R-21"
+   ],
+   "verified": {
+    "sha256": "1864064d104042850205ac2cbd55b0766d75573cd3a003cb5d932296aeb97a4b",
+    "bytes": 2371,
+    "at": "2026-10-23T08:15:00Z"
+   }
+  },
+  {
+   "id": "ART-206",
+   "handle": "fable convergence",
+   "kind": "task",
+   "location": "/Users/demo/code/harness/.mind/workspaces/blueprint/artifacts/0001-task-fable-convergence.md",
+   "made_by": "T-28",
+   "for": "T-28",
+   "created": "2026-10-18T13:00:00Z",
+   "regions": [
+    "R-31"
+   ],
+   "verified": {
+    "sha256": "35158243b7eae48aa81f70a47cf13b6036992d2b853e4a811a237c8960aa575c",
+    "bytes": 12845,
+    "at": "2026-10-18T13:00:00Z"
+   }
+  },
+  {
+   "id": "ART-207",
+   "handle": "fable convergence, answered",
+   "kind": "report",
+   "location": "/Users/demo/code/harness/.mind/workspaces/blueprint/artifacts/0002-report-fable-convergence.md",
+   "made_by": "T-28",
+   "for": "T-28",
+   "created": "2026-10-18T16:44:00Z",
+   "regions": [
+    "R-31"
+   ],
+   "verified": {
+    "sha256": "8bc324ed0aaaaecafc835744b4ce4cc848dd0dee2158b5f0863c53fdf545ad41",
+    "bytes": 46040,
+    "at": "2026-10-18T16:44:00Z"
+   }
+  },
+  {
+   "id": "ART-208",
+   "handle": "the bug states",
+   "kind": "report",
+   "location": "/Users/demo/code/harness/.mind/workspaces/blueprint/artifacts/0003-report-bug-states.md",
+   "made_by": "T-28",
+   "for": "T-28",
+   "created": "2026-10-19T10:20:00Z",
+   "regions": [
+    "R-31",
+    "SUB-4"
+   ],
+   "verified": {
+    "sha256": "bcc5b11adddb7355c6e024ae0bbe6f20ba0c980906f791d36d5b7afe943d7ad7",
+    "bytes": 15954,
+    "at": "2026-10-19T10:20:00Z"
+   }
+  },
+  {
+   "id": "ART-209",
+   "handle": "chat face conformance",
+   "kind": "log",
+   "location": "/Users/demo/code/harness/apps/tui/chat_conformance_test.sh",
+   "made_by": "T-25",
+   "for": "T-25",
+   "created": "2026-10-24T20:05:00Z",
+   "regions": [
+    "R-30"
+   ],
+   "verified": {
+    "sha256": "6b0130e8ae0d0588b1c35e35cf37235b8a3dd0a96a1cb4f7a3a1ecc9ef09e5f6",
+    "bytes": 66424,
+    "at": "2026-10-24T20:05:00Z"
+   }
+  },
+  {
+   "id": "ART-210",
+   "handle": "the ripple catalog, before and after",
+   "kind": "deck",
+   "location": "/Users/demo/code/harness/.mind/workspaces/cauldron-interface/artifacts/0140-report-design-system-tab.md",
+   "made_by": "T-13",
+   "for": "T-13",
+   "created": "2026-10-24T17:50:00Z",
+   "regions": [
+    "R-3"
+   ],
+   "verified": {
+    "sha256": "eefc4e1b68ca9ac2035948e0cba256e6cd77e6849318a933cdd745593c823968",
+    "bytes": 133850,
+    "at": "2026-10-24T17:50:00Z"
+   }
+  },
+  {
+   "id": "ART-211",
+   "handle": "curation craft notes",
+   "kind": "doc",
+   "location": "/Users/demo/code/harness/.mind/workspaces/cauldron-interface/artifacts/0138-report-design-dump.md",
+   "made_by": "T-16",
+   "for": "T-16",
+   "created": "2026-10-24T16:10:00Z",
+   "regions": [
+    "R-5"
+   ],
+   "verified": {
+    "sha256": "b3896c6337d0d1cae15d982b2907adeb89b008a806ccc62c49a54000113dc083",
+    "bytes": 92362,
+    "at": "2026-10-24T16:10:00Z"
+   }
+  },
+  {
+   "id": "ART-903",
+   "handle": "fold intake",
+   "kind": "task",
+   "location": "/Users/demo/code/harness/.mind/workspaces/threads-agent-runtime/artifacts/0001-task-fold-intake.md",
+   "made_by": "0001-task-fold-intake",
+   "for": "T-13",
+   "created": "2026-09-24T22:24:41.734793Z",
+   "verified": {
+    "sha256": "97118f4ec463ae0e01a68599451ea4068bb17b5094618af3046a907e049c69fb",
+    "bytes": 3588,
+    "at": "2026-09-24T22:24:41.734793Z"
+   },
+   "regions": [
+    "R-3"
+   ]
+  },
+  {
+   "id": "ART-904",
+   "handle": "fold intake",
+   "kind": "report",
+   "location": "/Users/demo/code/harness/.mind/workspaces/threads-agent-runtime/artifacts/0003-report-fold-intake.md",
+   "made_by": "0003-task-fold-intake",
+   "for": "T-13",
+   "created": "2026-09-24T22:31:42.228054Z",
+   "verified": {
+    "sha256": "98305c73581f929bdb82852b601aabf7bed1e0aba3daa20fba059e4da5fec54d",
+    "bytes": 5375,
+    "at": "2026-09-24T22:31:42.228054Z"
+   },
+   "regions": [
+    "R-3"
+   ]
+  },
+  {
+   "id": "ART-905",
+   "handle": "invoke fold",
+   "kind": "task",
+   "location": "/Users/demo/code/harness/.mind/workspaces/threads-agent-runtime/artifacts/0002-task-invoke-fold.md",
+   "made_by": "0002-task-invoke-fold",
+   "for": "T-13",
+   "created": "2026-09-24T22:24:58.569519Z",
+   "verified": {
+    "sha256": "f0ab3c6032601e70eccf2557aa1ae5a6c748c8e066f6e1a0165b0a8ee00ca1a6",
+    "bytes": 1648,
+    "at": "2026-09-24T22:24:58.569519Z"
+   },
+   "regions": [
+    "R-3"
+   ]
+  },
+  {
+   "id": "ART-906",
+   "handle": "scout shared",
+   "kind": "task",
+   "location": "/Users/demo/code/harness/.mind/workspaces/threads-agent-runtime/artifacts/0004-task-scout-shared.md",
+   "made_by": "0004-task-scout-shared",
+   "for": "T-15",
+   "created": "2026-09-24T22:24:58.571609Z",
+   "verified": {
+    "sha256": "4870503481e37de4042f4f6964d93b3d27ac9d8da6c01be871dc072211e7fba8",
+    "bytes": 2407,
+    "at": "2026-09-24T22:24:58.571609Z"
+   },
+   "regions": [
+    "R-4"
+   ]
+  },
+  {
+   "id": "ART-907",
+   "handle": "threads code",
+   "kind": "report",
+   "location": "/Users/demo/code/harness/.mind/workspaces/threads-agent-runtime/artifacts/0006-report-threads-code.md",
+   "made_by": "0006-task-threads-code",
+   "for": "T-15",
+   "created": "2026-09-24T22:35:05.831402Z",
+   "verified": {
+    "sha256": "4170202803bb6fbe04cecc54a175d2debaed9b34e1d12ac507b6f9acaba68617",
+    "bytes": 12470,
+    "at": "2026-09-24T22:35:05.831402Z"
+   },
+   "regions": [
+    "R-4"
+   ]
+  },
+  {
+   "id": "ART-908",
+   "handle": "scout threads code",
+   "kind": "task",
+   "location": "/Users/demo/code/harness/.mind/workspaces/threads-agent-runtime/artifacts/0005-task-scout-threads-code.md",
+   "made_by": "0005-task-scout-threads-code",
+   "for": "T-15",
+   "created": "2026-09-24T22:25:31.576647Z",
+   "verified": {
+    "sha256": "30b509589af1140af7241f5f6aedcf6466ef7e020cf3b0ce82a13812cb999538",
+    "bytes": 2484,
+    "at": "2026-09-24T22:25:31.576647Z"
+   },
+   "regions": [
+    "R-4"
+   ]
+  },
+  {
+   "id": "ART-909",
+   "handle": "friction dedup",
+   "kind": "report",
+   "location": "/Users/demo/code/harness/.mind/workspaces/blueprint/artifacts/0005-report-friction-dedup.md",
+   "made_by": "0005-task-friction-dedup",
+   "for": "T-16",
+   "created": "2026-08-22T00:14:35.421453Z",
+   "verified": {
+    "sha256": "e1b499019cb7e19dc972c10f42c9cde975d9a7a829b9df0d46398b2bcdecb3d9",
+    "bytes": 81789,
+    "at": "2026-08-22T00:14:35.421453Z"
+   },
+   "regions": [
+    "R-5"
+   ]
+  },
+  {
+   "id": "ART-910",
+   "handle": "friction reassessment",
+   "kind": "report",
+   "location": "/Users/demo/code/harness/.mind/workspaces/blueprint/artifacts/0006-report-friction-reassessment.md",
+   "made_by": "0006-task-friction-reassessment",
+   "for": "T-16",
+   "created": "2026-08-22T00:26:58.814354Z",
+   "verified": {
+    "sha256": "0d63f02ed5c4da9a33d853214cfb1014a42da8b2185b24d98c86ac2171dbf007",
+    "bytes": 35683,
+    "at": "2026-08-22T00:26:58.814354Z"
+   },
+   "regions": [
+    "R-5"
+   ]
+  },
+  {
+   "id": "ART-911",
+   "handle": "coverage and migration",
+   "kind": "report",
+   "location": "/Users/demo/code/harness/.mind/workspaces/blueprint/artifacts/0004-report-coverage-and-migration.md",
+   "made_by": "0004-task-coverage-and-migration",
+   "for": "T-16",
+   "created": "2026-08-21T07:02:44.731987Z",
+   "verified": {
+    "sha256": "4a7a2a38b45b9a118be29e826f101efc96f2dfd72f80bc909cbad6b1a81112a8",
+    "bytes": 31296,
+    "at": "2026-08-21T07:02:44.731987Z"
+   },
+   "regions": [
+    "R-5"
+   ]
+  },
+  {
+   "id": "ART-912",
+   "handle": "program synthesis",
+   "kind": "doc",
+   "location": "/Users/demo/code/broomstick/PROGRAM-SYNTHESIS.md",
+   "made_by": "operator",
+   "for": "T-17",
+   "created": "2026-04-23T04:33:23.370574Z",
+   "verified": {
+    "sha256": "060b5f46aa3540eee00fe0deaef489baec1d66889b0dbc53abf158028d4df4af",
+    "bytes": 8470,
+    "at": "2026-04-23T04:33:23.370574Z"
+   },
+   "regions": [
+    "R-20"
+   ]
+  },
+  {
+   "id": "ART-913",
+   "handle": "checkout student 500 rootcause",
+   "kind": "report",
+   "location": "/Users/demo/code/broomstick/reports/checkout-student-500-rootcause.md",
+   "made_by": "checkout-student-500-rootcause",
+   "for": "T-17",
+   "created": "2026-06-26T22:25:07.180899Z",
+   "verified": {
+    "sha256": "9ab9e430e31a348e53b85b916e4952065f1ad122eff13e6ac4227fd17f32300a",
+    "bytes": 8755,
+    "at": "2026-06-26T22:25:07.180899Z"
+   },
+   "regions": [
+    "R-20"
+   ]
+  },
+  {
+   "id": "ART-914",
+   "handle": "broomstick cli",
+   "kind": "plan",
+   "location": "/Users/demo/code/broomstick/plans/broomstick-cli.md",
+   "made_by": "operator",
+   "for": "T-17",
+   "created": "2026-05-12T03:06:47.078598Z",
+   "verified": {
+    "sha256": "e8bf7a7657348a5ebc966a6ce8d8e464c0b8dfb769429f8dec52ff93311fd90d",
+    "bytes": 1854,
+    "at": "2026-05-12T03:06:47.078598Z"
+   },
+   "regions": [
+    "R-20"
+   ]
+  },
+  {
+   "id": "ART-915",
+   "handle": "payment button hotfix proposal",
+   "kind": "report",
+   "location": "/Users/demo/code/broomstick/reports/payment-button-hotfix-proposal.md",
+   "made_by": "payment-button-hotfix-proposal",
+   "for": "T-21",
+   "created": "2026-06-26T22:12:44.434553Z",
+   "verified": {
+    "sha256": "102f66d052806e18b94ba451ffb8f8b39e3bee49fe0cd0ebc42db32f8a955eeb",
+    "bytes": 16589,
+    "at": "2026-06-26T22:12:44.434553Z"
+   },
+   "regions": [
+    "R-21"
+   ]
+  },
+  {
+   "id": "ART-916",
+   "handle": "sign in flow audit",
+   "kind": "plan",
+   "location": "/Users/demo/code/broomstick/plans/sign-in-flow-audit.md",
+   "made_by": "operator",
+   "for": "T-21",
+   "created": "2026-05-09T20:10:39.538594Z",
+   "verified": {
+    "sha256": "da00b3f0ca2c662a108d0855d5129ad23480632629c462a7bc19dd89777ab298",
+    "bytes": 8333,
+    "at": "2026-05-09T20:10:39.538594Z"
+   },
+   "regions": [
+    "R-21"
+   ]
+  },
+  {
+   "id": "ART-917",
+   "handle": "worktree db refactor",
+   "kind": "doc",
+   "location": "/Users/demo/code/broomstick/WORKTREE-DB-REFACTOR.md",
+   "made_by": "operator",
+   "for": "T-21",
+   "created": "2026-06-29T18:48:32.383026Z",
+   "verified": {
+    "sha256": "0a074c63cef2e88c8223b833904e132106f0c23f99d72b6e15ee8c8aed5e63c8",
+    "bytes": 734,
+    "at": "2026-06-29T18:48:32.383026Z"
+   },
+   "regions": [
+    "R-21"
+   ]
+  },
+  {
+   "id": "ART-918",
+   "handle": "index",
+   "kind": "doc",
+   "location": "/Users/demo/code/harness/.mind/workspaces/INDEX.md",
+   "made_by": "operator",
+   "for": "T-23",
+   "created": "2026-09-27T17:11:28.881747Z",
+   "verified": {
+    "sha256": "8b9ef61e8db9365d23d12b1b900ad19b6a00c3196951162c6c267826cd1d8a2b",
+    "bytes": 2952,
+    "at": "2026-09-27T17:11:28.881747Z"
+   },
+   "regions": [
+    "R-21"
+   ]
+  },
+  {
+   "id": "ART-919",
+   "handle": "curator create and intake",
+   "kind": "task",
+   "location": "/Users/demo/code/harness/.mind/workspaces/cauldron-supervisor/artifacts/0001-task-curator-create-and-intake.md",
+   "made_by": "0001-task-curator-create-and-intake",
+   "for": "T-23",
+   "created": "2026-09-27T17:05:33.401398Z",
+   "verified": {
+    "sha256": "f59c85da30420a98d627ccc5ddd615a2d7ad6a5533e1cfd1556f12443556ef66",
+    "bytes": 3222,
+    "at": "2026-09-27T17:05:33.401398Z"
+   },
+   "regions": [
+    "R-21"
+   ]
+  },
+  {
+   "id": "ART-920",
+   "handle": "curator intake",
+   "kind": "report",
+   "location": "/Users/demo/code/harness/.mind/workspaces/cauldron-supervisor/artifacts/0002-report-curator-intake.md",
+   "made_by": "0002-task-curator-intake",
+   "for": "T-23",
+   "created": "2026-09-27T17:12:24.486680Z",
+   "verified": {
+    "sha256": "bf3099eb8c628c3984e679a5b436b07ffd9b4f4a032fe0040231da6d0baa76fd",
+    "bytes": 7418,
+    "at": "2026-09-27T17:12:24.486680Z"
+   },
+   "regions": [
+    "R-21"
+   ]
+  },
+  {
+   "id": "ART-921",
+   "handle": "design terminal face",
+   "kind": "task",
+   "location": "/Users/demo/code/harness/.mind/workspaces/tui-client/artifacts/0003-task-design-terminal-face.md",
+   "made_by": "0003-task-design-terminal-face",
+   "for": "T-25",
+   "created": "2026-09-14T19:58:54.311486Z",
+   "verified": {
+    "sha256": "85d29eb0116713ae8f909ca9ef6cb56b64849ae6a1ea512e44400f64b4f484bc",
+    "bytes": 8181,
+    "at": "2026-09-14T19:58:54.311486Z"
+   },
+   "regions": [
+    "R-30"
+   ]
+  },
+  {
+   "id": "ART-922",
+   "handle": "design terminal face",
+   "kind": "report",
+   "location": "/Users/demo/code/harness/.mind/workspaces/tui-client/artifacts/0003-report-design-terminal-face.md",
+   "made_by": "0003-task-design-terminal-face",
+   "for": "T-25",
+   "created": "2026-09-14T20:21:16.375822Z",
+   "verified": {
+    "sha256": "4db6e5afea0e6b94a50890f585dcf7d5d4088291761004e490c96b76176c6c24",
+    "bytes": 106197,
+    "at": "2026-09-14T20:21:16.375822Z"
+   },
+   "regions": [
+    "R-30"
+   ]
+  }
+ ]
+}

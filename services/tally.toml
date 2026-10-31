@@ -1,0 +1,37 @@
+name        = "tally"
+description = "Second reference service, RELEASE profile — the per-service build profile is proven at N=2, with the two services disagreeing."
+kind        = "daemon"
+probe       = "seam"
+start_timeout_ms = 5000
+
+# WARNINGS. There is no `warnings` key here, and that is the point: absent means
+# the default shape, `warnings`, not an exemption. `cauldron start` asks this
+# service for that shape on its own seam and REFUSES to call it started if it
+# does not answer. The only way to declare non-compliance is `warnings = false`,
+# which start refuses by name. A service serving its own shape name says
+# `warnings = "<name>"`.
+
+[env]
+# Extra environment reaches the service after the cauldron variables, which
+# this can never override.
+TALLY_ROLE = "second-service"
+
+[build]
+# NO `workspace` KEY, AND THAT IS THE FIX, not an omission.
+#
+# This line used to read `workspace = "~/code/cauldron"`. Absent,
+# it means THE REPOSITORY THIS DECLARATION IS SITTING IN — which is what it
+# always meant and what the absolute path got wrong from every git worktree of
+# this repo. With the literal, a proof run in a worktree compiled,
+# fingerprinted and STAMPED the main checkout: an agent measured
+# `cauldron build` reporting a sibling's branch HEAD as its own build's
+# commit, and `prove-wave1` scoring 78/2 because of it.
+#
+# Under the ruling that the commit IS the version identity that is the
+# identity mechanism lying, in the one direction a reader cannot catch: the
+# label is a real, resolvable, checkable commit that names somebody else's
+# code. A service whose code lives in ANOTHER repository still names it
+# outright — `threads` and `tts` do.
+package   = "seam-probe"
+bin       = "seam-probe"
+profile   = "release"

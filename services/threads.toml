@@ -1,0 +1,391 @@
+# ═══════════════════════════════════════════════════════════════════════════
+#  threads — A HOSTED SERVICE. Cauldron LAUNCHES it, watches it, restarts it.
+# ═══════════════════════════════════════════════════════════════════════════
+#
+# This file used to carry an `[adopt]` section whose whole content was that
+# cauldron would never touch this process. The operator deleted that idea:
+#
+#   "delete it outright. Just rebuild cauldron correctly. We don't adopt, we
+#    host the services. that's why I've been calling it a supervisor. It's no
+#    accident that it's the same word as the system supervisor which restarts
+#    applications."
+#
+# So every refusal that used to be here is gone. `cauldron start threads`
+# launches it, `cauldron stop threads` stops it, `cauldron pin threads <ver>`
+# chooses its version, `cauldron rollback threads` goes back, and the daemon
+# holding `prod` keeps it alive. What remains weaker is only the EVIDENCE, in
+# the two places where it honestly is, and both are stated below.
+
+name        = "threads"
+description = "The threads daemon — the operator's thread ledger, a growing sqlite store of past threads. HOSTED by cauldron: launched, watched, restarted and rolled back by the daemon holding this environment."
+kind        = "daemon"
+
+# ── THE BINARY DOES NOT LINK CAULDRON'S `env` CRATE ────────────────────────
+#
+# Measured, not assumed: `grep -rn 'ServiceEnv\|attest_warnings\|libs/env'`
+# across substrate-interface-layer returns PROSE ONLY — three documentation
+# files — and `Cargo.lock` has no cauldron crate in it at all.
+#
+# So this process cannot call `ServiceEnv::register`, which means it cannot
+# write its own seam, which means the supervisor writes the row for it
+# (`seams::record_hosted`) and the row says `registered = false`.
+#
+# WHAT THAT COSTS, in exactly two places:
+#
+#   1. NO BOOT TOKEN, so its best verdict is `live:unverified` and never
+#      `live`. The token is echoed back over cauldron's one-word line protocol
+#      and this daemon speaks websocket/shapewire.
+#   2. NO WARNINGS COVERAGE. The compile-time obligation never ran against it
+#      and cannot retroactively, so `cauldron status` names it as a gap and
+#      says the total excludes it. There is NO KNOB to make the supervisor ask
+#      anyway — the old `warnings_askable` boolean is deleted, because it was a
+#      claim a TOML file made about a binary it does not contain and it could
+#      be wrong in both directions with nothing finding out.
+#
+# WHAT IT DOES NOT COST: the pid. Cauldron forks this process, so the recorded
+# pid is the one the kernel handed the supervisor at the fork
+# (`pid_source = "child"`), which is proof in exactly the way a self-reported
+# pid is and in exactly the way the old `socket-owner` was not. That is why
+# `stop` signals it now and why the daemon can restart it at all.
+#
+# AND IT CLOSES BY ITSELF. Delete this one line on the day threads links the
+# crate and calls `register`, and nothing else anywhere changes: the row it
+# writes will say `registered = true` and the warnings ask will be made like
+# any other producer's.
+#
+# THE MEASURED FOOTNOTE THAT CUTS AGAINST THE STORY, recorded because it is
+# true: threads DOES serve a shape named `warnings` today
+# (`lib/threads/src/shapes/warnings.rs`, registered at `runtime.rs:5675`,
+# measured 2026-10-08). The counts exist. Cauldron still cannot read them,
+# because they are served over the shapewire websocket chassis and not over
+# the line protocol the supervisor's one word is written in. An earlier
+# comment in this repository claimed threads answers `unknown shape: warnings`;
+# that was measured on 2026-10-07 and is now out of date. The gap is real and
+# its cause is a PROTOCOL mismatch, not an absent feature.
+registers = false
+
+# ── THE PROBE: `http` AGAINST `/health` (R9.C6, gap C-6) ─────────────────
+#
+# Not `seam` — see `registers` above; a `probe = "seam"` here is REFUSED at
+# load time. And no longer `connect`: a TCP handshake is completed by the
+# KERNEL from the listen backlog whether or not anything in this process still
+# works, so a wedged threads read as live and the supervisor's "unhealthy,
+# restart it" branch never ran (it has wedged: 2026-09-11, `src/lib.rs`
+# `spawn_wal_keeper`'s docstring).
+#
+# (R9.C7i: `/health` is now asked of the off-runtime health door, see
+# `[launch] health`; the paragraph below is the R9.C6 history and the heartbeat
+# verdict it describes is what the door reports, cached.)
+# `/health` is served on the chassis door itself (`[launch] health` below),
+# and it is a real liveness reading, not a second bind check: shapewire's own
+# handler answers from identity alone, so threads puts a STORE HEARTBEAT in
+# front of it (`services/threads/src/liveness.rs`) — every 2 s it takes the
+# store's write mutex and opens and rolls back a write transaction, and once
+# the last success is older than 60 s (`THREADS_HEALTH_STALE_SECS`) `/health`
+# answers 503. A runtime with no free worker cannot answer at all, which the
+# probe's 1.5 s timeout reads as a failure too.
+#
+# THE BUDGET BEFORE A RESTART, end to end, and why it is long: a restart
+# interrupts every running turn, so it must not fire on a legitimate long hold
+# of the store (a WAL fold, a batch write). 60 s of heartbeat bound, then the
+# environment's `down_after` consecutive failed checks `poll_secs` apart
+# (default 3 x 4 s, each with a 1.5 s timeout): about 72 s from "the store
+# stopped answering" to "cauldron stops threads". During a STOP the chassis
+# stops accepting before the drain begins, so `/health` is unreachable under
+# either probe and the drain's grace is the stop path's business (gap C-1).
+probe = "http"
+
+# ── THE STOP SIGNAL IS MEASURED ────────────────────────────────────────────
+#
+# `lib/threads/src/lib.rs` installs a `SignalKind::terminate()` handler and, on
+# SIGTERM, stops accepting on the chassis port, then the live port, then drains
+# for up to 45 s (`SHUTDOWN_DRAIN_SECS`), then checkpoints the WAL with a 5 s
+# budget. A second SIGTERM abandons the drain. So SIGTERM is this service's
+# clean stop and the drain is the reason `start_timeout_ms` below is large.
+stop_signal = "TERM"
+
+# ── ESCALATION: ON, and this is the service the ruling was about ───────────
+#
+# 2026-09-02, an internal thread: "The supervisor's job is to make the
+# thing restart and pick up the new binary. So yeah, if it tries to softly kill
+# it and it won't go down, then it has to hard kill it. I'm okay with that ...
+# You just have to like try to exercise it restarting itself first." He named
+# the threads module, with its own caveat about corruption, and accepted it.
+escalate = true
+
+# ── THE STOP GRACE: 75 s, counted until the PID is gone (C-1) ─────────────
+#
+# The clean stop above is up to 45 s of drain + 5 s on the serve task + a 5 s
+# WAL checkpoint = 55 s, sized against the old supervisor's 60 s rung. The
+# default grace is 15 s, which SIGKILLed this daemon mid-drain; and before
+# C-1 the stop was declared done when the PORT went quiet — the first thing the
+# drain does — so a restart started a second threads on the same THREADS_HOME.
+# 75 = the 55 s measured above plus 20 s of margin for a slow checkpoint.
+stop_grace_secs = 75
+
+# R9.C6 MOVED WHAT THIS BOUNDS. Under `connect` the launch waited only for the
+# bind (`HOSTED_BIND_WAIT`, 45 s), and threads binds FIRST, before it opens the
+# store or recovers. Under `http` the launch ALSO waits, within THIS budget and
+# counted from the bind, for `/health` to answer 200 (`cli/src/main.rs`
+# `wait_healthy`), and threads only serves after `update.on_boot` and `recover`.
+#
+# 145 s = THE DAEMON'S OWN BOUNDS ON THAT WINDOW, plus recovery (R9.C6b, after
+# inspection F-1, an internal report):
+#   `update::FIRST_EXEC_BUDGET_MS`  120 s — `keep_last_good` pays the running
+#                                   image's first exec (macOS assessment,
+#                                   15-36 s measured by R9.U1) under this;
+#   `update::SELF_CHECK_TIMEOUT`     20 s — then the timed `--self-check`;
+#   recovery                          5 s — measured on a fixture store: bind ->
+#                                   /health 200 at most 1.11 s up to 1.10 GB,
+#                                   ~0.4 s/GB, roughly linear past 1 GB (DERIVED).
+# A supervisor window shorter than the daemon's own allowance kills a boot the
+# daemon would have finished. Prod measured (DEPLOY-9b, inspect F-1): ~18 s
+# with the first exec pre-paid; ~54 s cold with U1's 36 s; ~65 s under load.
+# `tests/health_liveness.rs` pins this value against those two constants.
+# A boot slower than this is killed and counted as a failed start.
+# THE COST OF THIS NUMBER: the holder's tend loop is synchronous, so while a
+# threads launch is waiting here every other service's check waits too — up to
+# 45 s (bind) + 145 s on a launch that hangs (it was 45 + 120 at R9.C6). A
+# healthy launch costs only its real boot time.
+start_timeout_ms = 145000
+
+# ── WHERE CAULDRON EXPECTS TO FIND IT ──────────────────────────────────────
+[launch]
+# THE CHASSIS DOOR. This daemon listens on two ports — 3651 is the legacy API
+# and 3653 is the shapewire chassis — and this is the one recorded, because it
+# is the door with typed refusals and a shape registry behind it, which is what
+# a consumer should be pointed at.
+#
+# NEITHER PORT IS CAULDRON'S CHOICE, and that is the honest cost of hosting a
+# foreign binary. 3651 comes from `config::DEFAULT_PORT` and is reachable only
+# through a `config.toml`; 3653 comes from `DEFAULT_CHASSIS_PORT` and is the
+# one of the two that an env var can move (`THREADS_CHASSIS_PORT`). A
+# registering service would bind 127.0.0.1:0 and publish what the kernel gave
+# it, which is why two cauldron deployments cannot collide on a port. This one
+# can, so `launch_hosted` connects to this address BEFORE it forks and refuses
+# to launch if anything answers — the bind is this daemon's only mutual
+# exclusion ("no pidfile, no advisory lock on threads.db, no daemons table",
+# `lib/threads/src/server.rs:168`), and a second instance on this store is not
+# a supervisor mistake, it is data loss.
+#
+# THE HUB'S PORT (Q-13 item 1, HOLDS R6, R5.S3): the shapewire hub is not a
+# process of its own — it is the chassis this daemon serves, so this declared
+# address IS the hub's declared port, per environment through
+# `[services.threads] addr` and `THREADS_CHASSIS_PORT` below. `cauldron
+# status` shows it on the threads row.
+addr = "127.0.0.1:3653"
+# R9.C7i: the health URL is the OFF-RUNTIME HEALTH DOOR, not the chassis.
+# R9.C6 put it on the chassis door, which shares one tokio runtime with every
+# synchronous store call; in prod (DEPLOY-9j) a starved runtime answered
+# nothing in 1.5 s, the probe read `os error 35`, and the holder killed a
+# process that was slow, not dead. The door (`services/threads/src/
+# health_door.rs`) is a std listener on its own OS thread: 200 with
+# `runtime_lag_ms` while alive, 503 `stalled` only past 60 s of lag
+# (`THREADS_RUNTIME_STALL_SECS`), refused once the process is gone.
+#
+# WHERE: `[::1]` on the chassis's own port number. A declaration can expand
+# only the hosted address and port, with no arithmetic, so "chassis port + 1"
+# cannot be written per environment; the IPv6 loopback on the same number is a
+# different socket from the chassis's 127.0.0.1 one and is per environment by
+# construction. `THREADS_HEALTH_ADDR` in `[env]` below binds it; the two lines
+# must name the same address (`tests/health_off_runtime.rs` G5 pins them).
+# THE COST, recorded: a client that dials `localhost:<port>` and tries ::1
+# first now reaches the door (404 for anything but /health) instead of being
+# refused and falling back to 127.0.0.1. Dial 127.0.0.1, as every client in
+# these repositories does (measured by grep at R9.C7i).
+#
+# The `[quiet]` read below stays on the chassis address: quiet is not
+# liveness, and an unreadable quiet already fails safe.
+health = "http://[::1]:${CAULDRON_HOSTED_PORT}/health"
+
+[env]
+# THE DATA DIRECTORY. `${CAULDRON_SERVICE_DATA_DIR}` expands to
+# `data/<env>/threads/`, so this one line is correct in every environment
+# rather than being a literal that is right in exactly one. The daemon reads
+# `THREADS_HOME` (`config.rs:465 state_home`) — never `THREADS_DATA_HOME`,
+# which is a variable `~/.threads-supervisor/paths.env` invents and the daemon
+# has never read.
+#
+# `store` is the KIND beneath the service's directory, which is the operator's
+# decided layout: `data/<env>/<service>/<kind>/`. In prod that resolves to
+# `~/.cauldron/data/prod/threads/store`, which is where the live store already
+# is and has been since 2026-10-07.
+THREADS_HOME = "${CAULDRON_SERVICE_DATA_DIR}/store"
+
+# THE PORT, PER ENVIRONMENT. `${CAULDRON_HOSTED_PORT}` is the port half of
+# this environment's effective hosted address: `[services.threads] addr` in
+# `data/<env>/env.toml` when set, else `[launch] addr` above. Without this
+# line the daemon binds `DEFAULT_CHASSIS_PORT` (3653) in EVERY environment, so
+# a non-prod threads would collide with prod's; with it, each environment's
+# threads binds the address cauldron probes for it. In prod (no override)
+# this resolves to 3653, exactly the value the daemon defaults to.
+THREADS_CHASSIS_PORT = "${CAULDRON_HOSTED_PORT}"
+
+# R9.C7i: THE OFF-RUNTIME HEALTH DOOR — the address `[launch] health` asks.
+# Unset, the daemon opens no door; set and unbindable, it fails its boot.
+THREADS_HEALTH_ADDR = "[::1]:${CAULDRON_HOSTED_PORT}"
+
+# ── execv SELF-UPDATE: OFF, BY RULING ──────────────────────────────────────
+#
+# "once a holder owns launching, self-update is the holder's job and execv is a
+# second mechanism for one fact."
+#
+# `lib/threads/src/update.rs:2604` execs the image at its own launch path at
+# the first quiet moment after the bytes change, preserving the pid. With
+# cauldron hosting, that is a second owner of restarts, and the measured cost
+# of it is specific: the exec leaves the port unheld for ~25 ms, and the
+# daemon's own source records that a health probe landing in that window
+# spawned a SECOND daemon on 12 of the last 13 self-updates.
+#
+# `watch_wanted()` reads this variable and returns false for exactly the string
+# `off` (`update.rs:2344`).
+#
+# WHAT THIS CHANGES OUTSIDE CAULDRON, stated here because somebody will be
+# surprised by it: `core/tools/promote publish threads --release` deploys by
+# signing a new image at the launch path and letting the daemon absorb it. A
+# cauldron-hosted threads with the watcher off WILL NOT ABSORB IT. The deploy
+# path becomes `cauldron build threads` (which reads the commit off the new
+# image with --build-stamp) then `cauldron pin threads <label>`, and the daemon
+# restarts it onto the pin at a quiet moment — which is his 2026-09-02 ruling
+# made literal rather than a second thing that also does it.
+THREADS_UPDATE_WATCH = "off"
+
+# ── PL-3: THE PROTOLEDGER SHADOW — OFF (absent) BY DEFAULT ─────────────────
+#
+# `THREADS_PL_SHADOW = "1"` (exactly "1"; any other value or absence is OFF)
+# makes every turn also write the thread into a protoledger store at
+# `${THREADS_HOME}/protoledger/` (`ledgers/`, `index.db`, `projections/`):
+# cauldron's own facts through PL-1's writers, the thread projected
+# (export + bind), Claude's appended transcript lines carried onto the
+# projection and followed by protoledger's `Follower`. `events` stays the
+# truth: every shadow failure, a `diverged` binding and a drift between the
+# turn's `events` rows and the ledger's active path are LOGGED and COUNTED,
+# never fatal (`services/threads/src/pl/shadow.rs`). Unset, nothing is
+# written. Rollback: remove the line, restart, `rm -r <THREADS_HOME>/protoledger/`
+# (shadow data only). Left unset here until the operator turns it on.
+# THREADS_PL_SHADOW = "1"
+
+# ── THE QUIET MOMENT A RE-PIN RESTART WAITS FOR (R9.C7, gap C-7) ───────────
+#
+# A daemon holding this environment restarts threads onto a new pin. Without
+# this section it did so on its next pass (within `poll_secs`, 4 s), over
+# executing turns — and an adopted turn can land wrong after a restart (gap
+# L-2: a duplicate paid turn, or a lost message). With it, the daemon reads
+# `GET http://<threads' row address><path>` and restarts only on a pass where
+# the JSON at `pointer` is `true`. `false` waits (re-read every pass); an
+# answer it cannot read waits too, and says so — fail safe.
+#
+# `/restart_gate/idle` is threads' own `Blockers::quiet` (no spawn in flight,
+# no request being served) AND no turn executing (`services/threads/src/
+# update.rs`, `Blockers::idle`). `/restart_gate/quiet` is the looser predicate
+# threads' own execv path uses, which does NOT wait for turns; switch to it
+# here once L-2 is closed and a restart over a running turn is harmless.
+#
+# Read from the RUNNING build's declaration snapshot: a build made before this
+# section existed serves no `restart_gate` and is restarted as before.
+[quiet]
+path    = "/health"
+pointer = "/restart_gate/idle"
+
+# ── THE DRAIN A RE-PIN ASKS FOR WHEN THREADS IS NEVER QUIET (R9.C7c) ───────
+#
+# Waiting for `idle` alone never ends in prod: no zero-turn moment from 23:35Z
+# to 03:38Z on 2026-10-16/17 (an internal report §C). So when a
+# re-pin finds threads busy, the daemon sends `start` to its pid: threads
+# DRAINS — starts no new turn, queues every new prompt in its `queue` table as
+# it always does, lets the running turns (managed children included) finish.
+# `idle` then comes, and the restart goes ahead; the new process runs the
+# queue. A pin back to the running build sends `cancel`, and the queue runs.
+#
+# AT THE CAP (`cap_secs` after the drain began, threads' own clock, read from
+# `since`): `at_cap = "handoff"` (R9.C7b, ledger E18-15) — restart anyway; each
+# turn still running keeps its child in its own process group and the new
+# process re-adopts it from its `running_turns` row and lands its verdict
+# (R9.L2), and a child SIGPIPE'd by the restart is retried (E18-7). Measured
+# in `services/threads/tests/drain_pin.rs` (c7b_…, c7c_handoff_…).
+#
+# Why not "extend" (wait past the cap, never restart): it is UNBOUNDED for a
+# live long turn. DEPLOY-9c's pin (2026-10-19 05:49:58Z) held prod intake for
+# 2h35m behind one coordinator turn, and the operator's own message ~1 h.
+#
+# 600 s: a drain holds new prompts for at most 10 minutes. Most prod turns
+# (4-100 s) finish inside it and are never handed off at all.
+#
+# `turn_ids` names the running turns (thread ids) for `cauldron status`.
+#
+# Sent only when the RUNNING build declares this AND its `/health` carries
+# `since`: SIGUSR1's default is to terminate a build without the door.
+[quiet.drain]
+start    = "USR1"
+cancel   = "USR2"
+since    = "/restart_gate/draining_since"
+running  = "/restart_gate/turns"
+turn_ids = "/restart_gate/turn_threads"
+cap_secs = 600
+at_cap   = "handoff"
+
+# ── THE IMAGE: A CARGO SOURCE IN THIS REPOSITORY (R3.S2.8a) ────────────────
+#
+# The crate lives at `services/threads/` in this workspace and builds as
+# `-p threads`, so `cauldron build threads` compiles it from THIS tree exactly
+# as it does tts: no `workspace` key means the repository this file sits in,
+# the version is named after `git rev-parse HEAD` here, and a dirty tree is
+# refused. The image installed into `data/shared/builds/threads/<label>/` is
+# the copy the supervisor execs; the target tree is never a launch path, so
+# an agent relinking `target/release/threads` does not change what runs.
+#
+# The three reasons this section used to give for having NO cargo source were
+# facts about substrate's tree, and none of them holds here:
+#
+#   1. `build.rs refuse_to_build_over_a_deploy_image()` refuses only when the
+#      product path in the target dir already holds an image SIGNED under
+#      `com.harness.threads`. Cauldron's target dir
+#      (`data/shared/cache/target` by default) holds no such image, because
+#      cauldron does not sign what it builds.
+#   2. The `chflags uchg` immutable launch path was promote's deploy path in
+#      substrate's `target/`; cauldron never builds into it.
+#   3. The 3.4 GB release build lands in cauldron's own cache, inside the root
+#      and deletable with it.
+#
+# There is no `artifact` and no `stamp_args`: `Build::validate` refuses a
+# cargo source that also declares `stamp_args`, because the commit of a cargo
+# source is the commit of the tree it was built from. The binary still
+# answers `--build-stamp`, and the stamp it prints names that same commit.
+#
+# RELEASE, per service (DEC-19), on the workspace root's release profile
+# (debug-assertions and overflow-checks on), as tts.
+[build]
+package = "threads"
+bin     = "threads"
+profile = "release"
+
+# ═══ WHICH IDENTITY A PERMISSION PROMPT FROM THIS SERVICE NAMES ══════════════
+#
+# `identity` is EMPTY, as tts has it. The substrate image was signed under
+# `harness-codesign` with the designated requirement `identifier
+# "com.harness.threads"`; the cargo build cauldron makes from this tree is NOT
+# signed with any identifier of its own, so naming one here would be a claim
+# the image cannot back. No grant is lost: threads reads keychain credentials
+# through `/usr/bin/security`, which the keychain ACL already trusts.
+# (`cauldron permissions` reads an identity only off an `artifact` path, so
+# for a cargo source it says "not built here"; auditing cargo-built identities
+# is owed separately.)
+#
+# `responsibility = "inherit"` is the default and is restated here because the
+# distinction it draws is the whole of R3.S4 and is easy to misread. It does
+# NOT say "threads has no identity of its own" — it plainly does, above. It
+# says that when cauldron is the process that LAUNCHES threads, the TCC
+# subject for anything threads or its children ask for should be CAULDRON, so
+# the operator reads one familiar name on every dialog instead of one name per
+# service. macOS makes that the default behaviour for a child process; `own`
+# is the opt-out, and threads does not take it.
+#
+# NOTHING HONOURS THIS YET, and that is recorded rather than implied. The
+# responsible process for threads today is `/bin/bash`, because launchd runs
+# `/bin/bash ~/.threads-supervisor/supervise-service.sh threads` — which is
+# exactly the "permissions are given to a system process instead of owned by
+# threads" the operator reported. Changing that means cauldron being what
+# launchd starts, which is the supervisor's design and is not settled.
+[permissions]
+responsibility = "inherit"
+identity = ""

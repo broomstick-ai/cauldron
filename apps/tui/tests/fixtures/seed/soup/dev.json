@@ -1,0 +1,174 @@
+{
+  "_note": "FAKE DATA for the Cauldron TUI — the `dev` environment's seed. Same shape as data/clusters.json (prod's seed). An environment with no seed file starts with one empty cluster named after it.",
+  "clusters": [
+    {
+      "id": "X-1",
+      "name": "Sandbox",
+      "description": "A dev cauldron for trying ripples against a throwaway store before they touch prod.",
+      "tasks": [
+        {
+          "serial": 1,
+          "title": "Copy a prod snapshot into dev",
+          "state": "done",
+          "depends_on": [],
+          "blocked_by": []
+        },
+        {
+          "serial": 2,
+          "title": "Run the intake ripple against the snapshot",
+          "state": "active",
+          "depends_on": [
+            1
+          ],
+          "blocked_by": []
+        },
+        {
+          "serial": 3,
+          "title": "Diff dev's cluster against prod's",
+          "state": "ready",
+          "depends_on": [
+            2
+          ],
+          "blocked_by": []
+        }
+      ],
+      "questions": [
+        {
+          "serial": 1,
+          "value": 60,
+          "question": "Should dev refresh its snapshot from prod nightly, or only when asked?",
+          "why": "A nightly refresh keeps experiments realistic but throws away anything you left running in dev.",
+          "options": [
+            "NIGHTLY.",
+            "ON REQUEST ONLY.",
+            "NIGHTLY, unless dev holds an unsent draft."
+          ],
+          "recommendation": "NIGHTLY, unless dev holds an unsent draft: the draft is the one thing you would lose."
+        }
+      ],
+      "human_actions": [
+        {
+          "serial": 1,
+          "ask": "Pick the prod snapshot dev should start from",
+          "status": "open",
+          "filed": "2026-10-15",
+          "blocks": []
+        }
+      ],
+      "children": [
+        {
+          "id": "X-2",
+          "name": "Ripple trials",
+          "description": "Ripples under test in dev.",
+          "regions": [
+            "R-1"
+          ],
+          "tasks": [
+            {
+              "serial": 4,
+              "title": "Dream ripple dry run",
+              "state": "ready",
+              "depends_on": [],
+              "blocked_by": []
+            },
+            {
+              "serial": 5,
+              "title": "Routing ripple dry run",
+              "state": "blocked",
+              "depends_on": [
+                4
+              ],
+              "blocked_by": [
+                "Q-2"
+              ]
+            }
+          ],
+          "questions": [
+            {
+              "serial": 2,
+              "value": 40,
+              "blocking": true,
+              "question": "May a dev ripple write to the dev cluster, or only report what it would write?",
+              "why": "Writing makes the trial real; reporting keeps dev diffable against prod.",
+              "options": [
+                "WRITE.",
+                "REPORT ONLY."
+              ],
+              "recommendation": "REPORT ONLY until the routing ripple has one clean run."
+            }
+          ],
+          "children": []
+        }
+      ]
+    }
+  ],
+  "cauldron": {
+    "threads": {
+      "link": "offline",
+      "warnings": 0,
+      "next_back": null,
+      "accounts": []
+    },
+    "mesh": [
+      {
+        "node": "example-mac",
+        "role": "this machine",
+        "status": "online",
+        "load": [
+          2.31,
+          1.98,
+          1.77
+        ],
+        "cpu_pct": 34,
+        "mem_pct": 61,
+        "services": [
+          {
+            "name": "cauldron daemon",
+            "status": "running",
+            "pid": 51022,
+            "uptime": "3h 12m",
+            "addr": "127.0.0.1:51990",
+            "version": "06cada2b",
+            "warnings": 0,
+            "errors": 0,
+            "log": "/Users/demo/.cauldron/data/dev/logs/cauldron-daemon.log"
+          },
+          {
+            "name": "threads",
+            "status": "stopped",
+            "pid": null,
+            "uptime": "—",
+            "addr": "127.0.0.1:3753",
+            "version": "e9a97a22",
+            "warnings": 0,
+            "errors": 0,
+            "log": "/Users/demo/.cauldron/data/dev/logs/threads.log"
+          }
+        ],
+        "last_seen": "now"
+      }
+    ]
+  },
+  "corpus": {
+    "schema_version": 5,
+    "regions": [
+      {
+        "id": "R-1",
+        "handle": "RIPPLE TRIALS - throwaway ripples run against the dev cauldron.",
+        "boundary": "Inside: trial ripples and what they wrote. Outside: everything real (prod)."
+      }
+    ],
+    "nodes": [
+      {
+        "id": "T-1",
+        "type": "task",
+        "state": "done",
+        "handle": "Run one trial ripple end to end in dev.",
+        "body": "It ran; its output is in the dev soup.",
+        "in_region": [
+          "R-1"
+        ]
+      }
+    ]
+  }
+}

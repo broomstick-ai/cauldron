@@ -1,0 +1,911 @@
+{
+ "_note": "The curated cauldron-build ledger: dumps newest last in the file (the face sorts), each with its phases (the dump ripple's steps) and its ripple tree; seq 104 is a thread fold (its `thread` names the conversation). Ripple kinds: type_one, type_two, type_three.",
+ "dumps": [
+  {
+   "seq": 101,
+   "at": "-3d",
+   "text": "Merge the new face into the release branch. The curated cauldron shows our own build. Nothing personal ships.",
+   "ripples": [
+    {
+     "ripple": "dump",
+     "kind": "type_three",
+     "state": "done",
+     "after_ms": 0,
+     "ms": 13600,
+     "line": "3 fragments · applied",
+     "steps": [
+      {
+       "name": "load_dump",
+       "word": "native",
+       "state": "done",
+       "ms": 2,
+       "line": "{mode: intake, messages: 1}"
+      },
+      {
+       "name": "fragment",
+       "word": "call",
+       "state": "done",
+       "ms": 3800,
+       "line": "3 items",
+       "calls": [
+        0
+       ]
+      },
+      {
+       "name": "route",
+       "word": "call",
+       "state": "done",
+       "ms": 700,
+       "line": "3 clusters",
+       "calls": [
+        1
+       ]
+      },
+      {
+       "name": "apply",
+       "word": "call",
+       "state": "done",
+       "ms": 9000,
+       "line": "3 items",
+       "calls": [
+        2
+       ]
+      },
+      {
+       "name": "cascade",
+       "word": "native",
+       "state": "done",
+       "ms": 40,
+       "line": "2 tasks unblocked"
+      },
+      {
+       "name": "commit",
+       "word": "native",
+       "state": "done",
+       "ms": 15,
+       "line": "1 tranche"
+      }
+     ],
+     "children": [
+      {
+       "ripple": "fragment",
+       "kind": "type_two",
+       "state": "done",
+       "after_ms": 3,
+       "ms": 3800,
+       "line": "3 fragments",
+       "model": "sonnet",
+       "transcript": [
+        {
+         "role": "system",
+         "text": "Cut a dump into fragments: one thought each, its anchors kept."
+        },
+        {
+         "role": "user",
+         "text": "Merge the new face into the release branch. The curated cauldron shows our own build. Nothing personal ships."
+        },
+        {
+         "role": "assistant",
+         "text": "Three fragments:\n1. merge the new face into the release branch\n2. the curated cauldron shows our own build\n3. nothing personal ships"
+        }
+       ]
+      },
+      {
+       "ripple": "route",
+       "kind": "type_one",
+       "state": "done",
+       "after_ms": 3810,
+       "ms": 700,
+       "line": "3 fragments into Release, Install path and Public repo · p 0.93",
+       "model": "haiku",
+       "input": "fragment 1: merge the new face into the release branch\nfragment 2: the curated cauldron shows our own build\nfragment 3: nothing personal ships",
+       "output": "fragment 1 → X-7 Release · p 0.95\nfragment 2 → X-7 Release · p 0.91\nfragment 3 → X-9 Public repo · p 0.94"
+      },
+      {
+       "ripple": "apply",
+       "kind": "type_three",
+       "state": "done",
+       "after_ms": 4520,
+       "ms": 9000,
+       "line": "3 items · 3 written",
+       "steps": [
+        {
+         "name": "fan_out",
+         "word": "foreach",
+         "state": "done",
+         "ms": 9000,
+         "line": "×3 ∥4",
+         "calls": [
+          0,
+          1,
+          2
+         ]
+        }
+       ],
+       "children": [
+        {
+         "ripple": "author",
+         "kind": "type_two",
+         "state": "done",
+         "after_ms": 4600,
+         "ms": 6100,
+         "line": "wrote T-18 for the teaser",
+         "model": "sonnet",
+         "transcript": [
+          {
+           "role": "system",
+           "text": "You author ONE soup node from one fragment of a dump."
+          },
+          {
+           "role": "tool",
+           "tool": "soup.read",
+           "text": "read cluster X-7"
+          },
+          {
+           "role": "assistant",
+           "text": "T-18: record the teaser against the curated cauldron. Waits on the install proof and the publish."
+          }
+         ]
+        },
+        {
+         "ripple": "author",
+         "kind": "type_two",
+         "state": "done",
+         "after_ms": 4610,
+         "ms": 7400,
+         "line": "wrote OBJ-6 and M-7",
+         "model": "sonnet",
+         "transcript": [
+          {
+           "role": "system",
+           "text": "You author ONE soup node from one fragment of a dump."
+          },
+          {
+           "role": "assistant",
+           "text": "OBJ-6: a stranger installs cauldron and watches the teaser. M-7: teaser recorded."
+          }
+         ]
+        },
+        {
+         "ripple": "author",
+         "kind": "type_two",
+         "state": "done",
+         "after_ms": 4620,
+         "ms": 5200,
+         "line": "wrote CON-7 on the public tree",
+         "model": "sonnet",
+         "transcript": [
+          {
+           "role": "system",
+           "text": "You author ONE soup node from one fragment of a dump."
+          },
+          {
+           "role": "assistant",
+           "text": "CON-7: no secrets, personal names or private paths in any published file."
+          }
+         ]
+        }
+       ]
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "seq": 102,
+   "at": "-2d",
+   "text": "[Q-6] A secret action is a human action with a masked input. Route the value: keychain, env file, or the node itself.",
+   "ripples": [
+    {
+     "ripple": "dump",
+     "kind": "type_three",
+     "state": "done",
+     "after_ms": 0,
+     "ms": 12400,
+     "line": "2 fragments · applied",
+     "steps": [
+      {
+       "name": "load_dump",
+       "word": "native",
+       "state": "done",
+       "ms": 2,
+       "line": "{mode: intake, messages: 1}"
+      },
+      {
+       "name": "fragment",
+       "word": "call",
+       "state": "done",
+       "ms": 3800,
+       "line": "2 items",
+       "calls": [
+        0
+       ]
+      },
+      {
+       "name": "route",
+       "word": "call",
+       "state": "done",
+       "ms": 700,
+       "line": "1 cluster",
+       "calls": [
+        1
+       ]
+      },
+      {
+       "name": "apply",
+       "word": "call",
+       "state": "done",
+       "ms": 9000,
+       "line": "2 items",
+       "calls": [
+        2
+       ]
+      },
+      {
+       "name": "cascade",
+       "word": "native",
+       "state": "done",
+       "ms": 40,
+       "line": "HA-3 raised"
+      },
+      {
+       "name": "commit",
+       "word": "native",
+       "state": "done",
+       "ms": 15,
+       "line": "1 tranche"
+      }
+     ],
+     "children": [
+      {
+       "ripple": "fragment",
+       "kind": "type_two",
+       "state": "done",
+       "after_ms": 3,
+       "ms": 2900,
+       "line": "2 fragments",
+       "model": "sonnet",
+       "transcript": [
+        {
+         "role": "system",
+         "text": "Cut a dump into fragments: one thought each, its anchors kept."
+        },
+        {
+         "role": "user",
+         "text": "> [Q-6]\nA secret action is a human action with a masked input. Route the value: keychain, env file, or the node itself."
+        },
+        {
+         "role": "assistant",
+         "text": "Two fragments:\n1. a secret action is a human action with a masked input — anchored on Q-6\n2. route the value to keychain, env file or the node"
+        }
+       ]
+      },
+      {
+       "ripple": "route",
+       "kind": "type_one",
+       "state": "done",
+       "after_ms": 2910,
+       "ms": 650,
+       "line": "both into Public repo · p 0.92",
+       "model": "haiku",
+       "input": "fragment 1: a secret action is a human action with a masked input\nfragment 2: route the value: keychain, env file, or the node",
+       "output": "fragment 1 → X-9 Public repo · p 0.93\nfragment 2 → X-9 Public repo · p 0.90"
+      },
+      {
+       "ripple": "apply",
+       "kind": "type_three",
+       "state": "done",
+       "after_ms": 3570,
+       "ms": 8800,
+       "line": "2 items · 2 written",
+       "steps": [
+        {
+         "name": "fan_out",
+         "word": "foreach",
+         "state": "done",
+         "ms": 8800,
+         "line": "×2 ∥4",
+         "calls": [
+          0,
+          1
+         ]
+        }
+       ],
+       "children": [
+        {
+         "ripple": "author",
+         "kind": "type_two",
+         "state": "done",
+         "after_ms": 3600,
+         "ms": 8100,
+         "line": "raised HA-3 with two masked steps",
+         "model": "sonnet",
+         "transcript": [
+          {
+           "role": "system",
+           "text": "You author ONE soup node from one fragment of a dump."
+          },
+          {
+           "role": "assistant",
+           "text": "HA-3: hand over the release secrets. Four steps; steps 2 and 3 are masked fields, both routed to this cauldron's own env file."
+          }
+         ]
+        },
+        {
+         "ripple": "author",
+         "kind": "type_two",
+         "state": "done",
+         "after_ms": 3610,
+         "ms": 4300,
+         "line": "noted the routing adapter on X-9",
+         "model": "sonnet",
+         "transcript": [
+          {
+           "role": "system",
+           "text": "You author ONE soup node from one fragment of a dump."
+          },
+          {
+           "role": "assistant",
+           "text": "Every field carries a route: env, keychain or node."
+          }
+         ]
+        }
+       ]
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "seq": 103,
+   "at": "-1d",
+   "text": "The lander and the lock are one milestone: nothing lands without the lock.",
+   "ripples": [
+    {
+     "ripple": "dump",
+     "kind": "type_three",
+     "state": "done",
+     "after_ms": 0,
+     "ms": 14000,
+     "line": "1 fragment · applied after one rollback",
+     "steps": [
+      {
+       "name": "load_dump",
+       "word": "native",
+       "state": "done",
+       "ms": 2,
+       "line": "{mode: intake, messages: 1}"
+      },
+      {
+       "name": "fragment",
+       "word": "call",
+       "state": "done",
+       "ms": 2100,
+       "line": "1 item",
+       "calls": [
+        0
+       ]
+      },
+      {
+       "name": "route",
+       "word": "call",
+       "state": "done",
+       "ms": 600,
+       "line": "X-4",
+       "calls": [
+        1
+       ]
+      },
+      {
+       "name": "apply",
+       "word": "call",
+       "state": "done",
+       "ms": 11200,
+       "line": "1 rolled back, 1 retried",
+       "calls": [
+        2,
+        3
+       ]
+      },
+      {
+       "name": "cascade",
+       "word": "native",
+       "state": "done",
+       "ms": 30,
+       "line": "nothing unblocked"
+      },
+      {
+       "name": "commit",
+       "word": "native",
+       "state": "done",
+       "ms": 12,
+       "line": "1 tranche"
+      }
+     ],
+     "children": [
+      {
+       "ripple": "fragment",
+       "kind": "type_two",
+       "state": "done",
+       "after_ms": 3,
+       "ms": 2100,
+       "line": "1 fragment",
+       "model": "sonnet",
+       "transcript": [
+        {
+         "role": "system",
+         "text": "Cut a dump into fragments: one thought each, its anchors kept."
+        },
+        {
+         "role": "user",
+         "text": "The lander and the lock are one milestone: nothing lands without the lock."
+        },
+        {
+         "role": "assistant",
+         "text": "One fragment: the lander and the lock are one milestone."
+        }
+       ]
+      },
+      {
+       "ripple": "route",
+       "kind": "type_one",
+       "state": "done",
+       "after_ms": 2110,
+       "ms": 600,
+       "line": "into Soup · p 0.97",
+       "model": "haiku",
+       "input": "fragment 1: the lander and the lock are one milestone",
+       "output": "fragment 1 → X-4 Soup · p 0.97"
+      },
+      {
+       "ripple": "tranche",
+       "kind": "type_three",
+       "state": "failed",
+       "after_ms": 2720,
+       "ms": 5200,
+       "line": "rolled back: two writers on M-4 in one tranche",
+       "steps": [
+        {
+         "name": "begin",
+         "word": "native",
+         "state": "done",
+         "ms": 4,
+         "line": "lock: region R-2"
+        },
+        {
+         "name": "write",
+         "word": "call",
+         "state": "failed",
+         "ms": 5100,
+         "line": "conflict on M-4",
+         "calls": [
+          0
+         ]
+        },
+        {
+         "name": "rollback",
+         "word": "native",
+         "state": "done",
+         "ms": 90,
+         "line": "0 writes kept"
+        }
+       ],
+       "children": [
+        {
+         "ripple": "author",
+         "kind": "type_two",
+         "state": "failed",
+         "after_ms": 2730,
+         "ms": 5100,
+         "line": "conflict: M-4 changed under it",
+         "model": "sonnet",
+         "transcript": [
+          {
+           "role": "system",
+           "text": "You author ONE soup node from one fragment of a dump."
+          },
+          {
+           "role": "assistant",
+           "text": "M-4 was rewritten by another run since I read it. Stopping; the tranche rolls back."
+          }
+         ]
+        }
+       ]
+      },
+      {
+       "ripple": "tranche",
+       "kind": "type_three",
+       "state": "done",
+       "after_ms": 8000,
+       "ms": 6000,
+       "line": "retried: M-4 rewritten on the new base",
+       "steps": [
+        {
+         "name": "begin",
+         "word": "native",
+         "state": "done",
+         "ms": 4,
+         "line": "lock: region R-2"
+        },
+        {
+         "name": "write",
+         "word": "call",
+         "state": "done",
+         "ms": 5900,
+         "line": "M-4 holds T-10, T-11, T-12",
+         "calls": [
+          0
+         ]
+        },
+        {
+         "name": "commit",
+         "word": "native",
+         "state": "done",
+         "ms": 30,
+         "line": "1 write"
+        }
+       ],
+       "children": [
+        {
+         "ripple": "author",
+         "kind": "type_two",
+         "state": "done",
+         "after_ms": 8010,
+         "ms": 5900,
+         "line": "rewrote M-4 on the new base",
+         "model": "sonnet",
+         "transcript": [
+          {
+           "role": "system",
+           "text": "You author ONE soup node from one fragment of a dump."
+          },
+          {
+           "role": "tool",
+           "tool": "soup.read",
+           "text": "read milestone M-4"
+          },
+          {
+           "role": "assistant",
+           "text": "M-4: a tranche lands atomically, or not at all. Holds T-10, T-11 and T-12."
+          }
+         ]
+        }
+       ]
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "seq": 104,
+   "at": "-6h",
+   "thread": "Ledger rails",
+   "text": "Thread fold: 14 messages from the Threads tab about the ledger's rails, folded into the soup.",
+   "ripples": [
+    {
+     "ripple": "thread_fold",
+     "kind": "type_two",
+     "state": "done",
+     "after_ms": 0,
+     "ms": 9300,
+     "line": "folded 14 messages · 2 nodes",
+     "model": "sonnet",
+     "transcript": [
+      {
+       "role": "system",
+       "text": "Fold a Threads conversation back into the soup: keep what was decided, drop the chatter."
+      },
+      {
+       "role": "tool",
+       "tool": "threads.read",
+       "text": "read 14 messages of the thread"
+      },
+      {
+       "role": "assistant",
+       "text": "Two things were decided: the ledger reuses the Tasks rail renderer, and folds are rows in the ledger."
+      }
+     ],
+     "children": [
+      {
+       "ripple": "route",
+       "kind": "type_one",
+       "state": "done",
+       "after_ms": 9310,
+       "ms": 500,
+       "line": "both into Ledger · p 0.96",
+       "model": "haiku",
+       "input": "decision 1: the ledger reuses the Tasks rail renderer\ndecision 2: folds are rows in the ledger",
+       "output": "decision 1 → X-3 Ledger · p 0.97\ndecision 2 → X-3 Ledger · p 0.95"
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "seq": 105,
+   "at": "-2h",
+   "text": "[Q-3] The minimal crate. Replace it when the real soup lands.",
+   "ripples": [
+    {
+     "ripple": "dump",
+     "kind": "type_three",
+     "state": "done",
+     "after_ms": 0,
+     "ms": 6100,
+     "line": "1 fragment · answered Q-3",
+     "steps": [
+      {
+       "name": "load_dump",
+       "word": "native",
+       "state": "done",
+       "ms": 2,
+       "line": "{mode: intake, messages: 1}"
+      },
+      {
+       "name": "fragment",
+       "word": "call",
+       "state": "done",
+       "ms": 1900,
+       "line": "1 item",
+       "calls": [
+        0
+       ]
+      },
+      {
+       "name": "route",
+       "word": "call",
+       "state": "done",
+       "ms": 500,
+       "line": "X-4",
+       "calls": [
+        1
+       ]
+      },
+      {
+       "name": "apply",
+       "word": "call",
+       "state": "done",
+       "ms": 3600,
+       "line": "1 item",
+       "calls": [
+        2
+       ]
+      },
+      {
+       "name": "cascade",
+       "word": "native",
+       "state": "done",
+       "ms": 20,
+       "line": "Q-3 assumed"
+      },
+      {
+       "name": "commit",
+       "word": "native",
+       "state": "done",
+       "ms": 10,
+       "line": "1 tranche"
+      }
+     ],
+     "children": [
+      {
+       "ripple": "fragment",
+       "kind": "type_two",
+       "state": "done",
+       "after_ms": 3,
+       "ms": 1900,
+       "line": "1 fragment",
+       "model": "sonnet",
+       "transcript": [
+        {
+         "role": "system",
+         "text": "Cut a dump into fragments: one thought each, its anchors kept."
+        },
+        {
+         "role": "user",
+         "text": "> [Q-3]\nThe minimal crate. Replace it when the real soup lands."
+        },
+        {
+         "role": "assistant",
+         "text": "One fragment, anchored on Q-3: the minimal crate, replaced later."
+        }
+       ]
+      },
+      {
+       "ripple": "route",
+       "kind": "type_one",
+       "state": "done",
+       "after_ms": 1910,
+       "ms": 500,
+       "line": "into Soup · p 0.98",
+       "model": "haiku",
+       "input": "fragment 1: the minimal crate [Q-3]",
+       "output": "fragment 1 → X-4 Soup (Q-3 is X-4's) · p 0.98"
+      },
+      {
+       "ripple": "apply",
+       "kind": "type_three",
+       "state": "done",
+       "after_ms": 2420,
+       "ms": 3600,
+       "line": "1 item · 1 written",
+       "steps": [
+        {
+         "name": "fan_out",
+         "word": "foreach",
+         "state": "done",
+         "ms": 3600,
+         "line": "×1 ∥4",
+         "calls": [
+          0
+         ]
+        }
+       ],
+       "children": [
+        {
+         "ripple": "answer",
+         "kind": "type_two",
+         "state": "done",
+         "after_ms": 2430,
+         "ms": 3500,
+         "line": "Q-3 closed as assumed",
+         "model": "sonnet",
+         "transcript": [
+          {
+           "role": "system",
+           "text": "Close a question from the answer in a dump."
+          },
+          {
+           "role": "assistant",
+           "text": "Q-3 → assumed: a minimal soup crate on the release branch."
+          }
+         ]
+        }
+       ]
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "seq": 106,
+   "at": "-4m",
+   "text": "Ledger first, for style feedback. Ship it early.",
+   "ripples": [
+    {
+     "ripple": "dump",
+     "kind": "type_three",
+     "state": "running",
+     "after_ms": 0,
+     "ms": 41000,
+     "line": "1 fragment · applying",
+     "steps": [
+      {
+       "name": "load_dump",
+       "word": "native",
+       "state": "done",
+       "ms": 2,
+       "line": "{mode: intake, messages: 1}"
+      },
+      {
+       "name": "fragment",
+       "word": "call",
+       "state": "done",
+       "ms": 1800,
+       "line": "1 item",
+       "calls": [
+        0
+       ]
+      },
+      {
+       "name": "route",
+       "word": "call",
+       "state": "done",
+       "ms": 450,
+       "line": "X-3",
+       "calls": [
+        1
+       ]
+      },
+      {
+       "name": "apply",
+       "word": "call",
+       "state": "running",
+       "ms": 38000,
+       "line": "1 item",
+       "calls": [
+        2
+       ]
+      },
+      {
+       "name": "cascade",
+       "word": "native",
+       "state": "pending",
+       "ms": 0,
+       "line": ""
+      },
+      {
+       "name": "commit",
+       "word": "native",
+       "state": "pending",
+       "ms": 0,
+       "line": ""
+      }
+     ],
+     "children": [
+      {
+       "ripple": "fragment",
+       "kind": "type_two",
+       "state": "done",
+       "after_ms": 3,
+       "ms": 1800,
+       "line": "1 fragment",
+       "model": "sonnet",
+       "transcript": [
+        {
+         "role": "system",
+         "text": "Cut a dump into fragments: one thought each, its anchors kept."
+        },
+        {
+         "role": "user",
+         "text": "Ledger first, for style feedback. Ship it early."
+        },
+        {
+         "role": "assistant",
+         "text": "One fragment: ship the ledger early for style feedback."
+        }
+       ]
+      },
+      {
+       "ripple": "route",
+       "kind": "type_one",
+       "state": "done",
+       "after_ms": 1810,
+       "ms": 450,
+       "line": "into Ledger · p 0.96",
+       "model": "haiku",
+       "input": "fragment 1: ship the ledger early",
+       "output": "fragment 1 → X-3 Ledger · p 0.96"
+      },
+      {
+       "ripple": "apply",
+       "kind": "type_three",
+       "state": "running",
+       "after_ms": 2270,
+       "ms": 38000,
+       "line": "1 item · writing",
+       "steps": [
+        {
+         "name": "fan_out",
+         "word": "foreach",
+         "state": "running",
+         "ms": 38000,
+         "line": "×1 ∥4",
+         "calls": [
+          0
+         ]
+        }
+       ],
+       "children": [
+        {
+         "ripple": "author",
+         "kind": "type_two",
+         "state": "parked",
+         "after_ms": 2280,
+         "ms": 38000,
+         "line": "parked: weekly 80% on every account",
+         "model": "sonnet",
+         "transcript": [
+          {
+           "role": "system",
+           "text": "You author ONE soup node from one fragment of a dump."
+          }
+         ]
+        }
+       ]
+      }
+     ]
+    }
+   ]
+  }
+ ]
+}

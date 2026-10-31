@@ -1,0 +1,5002 @@
+{
+ "_note": "FAKE DATA for the Ripples tab (design 0094): one policy, its prompt fragments, what its ripples did, and the variants made so far (two by the dream, before it was parked). Prompt texts of the curator ripples are substrate-ripple's curator v0 prompts; nothing here calls a model except seed_cluster, which makes the real type-one call; its MODEL row is trusted = secondary (jev): Jev answers in about 0.4 s, Haiku through threads in about 19 s (8e4fca10 msg 123, task 0111). Haiku works (substrate-ripple fix/threads-client-chassis); switching to it is this one row.",
+ "policy": {
+  "policy": {
+   "name": "curator",
+   "version": "v0",
+   "live_since": "10-15"
+  },
+  "ripple": [
+   {
+    "id": "dump",
+    "kind": "shell",
+    "group": "user_input",
+    "job": "processes ONE dump: fragments it into spans and groups, applies each group in parallel as its own transaction, and says what landed — it updates the soup and does no work of its own",
+    "trigger": [
+     {
+      "match": "dump.received",
+      "enabled": true,
+      "fields": [
+       "dump",
+       "cluster",
+       "notes"
+      ],
+      "where": "true",
+      "bind": [
+       {
+        "slot": "dump",
+        "source": "event",
+        "path": "seq",
+        "required": true
+       },
+       {
+        "slot": "cluster",
+        "source": "event",
+        "path": "cluster",
+        "required": true
+       },
+       {
+        "slot": "mode",
+        "source": "literal",
+        "path": "\"dump\""
+       }
+      ],
+      "gather": "none",
+      "on_newer": "run_both",
+      "max_at_once": 4,
+      "per": "cluster"
+     }
+    ],
+    "entry": {
+     "native": "load_dump",
+     "as": "load"
+    },
+    "body": [
+     {
+      "call": "fragment",
+      "input": {
+       "dump": "load.dump"
+      },
+      "as": "frag"
+     },
+     {
+      "native": "validate_fragment",
+      "input": {
+       "fragment": "frag",
+       "repairs": "2",
+       "fallback": "one_group_per_note"
+      },
+      "as": "groups"
+     },
+     {
+      "foreach": "groups",
+      "parallel": true,
+      "max_parallel": 4,
+      "as": "done",
+      "body": [
+       {
+        "call": "apply",
+        "input": {
+         "group": "item"
+        },
+        "as": "g"
+       }
+      ]
+     }
+    ],
+    "exit": {
+     "native": "receipt",
+     "input": {
+      "mode": "load.mode",
+      "groups": "done"
+     }
+    },
+    "reach": {
+     "clusters": "related"
+    }
+   },
+   {
+    "id": "fragment",
+    "kind": "type_two",
+    "shell": "dump",
+    "role": "intake.splitter",
+    "job": "cuts a dump into SPANS by character offsets and groups the spans that interlock; it never quotes, never classifies and never writes (his two load-bearing principles, msg 165)",
+    "turn": {
+     "max_turns": 1,
+     "ends_on": "FRAGMENT",
+     "repairs": 2
+    },
+    "prompt": {
+     "fragment": "fragment",
+     "version": 1,
+     "slots": [
+      {
+       "slot": "dump",
+       "source": "step",
+       "path": "input.dump",
+       "required": true
+      }
+     ],
+     "renderer": "curator_render",
+     "budget_chars": 60000
+    },
+    "action_set": [
+     {
+      "name": "FRAGMENT",
+      "terminal": true,
+      "exclusive": true,
+      "actions": [
+       {
+        "name": "span",
+        "effect": "emit",
+        "params": [
+         {
+          "name": "id",
+          "ty": "text:8"
+         },
+         {
+          "name": "note",
+          "ty": "int:1..999"
+         },
+         {
+          "name": "start",
+          "ty": "int:0..1000000"
+         },
+         {
+          "name": "end",
+          "ty": "int:0..1000000"
+         }
+        ]
+       },
+       {
+        "name": "group",
+        "effect": "emit",
+        "params": [
+         {
+          "name": "id",
+          "ty": "text:8"
+         },
+         {
+          "name": "spans",
+          "ty": "list"
+         },
+         {
+          "name": "context",
+          "ty": "list",
+          "optional": true
+         },
+         {
+          "name": "anchors",
+          "ty": "list",
+          "optional": true
+         }
+        ]
+       }
+      ]
+     }
+    ],
+    "reach": {
+     "clusters": "this"
+    }
+   },
+   {
+    "id": "apply",
+    "kind": "shell",
+    "shell": "dump",
+    "job": "ONE group of a dump: its spans, its read-only context spans, its anchors in full and the index of the cluster it writes to; it writes through ONE transaction and calls nothing that does work",
+    "entry": {
+     "call": "context_for",
+     "input": {
+      "unit": "input.unit"
+     },
+     "as": "c"
+    },
+    "body": [
+     {
+      "branch": "c.route",
+      "cases": {
+       "to_adjudicate": [
+        {
+         "call": "adjudicate",
+         "input": {
+          "unit": "c.unit",
+          "context": "c.context",
+          "matches": "c.match.emit"
+         },
+         "as": "adj"
+        },
+        {
+         "native": "record_line",
+         "input": {
+          "unit": "c.unit",
+          "adj": "adj"
+         }
+        }
+       ],
+       "to_typed": [
+        {
+         "call": "typed_unit",
+         "input": {
+          "unit": "c.unit"
+         },
+         "as": "t"
+        }
+       ]
+      }
+     }
+    ],
+    "exit": {
+     "native": "commit",
+     "input": {
+      "group": "input.group"
+     }
+    }
+   },
+   {
+    "id": "context_for",
+    "kind": "shell",
+    "shell": "dump",
+    "job": "finds what a unit touches: opens, selects, matches, and gates it",
+    "entry": {
+     "call": "open_context",
+     "input": {
+      "unit": "input.unit"
+     },
+     "as": "ctx"
+    },
+    "body": [
+     {
+      "call": "select_context",
+      "input": {
+       "unit": "input.unit",
+       "nodes": "ctx.nodes"
+      },
+      "as": "sc"
+     },
+     {
+      "native": "select",
+      "input": {
+       "sel": "sc"
+      },
+      "as": "sel"
+     },
+     {
+      "native": "match_candidates",
+      "input": {
+       "context": "sel.context"
+      },
+      "as": "mc"
+     },
+     {
+      "call": "match_existing",
+      "input": {
+       "candidates": "mc"
+      },
+      "as": "mt"
+     },
+     {
+      "call": "judgment_gate",
+      "input": {
+       "unit": "input.unit",
+       "matches": "mt.emit"
+      },
+      "as": "gate"
+     }
+    ],
+    "exit": {
+     "native": "pack",
+     "input": {
+      "route": "gate.emit.route.0.value"
+     }
+    }
+   },
+   {
+    "id": "open_context",
+    "kind": "shell",
+    "shell": "dump",
+    "job": "opens regions, then nodes, then edges, one tier at a time",
+    "entry": {
+     "native": "top_tier",
+     "input": {
+      "unit": "input.unit"
+     },
+     "as": "tt"
+    },
+    "body": [
+     {
+      "call": "open_region",
+      "input": {
+       "top_tier": "tt"
+      },
+      "as": "reg"
+     },
+     {
+      "native": "members_of_opened_regions",
+      "input": {
+       "opened": "reg.opened"
+      },
+      "as": "mem"
+     },
+     {
+      "call": "open_node",
+      "input": {
+       "candidates": "mem"
+      },
+      "as": "nod"
+     },
+     {
+      "native": "follow_candidates",
+      "input": {
+       "a": "reg.opened",
+       "b": "nod.opened"
+      },
+      "as": "fc"
+     },
+     {
+      "call": "follow_edge",
+      "input": {
+       "candidates": "fc"
+      },
+      "as": "fol"
+     }
+    ],
+    "exit": {
+     "native": "opened_nodes",
+     "input": {
+      "a": "reg.opened",
+      "b": "nod.opened",
+      "c": "fol.opened"
+     }
+    }
+   },
+   {
+    "id": "open_region",
+    "kind": "type_one",
+    "job": "should this region be open, given what is open already",
+    "role": "intake.router",
+    "walk": {
+     "over": "input.top_tier",
+     "mode": "batched",
+     "expand": "children_of_opened",
+     "until": "fixpoint",
+     "max_passes": 6
+    },
+    "questions": [
+     {
+      "key": "open",
+      "type": "yes_no",
+      "template_id": "curator.open_region.v0",
+      "instructions": "q_open_region",
+      "criteria": [
+       {
+        "answer": "true",
+        "text": "open it: it may bear on the unit"
+       },
+       {
+        "answer": "false",
+        "text": "leave it closed"
+       }
+      ]
+     }
+    ],
+    "map": [
+     {
+      "key": "open",
+      "answer": "true",
+      "min_p": 0.2,
+      "set": "LOOK",
+      "name": "open",
+      "args": {
+       "node_id": "$item.id"
+      }
+     }
+    ],
+    "prompt": {
+     "fragment": "q_open_region",
+     "version": 1,
+     "renderer": "curator_render",
+     "budget_chars": 24000
+    },
+    "action_set": [
+     {
+      "name": "LOOK",
+      "terminal": false,
+      "exclusive": false,
+      "actions": [
+       {
+        "name": "open",
+        "effect": "read",
+        "params": [
+         {
+          "name": "node_id",
+          "ty": "node_id"
+         }
+        ]
+       }
+      ]
+     }
+    ],
+    "shell": "open_context"
+   },
+   {
+    "id": "open_node",
+    "kind": "type_one",
+    "job": "read this node's body",
+    "role": "intake.router",
+    "walk": {
+     "over": "input.candidates",
+     "mode": "batched",
+     "expand": "",
+     "until": "once",
+     "max_passes": 1
+    },
+    "questions": [
+     {
+      "key": "open",
+      "type": "yes_no",
+      "template_id": "curator.open_node.v0",
+      "instructions": "q_open_node",
+      "criteria": [
+       {
+        "answer": "true",
+        "text": "read its body"
+       },
+       {
+        "answer": "false",
+        "text": "skip it"
+       }
+      ]
+     }
+    ],
+    "map": [
+     {
+      "key": "open",
+      "answer": "true",
+      "min_p": 0.2,
+      "set": "LOOK",
+      "name": "open",
+      "args": {
+       "node_id": "$item.id"
+      }
+     }
+    ],
+    "prompt": {
+     "fragment": "q_open_node",
+     "version": 1,
+     "renderer": "curator_render",
+     "budget_chars": 24000
+    },
+    "action_set": [
+     {
+      "name": "LOOK",
+      "terminal": false,
+      "exclusive": false,
+      "actions": [
+       {
+        "name": "open",
+        "effect": "read",
+        "params": [
+         {
+          "name": "node_id",
+          "ty": "node_id"
+         }
+        ]
+       }
+      ]
+     }
+    ],
+    "shell": "open_context"
+   },
+   {
+    "id": "follow_edge",
+    "kind": "type_one",
+    "job": "follow this edge and read what it reaches",
+    "role": "intake.router",
+    "walk": {
+     "over": "input.candidates",
+     "mode": "batched",
+     "expand": "",
+     "until": "once",
+     "max_passes": 1
+    },
+    "questions": [
+     {
+      "key": "follow",
+      "type": "yes_no",
+      "template_id": "curator.follow_edge.v0",
+      "instructions": "q_follow_edge",
+      "criteria": [
+       {
+        "answer": "true",
+        "text": "follow the edge and read the target"
+       },
+       {
+        "answer": "false",
+        "text": "do not follow"
+       }
+      ]
+     }
+    ],
+    "map": [
+     {
+      "key": "follow",
+      "answer": "true",
+      "min_p": 0.3,
+      "set": "LOOK",
+      "name": "open",
+      "args": {
+       "node_id": "$item.id"
+      }
+     }
+    ],
+    "prompt": {
+     "fragment": "q_follow_edge",
+     "version": 1,
+     "renderer": "curator_render",
+     "budget_chars": 24000
+    },
+    "action_set": [
+     {
+      "name": "LOOK",
+      "terminal": false,
+      "exclusive": false,
+      "actions": [
+       {
+        "name": "open",
+        "effect": "read",
+        "params": [
+         {
+          "name": "node_id",
+          "ty": "node_id"
+         }
+        ]
+       }
+      ]
+     }
+    ],
+    "shell": "open_context"
+   },
+   {
+    "id": "select_context",
+    "kind": "type_one",
+    "job": "how much of each opened node to keep: full · summary · handle · drop",
+    "role": "intake.router",
+    "walk": {
+     "over": "input.briefs",
+     "mode": "batched",
+     "expand": "",
+     "until": "once",
+     "max_passes": 1
+    },
+    "questions": [
+     {
+      "key": "depth",
+      "type": "score",
+      "template_id": "curator.select_context.v0",
+      "instructions": "q_select_context",
+      "criteria": [
+       {
+        "answer": "drop",
+        "text": "leave it out"
+       },
+       {
+        "answer": "handle",
+        "text": "its one line"
+       },
+       {
+        "answer": "summary",
+        "text": "its summary"
+       },
+       {
+        "answer": "full",
+        "text": "its whole body"
+       }
+      ]
+     }
+    ],
+    "map": [],
+    "prompt": {
+     "fragment": "q_select_context",
+     "version": 1,
+     "renderer": "curator_render",
+     "budget_chars": 30000
+    },
+    "action_set": [
+     {
+      "name": "ASK",
+      "terminal": false,
+      "exclusive": false,
+      "actions": [
+       {
+        "name": "asked",
+        "effect": "emit",
+        "params": []
+       }
+      ]
+     }
+    ],
+    "shell": "dump",
+    "default": {
+     "set": "ASK",
+     "name": "asked"
+    }
+   },
+   {
+    "id": "match_existing",
+    "kind": "type_one",
+    "job": "is the unit the same thing as this node",
+    "role": "intake.resolver",
+    "walk": {
+     "over": "input.candidates",
+     "mode": "batched",
+     "expand": "",
+     "until": "once",
+     "max_passes": 1
+    },
+    "questions": [
+     {
+      "key": "same",
+      "type": "yes_no",
+      "template_id": "curator.match_existing.v0",
+      "instructions": "q_match_existing",
+      "criteria": [
+       {
+        "answer": "true",
+        "text": "the unit restates this node"
+       },
+       {
+        "answer": "false",
+        "text": "the unit says something this node does not"
+       }
+      ]
+     }
+    ],
+    "map": [
+     {
+      "key": "same",
+      "answer": "true",
+      "min_p": 0.5,
+      "set": "MATCH",
+      "name": "same",
+      "args": {
+       "node_id": "$item.id"
+      }
+     }
+    ],
+    "prompt": {
+     "fragment": "q_match_existing",
+     "version": 1,
+     "renderer": "curator_render",
+     "budget_chars": 24000
+    },
+    "action_set": [
+     {
+      "name": "MATCH",
+      "terminal": false,
+      "exclusive": false,
+      "actions": [
+       {
+        "name": "same",
+        "effect": "emit",
+        "params": [
+         {
+          "name": "node_id",
+          "ty": "node_id"
+         }
+        ]
+       }
+      ]
+     }
+    ],
+    "shell": "dump"
+   },
+   {
+    "id": "judgment_gate",
+    "kind": "type_one",
+    "job": "does disposing of the unit need judgment",
+    "role": "intake.router",
+    "walk": {
+     "over": "",
+     "mode": "sequential",
+     "expand": "",
+     "until": "once",
+     "max_passes": 1
+    },
+    "questions": [
+     {
+      "key": "judgment",
+      "type": "yes_no",
+      "template_id": "curator.judgment_gate.v0",
+      "instructions": "q_judgment_gate",
+      "criteria": [
+       {
+        "answer": "true",
+        "text": "judgment is required"
+       },
+       {
+        "answer": "false",
+        "text": "a typed disposition suffices"
+       }
+      ]
+     }
+    ],
+    "map": [
+     {
+      "key": "judgment",
+      "answer": "true",
+      "min_p": 0.25,
+      "set": "ROUTE",
+      "name": "route",
+      "args": {
+       "value": "to_adjudicate"
+      }
+     }
+    ],
+    "prompt": {
+     "fragment": "q_judgment_gate",
+     "version": 1,
+     "renderer": "curator_render",
+     "budget_chars": 24000
+    },
+    "action_set": [
+     {
+      "name": "ROUTE",
+      "terminal": false,
+      "exclusive": false,
+      "actions": [
+       {
+        "name": "route",
+        "effect": "emit",
+        "params": [
+         {
+          "name": "value",
+          "ty": "enum:to_adjudicate|to_typed"
+         }
+        ]
+       }
+      ]
+     }
+    ],
+    "shell": "dump",
+    "default": {
+     "set": "ROUTE",
+     "name": "route",
+     "args": {
+      "value": "to_typed"
+     }
+    }
+   },
+   {
+    "id": "adjudicate",
+    "kind": "type_two",
+    "shell": "dump",
+    "role": "writer",
+    "job": "closes, retracts, supersedes or pins an existing node, and does exactly one of them",
+    "turn": {
+     "max_turns": 4,
+     "ends_on": "DISPOSE",
+     "repairs": 2
+    },
+    "prompt": {
+     "fragment": "adjudicate",
+     "version": 3,
+     "pins": {
+      "curator/judgment-frame": "2"
+     },
+     "slots": [
+      {
+       "slot": "unit",
+       "source": "step",
+       "path": "c.unit",
+       "required": true
+      },
+      {
+       "slot": "context",
+       "source": "step",
+       "path": "c.context",
+       "required": true
+      },
+      {
+       "slot": "matches",
+       "source": "step",
+       "path": "c.match.emit",
+       "required": true
+      },
+      {
+       "slot": "cite",
+       "source": "event",
+       "path": "msg.ref"
+      }
+     ],
+     "renderer": "curator_render",
+     "budget_chars": 60000
+    },
+    "action_set": [
+     {
+      "name": "LOOK",
+      "terminal": false,
+      "exclusive": false,
+      "actions": [
+       {
+        "name": "open",
+        "effect": "read",
+        "params": [
+         {
+          "name": "node_id",
+          "ty": "node_id"
+         }
+        ]
+       },
+       {
+        "name": "read_msg",
+        "effect": "read",
+        "params": [
+         {
+          "name": "msg_ref",
+          "ty": "msg_ref"
+         }
+        ]
+       }
+      ]
+     },
+     {
+      "name": "DISPOSE",
+      "terminal": true,
+      "exclusive": true,
+      "actions": [
+       {
+        "name": "close",
+        "effect": "write",
+        "params": [
+         {
+          "name": "node_id",
+          "ty": "node_id"
+         },
+         {
+          "name": "to_state",
+          "ty": "enum:27"
+         },
+         {
+          "name": "resolved_by",
+          "ty": "node_id",
+          "optional": true
+         },
+         {
+          "name": "cite",
+          "ty": "msg_ref",
+          "optional": true
+         }
+        ]
+       },
+       {
+        "name": "retract",
+        "effect": "write",
+        "params": [
+         {
+          "name": "node_id",
+          "ty": "node_id"
+         },
+         {
+          "name": "clauses",
+          "ty": "text:2000"
+         },
+         {
+          "name": "cite",
+          "ty": "msg_ref",
+          "optional": true
+         }
+        ]
+       },
+       {
+        "name": "supersede",
+        "effect": "write",
+        "params": [
+         {
+          "name": "old",
+          "ty": "node_id"
+         },
+         {
+          "name": "new_from_item",
+          "ty": "bool"
+         },
+         {
+          "name": "cite",
+          "ty": "msg_ref",
+          "optional": true
+         }
+        ]
+       },
+       {
+        "name": "pin",
+        "effect": "write",
+        "sets_flags": [
+         "pin"
+        ],
+        "params": [
+         {
+          "name": "node_id",
+          "ty": "node_id"
+         },
+         {
+          "name": "cite",
+          "ty": "msg_ref",
+          "optional": true
+         }
+        ]
+       },
+       {
+        "name": "no_change",
+        "effect": "emit",
+        "params": [
+         {
+          "name": "reason",
+          "ty": "enum:already_reflected|not_actionable|needs_operator"
+         }
+        ]
+       }
+      ]
+     }
+    ],
+    "flag_scope": [
+     "pin",
+     "meta.blocking",
+     "meta.stop"
+    ],
+    "reach": {
+     "clusters": "related"
+    }
+   },
+   {
+    "id": "typed_unit",
+    "kind": "shell",
+    "shell": "dump",
+    "job": "a unit no judgment is needed for: typed, written, linked",
+    "entry": {
+     "call": "classify",
+     "input": {
+      "unit": "input.unit"
+     },
+     "as": "cls"
+    },
+    "body": [
+     {
+      "native": "argmax",
+      "input": {
+       "q": "cls"
+      },
+      "as": "pick"
+     },
+     {
+      "branch": "pick.disposition",
+      "cases": {
+       "new_content": [
+        {
+         "call": "author",
+         "input": {
+          "unit": "input.unit",
+          "type": "pick.type"
+         },
+         "as": "auth"
+        },
+        {
+         "native": "link_candidates",
+         "input": {
+          "unit": "input.unit"
+         },
+         "as": "lc"
+        },
+        {
+         "call": "link",
+         "input": {
+          "candidates": "lc"
+         },
+         "as": "lk"
+        }
+       ],
+       "context_only": [
+        {
+         "native": "no_write_line",
+         "input": {
+          "unit": "input.unit"
+         }
+        }
+       ]
+      },
+      "else": [
+       {
+        "native": "duplicate_line",
+        "input": {
+         "unit": "input.unit"
+        }
+       }
+      ]
+     }
+    ],
+    "exit": {
+     "native": "pack",
+     "input": {
+      "unit": "input.unit"
+     }
+    }
+   },
+   {
+    "id": "classify",
+    "kind": "type_one",
+    "job": "new content · authorizes work · context only · duplicate; and the type",
+    "role": "intake.router",
+    "walk": {
+     "over": "",
+     "mode": "sequential",
+     "expand": "",
+     "until": "once",
+     "max_passes": 1
+    },
+    "questions": [
+     {
+      "key": "disposition",
+      "type": "choice",
+      "template_id": "curator.classify.disposition.v0",
+      "instructions": "q_classify_disposition",
+      "criteria": [
+       {
+        "answer": "new_content",
+        "text": "new content that deserves its own node"
+       },
+       {
+        "answer": "authorizes_work",
+        "text": "it authorizes or asks for work to be done"
+       },
+       {
+        "answer": "context_only",
+        "text": "context that changes nothing on the board"
+       },
+       {
+        "answer": "duplicate_of_existing",
+        "text": "it restates what an existing node already says"
+       }
+      ]
+     }
+    ],
+    "map": [],
+    "prompt": {
+     "fragment": "q_classify_disposition",
+     "version": 1,
+     "renderer": "curator_render",
+     "budget_chars": 24000
+    },
+    "action_set": [
+     {
+      "name": "ASK",
+      "terminal": false,
+      "exclusive": false,
+      "actions": [
+       {
+        "name": "asked",
+        "effect": "emit",
+        "params": []
+       }
+      ]
+     }
+    ],
+    "shell": "dump",
+    "default": {
+     "set": "ASK",
+     "name": "asked"
+    }
+   },
+   {
+    "id": "author",
+    "kind": "type_two",
+    "shell": "dump",
+    "role": "writer",
+    "job": "writes the new node: handle, body, summary, cite",
+    "turn": {
+     "max_turns": 3,
+     "ends_on": "WRITE",
+     "repairs": 2
+    },
+    "prompt": {
+     "fragment": "author",
+     "version": 3,
+     "slots": [
+      {
+       "slot": "unit",
+       "source": "step",
+       "path": "input.unit",
+       "required": true
+      },
+      {
+       "slot": "type",
+       "source": "step",
+       "path": "input.type",
+       "required": true
+      }
+     ],
+     "renderer": "curator_render",
+     "budget_chars": 40000
+    },
+    "action_set": [
+     {
+      "name": "WRITE",
+      "terminal": true,
+      "exclusive": true,
+      "actions": [
+       {
+        "name": "create",
+        "effect": "write",
+        "params": [
+         {
+          "name": "handle",
+          "ty": "text:200"
+         },
+         {
+          "name": "body",
+          "ty": "text:4000"
+         },
+         {
+          "name": "summary",
+          "ty": "text:400"
+         },
+         {
+          "name": "cite",
+          "ty": "msg_ref",
+          "optional": true
+         }
+        ]
+       }
+      ]
+     }
+    ],
+    "reach": {
+     "clusters": "related"
+    }
+   },
+   {
+    "id": "link",
+    "kind": "type_one",
+    "job": "draw this edge from the new node",
+    "role": "intake.router",
+    "walk": {
+     "over": "input.candidates",
+     "mode": "batched",
+     "expand": "",
+     "until": "once",
+     "max_passes": 1
+    },
+    "questions": [
+     {
+      "key": "edge",
+      "type": "yes_no",
+      "template_id": "curator.link.v0",
+      "instructions": "q_link",
+      "criteria": [
+       {
+        "answer": "true",
+        "text": "draw the edge"
+       },
+       {
+        "answer": "false",
+        "text": "leave it undrawn"
+       }
+      ]
+     }
+    ],
+    "map": [
+     {
+      "key": "edge",
+      "answer": "true",
+      "min_p": 0.5,
+      "set": "EDGE",
+      "name": "draw",
+      "args": {
+       "to": "$item.id"
+      }
+     }
+    ],
+    "prompt": {
+     "fragment": "q_link",
+     "version": 1,
+     "renderer": "curator_render",
+     "budget_chars": 24000
+    },
+    "action_set": [
+     {
+      "name": "EDGE",
+      "terminal": false,
+      "exclusive": false,
+      "actions": [
+       {
+        "name": "draw",
+        "effect": "write",
+        "params": [
+         {
+          "name": "to",
+          "ty": "node_id"
+         }
+        ]
+       }
+      ]
+     }
+    ],
+    "shell": "dump"
+   },
+   {
+    "id": "consequence",
+    "kind": "type_two",
+    "group": "transaction_committed",
+    "role": "consequence",
+    "job": "invalidates questions, files violations, unblocks tasks the commit touched",
+    "trigger": [
+     {
+      "match": "transaction_committed",
+      "enabled": true,
+      "fields": [
+       "nodes"
+      ],
+      "bind": [
+       {
+        "slot": "commit",
+        "source": "event",
+        "path": "commit",
+        "required": true
+       }
+      ],
+      "on_newer": "queue",
+      "max_at_once": 1,
+      "per": "cauldron"
+     }
+    ],
+    "turn": {
+     "max_turns": 3,
+     "ends_on": "DONE",
+     "repairs": 2
+    },
+    "prompt": {
+     "fragment": "consequence",
+     "version": 1,
+     "slots": [
+      {
+       "slot": "commit",
+       "source": "event",
+       "path": "commit",
+       "required": true
+      }
+     ],
+     "renderer": "curator_render",
+     "budget_chars": 30000
+    },
+    "action_set": [
+     {
+      "name": "ACT",
+      "terminal": false,
+      "exclusive": false,
+      "actions": [
+       {
+        "name": "invalidate",
+        "effect": "write",
+        "params": [
+         {
+          "name": "node_id",
+          "ty": "node_id"
+         }
+        ]
+       },
+       {
+        "name": "file_violation",
+        "effect": "write",
+        "params": [
+         {
+          "name": "node_id",
+          "ty": "node_id"
+         },
+         {
+          "name": "why",
+          "ty": "text:400"
+         }
+        ]
+       },
+       {
+        "name": "unblock",
+        "effect": "write",
+        "params": [
+         {
+          "name": "node_id",
+          "ty": "node_id"
+         }
+        ]
+       }
+      ]
+     },
+     {
+      "name": "DONE",
+      "terminal": true,
+      "exclusive": true,
+      "actions": [
+       {
+        "name": "done",
+        "effect": "emit",
+        "params": []
+       }
+      ]
+     }
+    ],
+    "flag_scope": [
+     "meta.blocking"
+    ]
+   },
+   {
+    "id": "curation",
+    "kind": "shell",
+    "group": "transaction_committed",
+    "job": "re-ranks what needs his attention",
+    "trigger": [
+     {
+      "match": "transaction_committed",
+      "enabled": true,
+      "on_newer": "coalesce",
+      "max_at_once": 1,
+      "per": "cluster"
+     },
+     {
+      "match": "schedule",
+      "enabled": true,
+      "schedule": "idle 10m",
+      "misfire": "skip"
+     }
+    ],
+    "entry": {
+     "native": "load_queue",
+     "as": "q"
+    },
+    "body": [
+     {
+      "call": "edge_drawer",
+      "input": {
+       "questions": "q.questions"
+      },
+      "as": "ed"
+     },
+     {
+      "call": "valuer",
+      "input": {
+       "questions": "q.questions"
+      },
+      "as": "val"
+     },
+     {
+      "native": "scorer",
+      "input": {
+       "v": "val"
+      },
+      "as": "sc"
+     }
+    ],
+    "exit": {
+     "native": "push_gate",
+     "input": {
+      "scores": "sc"
+     }
+    }
+   },
+   {
+    "id": "edge_drawer",
+    "kind": "type_two",
+    "shell": "curation",
+    "role": "curation.edge_drawer",
+    "job": "draws conditions and supersedes edges between questions",
+    "turn": {
+     "max_turns": 3,
+     "ends_on": "DONE",
+     "repairs": 2
+    },
+    "prompt": {
+     "fragment": "edge_drawer",
+     "version": 1,
+     "slots": [
+      {
+       "slot": "questions",
+       "source": "step",
+       "path": "input.questions",
+       "required": true
+      }
+     ],
+     "renderer": "curator_render",
+     "budget_chars": 30000
+    },
+    "action_set": [
+     {
+      "name": "EDGE",
+      "terminal": false,
+      "exclusive": false,
+      "actions": [
+       {
+        "name": "conditions",
+        "effect": "write",
+        "params": [
+         {
+          "name": "from",
+          "ty": "node_id"
+         },
+         {
+          "name": "to",
+          "ty": "node_id"
+         }
+        ]
+       },
+       {
+        "name": "supersedes",
+        "effect": "write",
+        "params": [
+         {
+          "name": "from",
+          "ty": "node_id"
+         },
+         {
+          "name": "to",
+          "ty": "node_id"
+         }
+        ]
+       }
+      ]
+     },
+     {
+      "name": "DONE",
+      "terminal": true,
+      "exclusive": true,
+      "actions": [
+       {
+        "name": "done",
+        "effect": "emit",
+        "params": []
+       }
+      ]
+     }
+    ]
+   },
+   {
+    "id": "valuer",
+    "kind": "type_two",
+    "shell": "curation",
+    "role": "curation.valuer",
+    "job": "ASK · CONFIRM · DECIDE-AND-RECORD, cached per question revision",
+    "turn": {
+     "max_turns": 2,
+     "ends_on": "VALUE",
+     "repairs": 2
+    },
+    "prompt": {
+     "fragment": "valuer",
+     "version": 1,
+     "slots": [
+      {
+       "slot": "questions",
+       "source": "step",
+       "path": "input.questions",
+       "required": true
+      }
+     ],
+     "renderer": "curator_render",
+     "budget_chars": 30000
+    },
+    "action_set": [
+     {
+      "name": "VALUE",
+      "terminal": true,
+      "exclusive": true,
+      "actions": [
+       {
+        "name": "value",
+        "effect": "emit",
+        "params": [
+         {
+          "name": "node_id",
+          "ty": "node_id"
+         },
+         {
+          "name": "verdict",
+          "ty": "enum:ask|confirm|decide_and_record"
+         },
+         {
+          "name": "value",
+          "ty": "int:0..100"
+         }
+        ]
+       }
+      ]
+     }
+    ]
+   },
+   {
+    "id": "voice",
+    "kind": "type_two",
+    "group": "transaction_committed",
+    "role": "voice",
+    "job": "reads the living state top-down and speaks the ids",
+    "trigger": [
+     {
+      "match": "cluster_opened",
+      "enabled": true,
+      "bind": [
+       {
+        "slot": "cluster",
+        "source": "event",
+        "path": "cluster",
+        "required": true
+       }
+      ],
+      "on_newer": "stop_restart",
+      "max_at_once": 1,
+      "per": "cauldron"
+     },
+     {
+      "match": "push",
+      "enabled": true,
+      "bind": [
+       {
+        "slot": "cluster",
+        "source": "event",
+        "path": "cluster",
+        "required": true
+       }
+      ],
+      "on_newer": "queue",
+      "max_at_once": 1,
+      "per": "cauldron"
+     }
+    ],
+    "turn": {
+     "max_turns": 2,
+     "ends_on": "SAY",
+     "repairs": 1
+    },
+    "prompt": {
+     "fragment": "voice",
+     "version": 1,
+     "slots": [
+      {
+       "slot": "cluster",
+       "source": "event",
+       "path": "cluster",
+       "required": true
+      }
+     ],
+     "renderer": "curator_render",
+     "budget_chars": 20000
+    },
+    "action_set": [
+     {
+      "name": "SAY",
+      "terminal": true,
+      "exclusive": true,
+      "actions": [
+       {
+        "name": "say",
+        "effect": "emit",
+        "params": [
+         {
+          "name": "text",
+          "ty": "text:1200"
+         }
+        ]
+       }
+      ]
+     }
+    ],
+    "reach": {
+     "clusters": "this"
+    }
+   },
+   {
+    "id": "proposals",
+    "kind": "shell",
+    "group": "report_landed",
+    "job": "disposes a worker report's proposals onto the cluster",
+    "trigger": [
+     {
+      "match": "report_landed",
+      "enabled": true,
+      "fields": [
+       "nodes_proposed"
+      ],
+      "bind": [
+       {
+        "slot": "report",
+        "source": "event",
+        "path": "path",
+        "required": true
+       }
+      ],
+      "on_newer": "queue",
+      "max_at_once": 1,
+      "per": "cluster"
+     }
+    ],
+    "entry": {
+     "native": "load_fold_after",
+     "as": "load"
+    },
+    "body": [
+     {
+      "foreach": "load.units",
+      "parallel": true,
+      "max_parallel": 4,
+      "as": "done",
+      "body": [
+       {
+        "call": "proposal_unit",
+        "input": {
+         "unit": "item"
+        },
+        "as": "u"
+       }
+      ]
+     },
+     {
+      "native": "cascade",
+      "as": "cas"
+     },
+     {
+      "native": "commit",
+      "input": {
+       "mode": "load.mode"
+      },
+      "as": "cm"
+     }
+    ],
+    "exit": {
+     "native": "receipt",
+     "input": {
+      "commit": "cm"
+     }
+    }
+   },
+   {
+    "id": "proposal_unit",
+    "kind": "shell",
+    "shell": "proposals",
+    "job": "one proposal: its context, then judged or disposed",
+    "entry": {
+     "call": "context_for",
+     "input": {
+      "unit": "input.unit"
+     },
+     "as": "c"
+    },
+    "body": [
+     {
+      "branch": "c.route",
+      "cases": {
+       "to_adjudicate": [
+        {
+         "call": "adjudicate",
+         "input": {
+          "unit": "c.unit"
+         },
+         "as": "adj"
+        }
+       ],
+       "to_typed": [
+        {
+         "call": "proposal_disposition",
+         "input": {
+          "unit": "c.unit"
+         },
+         "as": "pd"
+        },
+        {
+         "native": "argmax",
+         "input": {
+          "q": "pd"
+         },
+         "as": "pick"
+        },
+        {
+         "native": "dispose_proposal",
+         "input": {
+          "pick": "pick"
+         }
+        }
+       ]
+      }
+     }
+    ],
+    "exit": {
+     "native": "pack",
+     "input": {
+      "unit": "input.unit"
+     }
+    }
+   },
+   {
+    "id": "proposal_disposition",
+    "kind": "type_one",
+    "job": "accept · merge · refuse · needs judgment",
+    "role": "intake.router",
+    "walk": {
+     "over": "",
+     "mode": "sequential",
+     "expand": "",
+     "until": "once",
+     "max_passes": 1
+    },
+    "questions": [
+     {
+      "key": "disposition",
+      "type": "choice",
+      "template_id": "curator.proposal_disposition.v0",
+      "instructions": "q_proposal_disposition",
+      "criteria": [
+       {
+        "answer": "accept",
+        "text": "take it as proposed"
+       },
+       {
+        "answer": "merge",
+        "text": "it belongs in an existing node"
+       },
+       {
+        "answer": "refuse",
+        "text": "it is not his or not true"
+       },
+       {
+        "answer": "needs_judgment",
+        "text": "a type two must decide"
+       }
+      ]
+     }
+    ],
+    "map": [],
+    "prompt": {
+     "fragment": "q_proposal_disposition",
+     "version": 1,
+     "renderer": "curator_render",
+     "budget_chars": 24000
+    },
+    "action_set": [
+     {
+      "name": "ASK",
+      "terminal": false,
+      "exclusive": false,
+      "actions": [
+       {
+        "name": "asked",
+        "effect": "emit",
+        "params": []
+       }
+      ]
+     }
+    ],
+    "shell": "proposals",
+    "default": {
+     "set": "ASK",
+     "name": "asked"
+    }
+   },
+   {
+    "id": "task",
+    "kind": "shell",
+    "group": "report_landed",
+    "job": "a task run: worktree, worker, inspector, triage, route",
+    "trigger": [
+     {
+      "match": "ripple.call",
+      "enabled": true,
+      "where": "event.caller = engine",
+      "bind": [
+       {
+        "slot": "task",
+        "source": "event",
+        "path": "task",
+        "required": true
+       }
+      ],
+      "on_newer": "queue",
+      "max_at_once": 4,
+      "per": "cauldron"
+     }
+    ],
+    "entry": {
+     "native": "cut_worktree",
+     "input": {
+      "task": "input.task"
+     },
+     "as": "wt"
+    },
+    "body": [
+     {
+      "call": "worker",
+      "input": {
+       "task": "input.task",
+       "worktree": "wt"
+      },
+      "as": "w"
+     },
+     {
+      "call": "inspector",
+      "input": {
+       "diff": "w.diff"
+      },
+      "as": "ins"
+     },
+     {
+      "foreach": "ins.flags",
+      "parallel": true,
+      "max_parallel": 4,
+      "as": "fl",
+      "body": [
+       {
+        "call": "flag_triage",
+        "input": {
+         "flag": "item"
+        },
+        "as": "ft"
+       }
+      ]
+     }
+    ],
+    "exit": {
+     "native": "route",
+     "input": {
+      "flags": "fl"
+     }
+    }
+   },
+   {
+    "id": "worker",
+    "kind": "type_two",
+    "shell": "task",
+    "role": "builder",
+    "job": "builds the task",
+    "turn": {
+     "max_turns": 200,
+     "ends_on": "REPORT",
+     "repairs": 2
+    },
+    "prompt": {
+     "fragment": "worker",
+     "version": 1,
+     "slots": [
+      {
+       "slot": "task",
+       "source": "step",
+       "path": "input.task",
+       "required": true
+      },
+      {
+       "slot": "worktree",
+       "source": "step",
+       "path": "input.worktree",
+       "required": true
+      }
+     ],
+     "renderer": "task_render",
+     "budget_chars": 80000
+    },
+    "action_set": [
+     {
+      "name": "WORK",
+      "terminal": false,
+      "exclusive": false,
+      "actions": [
+       {
+        "name": "edit",
+        "effect": "write",
+        "params": [
+         {
+          "name": "path",
+          "ty": "text:400"
+         },
+         {
+          "name": "patch",
+          "ty": "text:20000"
+         }
+        ]
+       },
+       {
+        "name": "run",
+        "effect": "call",
+        "blocking": true,
+        "params": [
+         {
+          "name": "command",
+          "ty": "text:2000"
+         }
+        ]
+       }
+      ]
+     },
+     {
+      "name": "REPORT",
+      "terminal": true,
+      "exclusive": true,
+      "actions": [
+       {
+        "name": "report",
+        "effect": "emit",
+        "params": [
+         {
+          "name": "front_matter",
+          "ty": "text:8000"
+         }
+        ]
+       }
+      ]
+     }
+    ],
+    "reach": {
+     "clusters": "this",
+     "repos": [
+      "cauldron"
+     ]
+    }
+   },
+   {
+    "id": "inspector",
+    "kind": "type_two",
+    "shell": "task",
+    "role": "builder",
+    "job": "reads the diff and flags what is wrong with it",
+    "turn": {
+     "max_turns": 6,
+     "ends_on": "FLAGS",
+     "repairs": 2
+    },
+    "prompt": {
+     "fragment": "inspector",
+     "version": 1,
+     "slots": [
+      {
+       "slot": "diff",
+       "source": "step",
+       "path": "input.diff",
+       "required": true
+      }
+     ],
+     "renderer": "task_render",
+     "budget_chars": 60000
+    },
+    "action_set": [
+     {
+      "name": "FLAGS",
+      "terminal": true,
+      "exclusive": true,
+      "actions": [
+       {
+        "name": "flag",
+        "effect": "emit",
+        "params": [
+         {
+          "name": "line",
+          "ty": "text:400"
+         },
+         {
+          "name": "severity",
+          "ty": "enum:low|high"
+         }
+        ]
+       }
+      ]
+     }
+    ]
+   },
+   {
+    "id": "flag_triage",
+    "kind": "type_one",
+    "job": "is this flag genuine",
+    "role": "intake.router",
+    "walk": {
+     "over": "",
+     "mode": "sequential",
+     "expand": "",
+     "until": "once",
+     "max_passes": 1
+    },
+    "questions": [
+     {
+      "key": "genuine",
+      "type": "yes_no",
+      "template_id": "task.flag_triage.v0",
+      "instructions": "q_flag_triage",
+      "criteria": [
+       {
+        "answer": "true",
+        "text": "a real defect the worker must fix"
+       },
+       {
+        "answer": "false",
+        "text": "noise: drop it"
+       }
+      ]
+     }
+    ],
+    "map": [
+     {
+      "key": "genuine",
+      "answer": "true",
+      "min_p": 0.5,
+      "set": "ROUTE",
+      "name": "back_to_worker"
+     }
+    ],
+    "prompt": {
+     "fragment": "q_flag_triage",
+     "version": 1,
+     "renderer": "curator_render",
+     "budget_chars": 24000
+    },
+    "action_set": [
+     {
+      "name": "ROUTE",
+      "terminal": false,
+      "exclusive": false,
+      "actions": [
+       {
+        "name": "back_to_worker",
+        "effect": "emit",
+        "params": []
+       }
+      ]
+     }
+    ],
+    "shell": "task"
+   },
+   {
+    "id": "seed_cluster",
+    "kind": "type_one",
+    "job": "finds what in the soup falls inside a new cluster's boundaries and claims or links it",
+    "role": "intake.router",
+    "walk": {
+     "over": "input.candidates",
+     "mode": "batched",
+     "expand": "",
+     "until": "once",
+     "max_passes": 1
+    },
+    "questions": [
+     {
+      "key": "inside",
+      "type": "yes_no",
+      "template_id": "cluster.seed.inside.v0",
+      "instructions": "q_seed_inside",
+      "criteria": [
+       {
+        "answer": "true",
+        "text": "it falls inside the boundaries he stated"
+       },
+       {
+        "answer": "false",
+        "text": "it falls outside them"
+       }
+      ]
+     }
+    ],
+    "map": [
+     {
+      "key": "inside",
+      "answer": "true",
+      "min_p": 0.5,
+      "set": "CLAIM",
+      "name": "claim_region",
+      "args": {
+       "region_id": "$item.id"
+      },
+      "item_kind": "region"
+     },
+     {
+      "key": "inside",
+      "answer": "true",
+      "min_p": 0.5,
+      "set": "CLAIM",
+      "name": "claim_repo",
+      "args": {
+       "repo": "$item.id"
+      },
+      "item_kind": "repo"
+     },
+     {
+      "key": "inside",
+      "answer": "true",
+      "min_p": 0.75,
+      "set": "LINK",
+      "name": "link_node",
+      "args": {
+       "node_id": "$item.id"
+      },
+      "item_kind": "node"
+     }
+    ],
+    "prompt": {
+     "fragment": "q_seed_inside",
+     "version": 1,
+     "renderer": "curator_render",
+     "budget_chars": 30000
+    },
+    "action_set": [
+     {
+      "name": "CLAIM",
+      "terminal": false,
+      "exclusive": false,
+      "actions": [
+       {
+        "name": "claim_region",
+        "effect": "write",
+        "params": [
+         {
+          "name": "region_id",
+          "ty": "node_id"
+         }
+        ]
+       },
+       {
+        "name": "claim_repo",
+        "effect": "write",
+        "params": [
+         {
+          "name": "repo",
+          "ty": "enum:repos"
+         }
+        ]
+       }
+      ]
+     },
+     {
+      "name": "LINK",
+      "terminal": false,
+      "exclusive": false,
+      "actions": [
+       {
+        "name": "link_node",
+        "effect": "write",
+        "params": [
+         {
+          "name": "node_id",
+          "ty": "node_id"
+         }
+        ]
+       }
+      ]
+     }
+    ],
+    "group": "cluster_created",
+    "trigger": [
+     {
+      "match": "cluster_created",
+      "enabled": true,
+      "fields": [
+       "boundaries"
+      ],
+      "bind": [
+       {
+        "slot": "boundaries",
+        "source": "event",
+        "path": "boundaries",
+        "required": true
+       },
+       {
+        "slot": "parent",
+        "source": "event",
+        "path": "parent"
+       }
+      ],
+      "on_newer": "queue",
+      "max_at_once": 1,
+      "per": "cluster",
+      "max_invocations": 1
+     }
+    ],
+    "reach": {
+     "clusters": "all"
+    },
+    "model": {
+     "trusted": "secondary"
+    }
+   },
+   {
+    "id": "reflex",
+    "kind": "type_one",
+    "job": "one question on a matched event: nothing · call a ripple · wake a type two · block",
+    "role": "intake.router",
+    "walk": {
+     "over": "",
+     "mode": "sequential",
+     "expand": "",
+     "until": "once",
+     "max_passes": 1
+    },
+    "questions": [
+     {
+      "key": "act",
+      "type": "yes_no",
+      "template_id": "reflex.v0",
+      "instructions": "q_reflex",
+      "criteria": [
+       {
+        "answer": "true",
+        "text": "this event needs more than nothing"
+       },
+       {
+        "answer": "false",
+        "text": "let it pass"
+       }
+      ]
+     }
+    ],
+    "map": [
+     {
+      "key": "act",
+      "answer": "true",
+      "min_p": 0.6,
+      "set": "REFLEX",
+      "name": "call_ripple"
+     }
+    ],
+    "prompt": {
+     "fragment": "q_reflex",
+     "version": 1,
+     "renderer": "curator_render",
+     "budget_chars": 24000
+    },
+    "action_set": [
+     {
+      "name": "REFLEX",
+      "terminal": false,
+      "exclusive": false,
+      "actions": [
+       {
+        "name": "call_ripple",
+        "effect": "call",
+        "params": [
+         {
+          "name": "ripple",
+          "ty": "enum:ripples"
+         }
+        ]
+       },
+       {
+        "name": "block",
+        "effect": "emit",
+        "params": []
+       }
+      ]
+     }
+    ],
+    "group": "schedule",
+    "trigger": [
+     {
+      "match": "nag",
+      "enabled": false,
+      "on_newer": "coalesce",
+      "max_at_once": 1,
+      "per": "cauldron"
+     }
+    ]
+   }
+  ]
+ },
+ "fragments": {
+  "adjudicate": {
+   "1": "You are the judgment step of a workspace curator (protocol v3). An operator's UNIT (a message item, or a worker's proposal) was judged to require judgment: it may close, retract, supersede or pin an existing node, or choose between existing nodes.\n\nYou may LOOK first: `open` a node by id to read it, or `read_msg` to re-read one of this fold's operator messages. Then DISPOSE with exactly one terminal act (several acts of the same set are allowed in the one terminal turn):\n- close(node_id, to_state, resolved_by?, cite?): move a node to a closing state his words justify (a question he answered -> closed; an issue he says is fixed -> resolved; a task done -> done). `to_state` must be legal for the node's type.\n- retract(node_id, clauses, cite?): he withdrew or reversed what the node records; name the clauses withdrawn.\n- supersede(old, new_from_item, cite?): the unit replaces the old node.\n- pin(node_id, cite?): he explicitly asked for the node to stay in view, or explicitly deferred it.\n- no_change(reason): nothing on the board should change (already_reflected, not_actionable, needs_operator).\n\nLegal states by type (a `to_state` outside its node's list is refused): directive active|done|dropped; milestone pending|active|blocked|done|dropped; decision decided|revisited; constraint and note standing|retired; dragon lurking|being-slain|slain; question open|closed; idea idea|exploring|stub|active|done|dropped; issue and design_node open|resolved; task ready|depends-on|active|done; capability live|stubbed|parked|eliminated. A node shows as `[ID] type/state: handle`.\n\nAct only on what his words say. Never close something because it seems stale. Cite the unit's message ref when you have one.\n\nREPLY FORMAT. You have NO tools: do not call any tool, even one that appears to be available; nothing outside the action sets below is part of this task. Every reply is ONE JSON object `{\"actions\": [...]}` and nothing else: its first character is `{` and its last is `}`, with no prose, no apology and no code fence around it.\n",
+   "2": "You are the judgment step of a workspace curator (protocol v3). An operator's UNIT (a message item, or a worker's proposal) was judged to require judgment: it may close, retract, supersede or pin an existing node, or choose between existing nodes.\n\nYou may LOOK first: `open` a node by id to read it, or `read_msg` to re-read one of this fold's operator messages. Then DISPOSE with exactly one terminal act (several acts of the same set are allowed in the one terminal turn):\n- close(node_id, to_state, resolved_by?, cite?): move a node to a closing state his words justify (a question he answered -> closed; an issue he says is fixed -> resolved; a task done -> done). `to_state` must be legal for the node's type.\n- retract(node_id, clauses, cite?): he withdrew or reversed what the node records; name the clauses withdrawn.\n- supersede(old, new_from_item, cite?): the unit replaces the old node.\n- pin(node_id, cite?): he explicitly asked for the node to stay in view, or explicitly deferred it.\n- no_change(reason): nothing on the board should change (already_reflected, not_actionable, needs_operator).\n\nLegal states by type (a `to_state` outside its node's list is refused): directive active|done|dropped; milestone pending|active|blocked|done|dropped; decision decided|revisited; constraint and note standing|retired; dragon lurking|being-slain|slain; question open|closed; idea idea|exploring|stub|active|done|dropped; issue and design_node open|resolved; task ready|depends-on|active|done; capability live|stubbed|parked|eliminated. A node shows as `[ID] type/state: handle`.\n\nAct only on what his words say. Never close something because it seems stale. Cite the unit's message ref when you have one.\n\nREPLY FORMAT. You have NO tools: do not call any tool, even one that appears to be available; nothing outside the action sets below is part of this task. Every reply is ONE JSON object `{\"actions\": [...]}` and nothing else: its first character is `{` and its last is `}`, with no prose, no apology and no code fence around it.\n",
+   "3": "You are the judgment step of a workspace curator (protocol v3). An operator's {{slot:unit}} (a message item, or a worker's proposal) was judged to require judgment: it may close, retract, supersede or pin an existing node, or choose between existing nodes.\n\n{{prompt:curator/judgment-frame}}\n\nYou may LOOK first: `open` a node by id to read it, or `read_msg` to re-read one of this fold's operator messages. Then DISPOSE with exactly one terminal act (several acts of the same set are allowed in the one terminal turn):\n- close(node_id, to_state, resolved_by?, cite?): move a node to a closing state his words justify (a question he answered -> closed; an issue he says is fixed -> resolved; a task done -> done). `to_state` must be legal for the node's type.\n- retract(node_id, clauses, cite?): he withdrew or reversed what the node records; name the clauses withdrawn.\n- supersede(old, new_from_item, cite?): the unit replaces the old node.\n- pin(node_id, cite?): he explicitly asked for the node to stay in view, or explicitly deferred it.\n- no_change(reason): nothing on the board should change (already_reflected, not_actionable, needs_operator).\n\nLegal states by type (a `to_state` outside its node's list is refused): directive active|done|dropped; milestone pending|active|blocked|done|dropped; decision decided|revisited; constraint and note standing|retired; dragon lurking|being-slain|slain; question open|closed; idea idea|exploring|stub|active|done|dropped; issue and design_node open|resolved; task ready|depends-on|active|done; capability live|stubbed|parked|eliminated. A node shows as `[ID] type/state: handle`.\n\nAct only on what his words say. Never close something because it seems stale. Cite the unit's message ref when you have one.\n\nREPLY FORMAT. You have NO tools: do not call any tool, even one that appears to be available; nothing outside the action sets below is part of this task. Every reply is ONE JSON object `{\"actions\": [...]}` and nothing else: its first character is `{` and its last is `}`, with no prose, no apology and no code fence around it.\n\n\n{{prompt:soup/legal-states}}\n\nAct only on what his words say. Never close something because it seems stale. Cite {{slot:cite}} when you have one.\n\nCONTEXT: {{slot:context}}   MATCHES: {{slot:matches}}\n"
+  },
+  "curator/judgment-frame": {
+   "1": "You judge; you do not author. Every act you take is one the operator's words already decided.\n",
+   "2": "You judge; you do not author. Every act you take is one the operator's words already decided. When his words do not decide it, you take no act: emit no_change with needs_operator, and say in one line what he would have to say for the act to be decided. A close that is not his is the worst outcome here; a no_change that should have been a close costs one more turn of his attention and nothing else. Prefer the second, always.\n",
+   "3": "You judge; you do not author. (v3, unpinned draft) Every act you take is one his words decided.\n"
+  },
+  "soup/legal-states": {
+   "4": "A node's state is one of the legal states of its type. Questions: open, answered, retired. Tasks: ready, active, blocked, done. Decisions: active, superseded. Issues: open, closed. Pins: pinned, released.\n",
+   "5": "A node's state is one of the legal states of its type; moving it is a write the soup checks.\n\n- question: open → answered | retired\n- task: ready → active → done; any → blocked → ready\n- decision: active → superseded\n- issue: open → closed\n- dragon: live → slain\n- pin: pinned → released\n- idea: idea → exploring → stub → active → done | dropped\n\nA close names the state it moves to; a supersede names the node that replaces it. Anything else is refused by the pen, and a refused write costs a repair turn.\n"
+  },
+  "fragment": {
+   "1": "You cut ONE dump of an operator's into SPANS and GROUPS. Your context is the dump's text, its notes numbered, each chip replaced by its body, and one line per anchor: {{slot:dump}}.\n\nA span is a character range inside ONE note: `span(id, note, start, end)`, offsets within that note. Never quote: offsets only. Never classify. Never write.\n\nGroup the spans that interlock — each group is one ripple, so the number of groups IS the number of ripples:\n1. Same anchor, same group.\n2. A span that refers to another (a back-reference, 'scratch that', 'actually on Q-1') joins the group of what it refers to.\n3. Two spans that would write the same node join one group.\n4. A span that only qualifies how others are read is its OWN group, listed as `context` on the groups it qualifies; context is read-only.\n5. Otherwise one group per note; a note holding two unrelated thoughts is two spans in two groups.\n6. Above the cap, merge the smallest adjacent groups.\n\nFiller may be left outside every span. Every note has at least one span; every span belongs to exactly one group. Your reply is checked mechanically; a violation is repaired at most twice, then every note becomes its own group.\n"
+  },
+  "author": {
+   "1": "You write ONE new workspace node (protocol v3) for an operator's UNIT. Its type and starting state were already decided; use them exactly.\n\nCall `node` once, with:\n- pid: the PROVISIONAL ID given in the input, exactly;\n- cite: the unit's CITE ref, exactly (omit it only if none is given);\n- type, state: exactly as given in the input;\n- handle: the one-line claim, present tense, readable standing alone, at most 235 characters;\n- body: what he said and what it means for the work, faithful to his words (keep his hedges; quote him where the wording matters); no invention;\n- summary: only when the body is long enough that the handle under-serves;\n- meta_blocking: true only if he said the work must stop until this is settled.\n\nREPLY FORMAT. You have NO tools: do not call any tool, even one that appears to be available; nothing outside the action sets below is part of this task. Every reply is ONE JSON object `{\"actions\": [...]}` and nothing else: its first character is `{` and its last is `}`, with no prose, no apology and no code fence around it.\n",
+   "2": "You write ONE new workspace node (protocol v3) for an operator's UNIT. Its type and starting state were already decided; use them exactly.\n\nCall `node` once, with:\n- pid: the PROVISIONAL ID given in the input, exactly;\n- cite: the unit's CITE ref, exactly (omit it only if none is given);\n- type, state: exactly as given in the input;\n- handle: the one-line claim, present tense, readable standing alone, at most 235 characters;\n- body: what he said and what it means for the work, faithful to his words (keep his hedges; quote him where the wording matters); no invention;\n- summary: only when the body is long enough that the handle under-serves;\n- meta_blocking: true only if he said the work must stop until this is settled.\n\nREPLY FORMAT. You have NO tools: do not call any tool, even one that appears to be available; nothing outside the action sets below is part of this task. Every reply is ONE JSON object `{\"actions\": [...]}` and nothing else: its first character is `{` and its last is `}`, with no prose, no apology and no code fence around it.\n",
+   "3": "You write ONE new workspace node (protocol v3) for an operator's UNIT. Its type and starting state were already decided; use them exactly.\n\nCall `node` once, with:\n- pid: the PROVISIONAL ID given in the input, exactly;\n- cite: the unit's CITE ref, exactly (omit it only if none is given);\n- type, state: exactly as given in the input;\n- handle: the one-line claim, present tense, readable standing alone, at most 235 characters;\n- body: what he said and what it means for the work, faithful to his words (keep his hedges; quote him where the wording matters); no invention;\n- summary: only when the body is long enough that the handle under-serves;\n- meta_blocking: true only if he said the work must stop until this is settled.\n\nREPLY FORMAT. You have NO tools: do not call any tool, even one that appears to be available; nothing outside the action sets below is part of this task. Every reply is ONE JSON object `{\"actions\": [...]}` and nothing else: its first character is `{` and its last is `}`, with no prose, no apology and no code fence around it.\n\n\nThe unit: {{slot:unit}}\nThe node's type: {{slot:type}}\n",
+   "4": "You write ONE new workspace node (protocol v3) for an operator's UNIT. Its type and starting state were already decided; use them exactly.\n\nCall `node` once, with:\n- pid: the PROVISIONAL ID given in the input, exactly;\n- cite: the unit's CITE ref, exactly (omit it only if none is given);\n- type, state: exactly as given in the input;\n- handle: the one-line claim, present tense, readable standing alone, at most 235 characters;\n- body: what he said and what it means for the work, faithful to his words (keep his hedges; quote him where the wording matters); no invention;\n- summary: only when the body is long enough that the handle under-serves;\n- meta_blocking: true only if he said the work must stop until this is settled.\n\nREPLY FORMAT. You have NO tools: do not call any tool, even one that appears to be available; nothing outside the action sets below is part of this task. Every reply is ONE JSON object `{\"actions\": [...]}` and nothing else: its first character is `{` and its last is `}`, with no prose, no apology and no code fence around it.\n\n\nWrite the handle as one present-tense claim that stands alone. The unit: {{slot:unit}}\nThe node's type: {{slot:type}}\n"
+  },
+  "q_open_region": {
+   "1": "Decide whether this cluster entry (a node, or a cluster of nodes) should be OPENED to dispose of the UNIT: read in full so the curator can see what it says.\n\nOpen it when it could plausibly be the node the unit restates, answers, closes, contradicts, supersedes, depends on or relates to, or when it is a cluster whose members could be. The threshold is deliberately low: opening a node that turns out irrelevant costs little, while missing the node the unit is about causes a wrong write. Leave it closed only when it plainly has nothing to do with the unit.\n"
+  },
+  "q_open_node": {
+   "1": "This node is a member of a cluster that was opened for the UNIT. Decide whether its body should be read to dispose of the unit. Read it when it could be the node the unit restates, answers, closes, supersedes or relates to; skip it only when it plainly has nothing to do with the unit.\n"
+  },
+  "q_follow_edge": {
+   "1": "This node is the target of an edge from a node already opened for the UNIT (the `via` line shows the edge). Decide whether to follow the edge and read the target. Follow it when the target could matter to how the unit is disposed of (for example the task a decision blocks, the question an answer resolves, or the node a new statement supersedes).\n"
+  },
+  "q_select_context": {
+   "1": "Decide how much of this opened node the NEXT decisions about the UNIT need to see:\n0 drop: irrelevant to the unit;\n1 handle: only its one-line claim matters;\n2 summary: its summary matters, not its body;\n3 full: its body matters (the unit may restate, answer, close, contradict or supersede it).\n"
+  },
+  "q_match_existing": {
+   "1": "Decide whether the UNIT restates this existing node: says substantially the same thing, so that folding the unit would add nothing new to the board beyond what the node already records. A unit that adds a new fact, a new decision, a changed state or a new instruction about the node does NOT merely restate it.\n"
+  },
+  "q_judgment_gate": {
+   "1": "Decide whether disposing of the UNIT requires JUDGMENT: closing, retracting, superseding, or choosing between existing nodes (for example: his answer closes an open question; he withdraws or reverses an earlier decision or directive; he says a problem is fixed; he pins or explicitly defers something). A unit that only adds new content, authorizes new work, or is context that changes nothing does not need judgment.\n"
+  },
+  "q_classify_disposition": {
+   "1": "Classify how the UNIT should be disposed of on the board:\n- new_content: it states something the board does not yet hold and that deserves its own node (a directive, decision, constraint, problem, question, idea, risk, milestone or note);\n- authorizes_work: it authorizes or asks for work to be done (a task, a round of work, an investigation);\n- context_only: it is conversational or background context that changes nothing on the board (acknowledgements, commands such as /compact, thinking aloud);\n- duplicate_of_existing: an existing node already says it.\n"
+  },
+  "q_link": {
+   "1": "A new node is being written for the UNIT. Choose the edge, if any, from the NEW node to this existing node: none when they are unrelated. Use depends_on when the new node cannot proceed until this one is done, blocks when the new node holds this one up, answered_by / resolved_by / supersedes when the new node is answered, resolved or superseded by this node, and relates for a plain topical link.\n"
+  },
+  "q_proposal_disposition": {
+   "1": "A worker's report PROPOSES a node write (the UNIT). Decide how the fold-after pass disposes of the proposal:\n- accept_new: accept it as a new node;\n- accept_as_update_of_existing: it is really an update of an existing node (its own id, or the matched node): apply it there;\n- duplicate_drop: an existing node already says it; drop it;\n- reject_out_of_scope: it does not belong on this workspace's board.\n"
+  },
+  "q_flag_triage": {
+   "1": "An inspector flagged a line of the worker's diff. Is it a real defect the worker must fix before the task can be called done?\n\nFLAG: {{slot:flag}}\n"
+  },
+  "q_seed_inside": {
+   "1": "He made a new cluster and said, in his own words, what belongs in it:\n\n{{slot:boundaries}}\n\nIs the item below inside those boundaries — would he expect to find it on that cluster the moment it opens? A region, a repo, an open question or a task. Answer true only when his words reach it.\n\nITEM: {{slot:item}}\n"
+  },
+  "q_reflex": {
+   "1": "An event matched this reflex's pattern. Does it need more than nothing — a ripple called, a type two woken, or a block?\n\nEVENT: {{slot:event}}\n"
+  },
+  "consequence": {
+   "1": "A transaction just committed. Read what it changed and act on its consequences, and only those: a question its answer invalidates, a violation it introduces, a task it unblocks. Then DONE.\n\nCOMMIT: {{slot:commit}}\n"
+  },
+  "edge_drawer": {
+   "1": "Draw the edges between these open questions: one conditions another when its answer decides the other; one supersedes another when it asks the same thing better.\n\nQUESTIONS: {{slot:questions}}\n"
+  },
+  "valuer": {
+   "1": "For each question, say whether he must be ASKED, only asked to CONFIRM a recommendation, or whether the answer can be DECIDED AND RECORDED without him; and its value to him now, 0-100.\n\nQUESTIONS: {{slot:questions}}\n"
+  },
+  "voice": {
+   "1": "Read the living state of {{slot:cluster}} from the top down and say what he needs to hear first, by id, in one beat per item.\n"
+  },
+  "worker": {
+   "1": "Build the task in the worktree you were given. Report in the front matter, not the prose.\n\nTASK: {{slot:task}}\nWORKTREE: {{slot:worktree}}\n"
+  },
+  "inspector": {
+   "1": "Read the diff. Flag every line that is wrong, with its severity. Flag nothing that is a matter of taste.\n\nDIFF: {{slot:diff}}\n"
+  }
+ },
+ "backtest": {
+  "score": 0.18,
+  "runs": 212,
+  "from": "10-01",
+  "to": "10-19",
+  "split": "dev 70% · holdout 30%",
+  "promote_when": "CI > 0 on dev, then holdout"
+ },
+ "variants": [
+  {
+   "id": "dream-3",
+   "by": "dream",
+   "when": "02:10",
+   "backtest": 0.21,
+   "edits": [
+    {
+     "ripple": "judgment_gate",
+     "ptr": "/map/0/min_p",
+     "to": 0.3
+    }
+   ]
+  },
+  {
+   "id": "dream-2",
+   "by": "dream",
+   "when": "yesterday",
+   "backtest": 0.17,
+   "edits": [
+    {
+     "ripple": "open_node",
+     "ptr": "/map/0/min_p",
+     "to": 0.15
+    }
+   ]
+  },
+  {
+   "id": "eng-7",
+   "by": "engineer",
+   "when": "10-17",
+   "backtest": 0.19,
+   "edits": [
+    {
+     "ripple": "author",
+     "ptr": "/prompt/version",
+     "to": 4
+    }
+   ]
+  }
+ ],
+ "events": [
+  {
+   "class": "dump.received",
+   "today": 12
+  },
+  {
+   "class": "dump.fragmented",
+   "today": 12
+  },
+  {
+   "class": "dump.processed",
+   "today": 10
+  },
+  {
+   "class": "dump.group_failed",
+   "today": 0
+  },
+  {
+   "class": "transaction_committed",
+   "today": 22
+  },
+  {
+   "class": "report_landed",
+   "today": 3
+  },
+  {
+   "class": "cluster_created",
+   "today": 0
+  },
+  {
+   "class": "cluster_opened",
+   "today": 6
+  },
+  {
+   "class": "push",
+   "today": 1
+  },
+  {
+   "class": "schedule",
+   "today": 2
+  },
+  {
+   "class": "ripple.return",
+   "today": 41
+  },
+  {
+   "class": "external_arrival",
+   "today": 0
+  },
+  {
+   "class": "nag",
+   "today": 1
+  }
+ ],
+ "bus": [
+  {
+   "id": "EV-71",
+   "class": "ripple.return",
+   "at": "14:31:40",
+   "cluster": "X-7",
+   "payload": {
+    "ripple": "apply",
+    "to": "context_for",
+    "result": "ok"
+   }
+  },
+  {
+   "id": "EV-13",
+   "class": "dump.fragmented",
+   "at": "14:31:08",
+   "cite": "8e4fca10#97",
+   "cluster": "X-1",
+   "payload": {
+    "dump": "41",
+    "atoms": "3"
+   }
+  },
+  {
+   "id": "EV-1",
+   "class": "dump.received",
+   "at": "14:31:04",
+   "cite": "8e4fca10#97",
+   "cluster": "X-1",
+   "payload": {
+    "dump": "41",
+    "notes": "2",
+    "chars": "412",
+    "from": "X-1"
+   }
+  },
+  {
+   "id": "EV-72",
+   "class": "ripple.return",
+   "at": "14:25:36",
+   "cluster": "X-3",
+   "payload": {
+    "ripple": "adjudicate",
+    "to": "context_for",
+    "result": "ok"
+   }
+  },
+  {
+   "id": "EV-73",
+   "class": "ripple.return",
+   "at": "14:19:09",
+   "cluster": "X-3",
+   "payload": {
+    "ripple": "classify",
+    "to": "context_for",
+    "result": "ok"
+   }
+  },
+  {
+   "id": "EV-74",
+   "class": "ripple.return",
+   "at": "14:15:30",
+   "cluster": "X-7",
+   "payload": {
+    "ripple": "author",
+    "to": "apply",
+    "result": "ok"
+   }
+  },
+  {
+   "id": "EV-60",
+   "class": "cluster_opened",
+   "at": "14:12:31",
+   "cluster": "X-1",
+   "payload": {
+    "cluster": "X-1"
+   }
+  },
+  {
+   "id": "EV-75",
+   "class": "ripple.return",
+   "at": "14:08:44",
+   "cluster": "X-2",
+   "payload": {
+    "ripple": "open_region",
+    "to": "apply",
+    "result": "ok"
+   }
+  },
+  {
+   "id": "EV-76",
+   "class": "ripple.return",
+   "at": "14:06:08",
+   "cluster": "X-3",
+   "payload": {
+    "ripple": "match_existing",
+    "to": "typed_unit",
+    "result": "ok"
+   }
+  },
+  {
+   "id": "EV-25",
+   "class": "dump.processed",
+   "at": "14:02:56",
+   "cite": "8e4fca10#96",
+   "cluster": "X-1",
+   "payload": {
+    "dump": "40",
+    "applied": "6",
+    "elsewhere": "0"
+   }
+  },
+  {
+   "id": "EV-35",
+   "class": "transaction_committed",
+   "at": "14:02:53",
+   "cluster": "X-7",
+   "payload": {
+    "transaction": "tx-4100",
+    "writes": "Q-11",
+    "by": "curation"
+   }
+  },
+  {
+   "id": "EV-14",
+   "class": "dump.fragmented",
+   "at": "14:02:15",
+   "cite": "8e4fca10#96",
+   "cluster": "X-1",
+   "payload": {
+    "dump": "40",
+    "atoms": "6"
+   }
+  },
+  {
+   "id": "EV-2",
+   "class": "dump.received",
+   "at": "14:02:11",
+   "cite": "8e4fca10#96",
+   "cluster": "X-1",
+   "payload": {
+    "dump": "40",
+    "notes": "6",
+    "chars": "1204",
+    "from": "X-1"
+   }
+  },
+  {
+   "id": "EV-77",
+   "class": "ripple.return",
+   "at": "14:00:42",
+   "cluster": "X-3",
+   "payload": {
+    "ripple": "author",
+    "to": "context_for",
+    "result": "no_change"
+   }
+  },
+  {
+   "id": "EV-36",
+   "class": "transaction_committed",
+   "at": "13:57:45",
+   "cluster": "X-10",
+   "payload": {
+    "transaction": "tx-4099",
+    "writes": "Q-3",
+    "by": "dump"
+   }
+  },
+  {
+   "id": "EV-61",
+   "class": "cluster_opened",
+   "at": "13:55:02",
+   "cluster": "X-2",
+   "payload": {
+    "cluster": "X-2"
+   }
+  },
+  {
+   "id": "EV-78",
+   "class": "ripple.return",
+   "at": "13:54:25",
+   "cluster": "X-9",
+   "payload": {
+    "ripple": "apply",
+    "to": "context_for",
+    "result": "ok"
+   }
+  },
+  {
+   "id": "EV-79",
+   "class": "ripple.return",
+   "at": "13:50:00",
+   "cluster": "X-9",
+   "payload": {
+    "ripple": "link",
+    "to": "context_for",
+    "result": "ok"
+   }
+  },
+  {
+   "id": "EV-37",
+   "class": "transaction_committed",
+   "at": "13:48:02",
+   "cluster": "X-9",
+   "payload": {
+    "transaction": "tx-4098",
+    "writes": "DEC-12",
+    "by": "dump"
+   }
+  },
+  {
+   "id": "EV-80",
+   "class": "ripple.return",
+   "at": "13:47:04",
+   "cluster": "X-6",
+   "payload": {
+    "ripple": "match_existing",
+    "to": "context_for",
+    "result": "ok"
+   }
+  },
+  {
+   "id": "EV-81",
+   "class": "ripple.return",
+   "at": "13:41:47",
+   "cluster": "X-9",
+   "payload": {
+    "ripple": "adjudicate",
+    "to": "dump",
+    "result": "ok"
+   }
+  },
+  {
+   "id": "EV-67",
+   "class": "report_landed",
+   "at": "13:40:10",
+   "cluster": "X-6",
+   "payload": {
+    "report": "0073-report-curation-proposals",
+    "task": "0073-task"
+   }
+  },
+  {
+   "id": "EV-82",
+   "class": "ripple.return",
+   "at": "13:32:03",
+   "cluster": "X-10",
+   "payload": {
+    "ripple": "open_region",
+    "to": "apply",
+    "result": "ok"
+   }
+  },
+  {
+   "id": "EV-83",
+   "class": "ripple.return",
+   "at": "13:26:28",
+   "cluster": "X-3",
+   "payload": {
+    "ripple": "link",
+    "to": "context_for",
+    "result": "ok"
+   }
+  },
+  {
+   "id": "EV-84",
+   "class": "ripple.return",
+   "at": "13:19:50",
+   "cluster": "X-7",
+   "payload": {
+    "ripple": "adjudicate",
+    "to": "context_for",
+    "result": "ok"
+   }
+  },
+  {
+   "id": "EV-38",
+   "class": "transaction_committed",
+   "at": "13:16:29",
+   "cluster": "X-10",
+   "payload": {
+    "transaction": "tx-4097",
+    "writes": "Q-11",
+    "by": "curation"
+   }
+  },
+  {
+   "id": "EV-85",
+   "class": "ripple.return",
+   "at": "13:13:45",
+   "cluster": "X-7",
+   "payload": {
+    "ripple": "apply",
+    "to": "apply",
+    "result": "ok"
+   }
+  },
+  {
+   "id": "EV-29",
+   "class": "dump.processed",
+   "at": "13:13:25",
+   "cite": "8e4fca10#95",
+   "cluster": "X-2",
+   "payload": {
+    "dump": "39",
+    "applied": "1",
+    "elsewhere": "0"
+   }
+  },
+  {
+   "id": "EV-18",
+   "class": "dump.fragmented",
+   "at": "13:12:44",
+   "cite": "8e4fca10#95",
+   "cluster": "X-2",
+   "payload": {
+    "dump": "39",
+    "atoms": "2"
+   }
+  },
+  {
+   "id": "EV-6",
+   "class": "dump.received",
+   "at": "13:12:40",
+   "cite": "8e4fca10#95",
+   "cluster": "X-2",
+   "payload": {
+    "dump": "39",
+    "notes": "1",
+    "chars": "96",
+    "from": "X-2"
+   }
+  },
+  {
+   "id": "EV-86",
+   "class": "ripple.return",
+   "at": "13:08:32",
+   "cluster": "X-3",
+   "payload": {
+    "ripple": "author",
+    "to": "apply",
+    "result": "no_change"
+   }
+  },
+  {
+   "id": "EV-39",
+   "class": "transaction_committed",
+   "at": "13:05:02",
+   "cluster": "X-10",
+   "payload": {
+    "transaction": "tx-4096",
+    "writes": "Q-15",
+    "by": "curation"
+   }
+  },
+  {
+   "id": "EV-87",
+   "class": "ripple.return",
+   "at": "13:05:02",
+   "cluster": "X-7",
+   "payload": {
+    "ripple": "open_region",
+    "to": "typed_unit",
+    "result": "ok"
+   }
+  },
+  {
+   "id": "EV-62",
+   "class": "cluster_opened",
+   "at": "13:02:40",
+   "cluster": "X-1",
+   "payload": {
+    "cluster": "X-1"
+   }
+  },
+  {
+   "id": "EV-88",
+   "class": "ripple.return",
+   "at": "13:00:02",
+   "cluster": "X-2",
+   "payload": {
+    "ripple": "open_region",
+    "to": "typed_unit",
+    "result": "ok"
+   }
+  },
+  {
+   "id": "EV-89",
+   "class": "ripple.return",
+   "at": "12:53:34",
+   "cluster": "X-10",
+   "payload": {
+    "ripple": "apply",
+    "to": "context_for",
+    "result": "no_change"
+   }
+  },
+  {
+   "id": "EV-40",
+   "class": "transaction_committed",
+   "at": "12:52:48",
+   "cluster": "X-9",
+   "payload": {
+    "transaction": "tx-4095",
+    "writes": "Q-2, T-9",
+    "by": "curation"
+   }
+  },
+  {
+   "id": "EV-30",
+   "class": "dump.processed",
+   "at": "12:51:37",
+   "cite": "8e4fca10#94",
+   "cluster": "X-1",
+   "payload": {
+    "dump": "38",
+    "applied": "3",
+    "elsewhere": "1"
+   }
+  },
+  {
+   "id": "EV-19",
+   "class": "dump.fragmented",
+   "at": "12:51:07",
+   "cite": "8e4fca10#94",
+   "cluster": "X-1",
+   "payload": {
+    "dump": "38",
+    "atoms": "3"
+   }
+  },
+  {
+   "id": "EV-7",
+   "class": "dump.received",
+   "at": "12:51:03",
+   "cite": "8e4fca10#94",
+   "cluster": "X-1",
+   "payload": {
+    "dump": "38",
+    "notes": "3",
+    "chars": "330",
+    "from": "X-1"
+   }
+  },
+  {
+   "id": "EV-90",
+   "class": "ripple.return",
+   "at": "12:47:04",
+   "cluster": "X-6",
+   "payload": {
+    "ripple": "apply",
+    "to": "typed_unit",
+    "result": "error"
+   }
+  },
+  {
+   "id": "EV-63",
+   "class": "cluster_opened",
+   "at": "12:44:19",
+   "cluster": "X-6",
+   "payload": {
+    "cluster": "X-6"
+   }
+  },
+  {
+   "id": "EV-91",
+   "class": "ripple.return",
+   "at": "12:40:28",
+   "cluster": "X-3",
+   "payload": {
+    "ripple": "open_region",
+    "to": "typed_unit",
+    "result": "ok"
+   }
+  },
+  {
+   "id": "EV-92",
+   "class": "ripple.return",
+   "at": "12:32:26",
+   "cluster": "X-1",
+   "payload": {
+    "ripple": "match_existing",
+    "to": "typed_unit",
+    "result": "no_change"
+   }
+  },
+  {
+   "id": "EV-41",
+   "class": "transaction_committed",
+   "at": "12:28:14",
+   "cluster": "X-2",
+   "payload": {
+    "transaction": "tx-4094",
+    "writes": "Q-11",
+    "by": "adjudicate"
+   }
+  },
+  {
+   "id": "EV-93",
+   "class": "ripple.return",
+   "at": "12:26:35",
+   "cluster": "X-6",
+   "payload": {
+    "ripple": "classify",
+    "to": "context_for",
+    "result": "no_change"
+   }
+  },
+  {
+   "id": "EV-31",
+   "class": "dump.processed",
+   "at": "12:20:39",
+   "cite": "8e4fca10#93",
+   "cluster": "X-10",
+   "payload": {
+    "dump": "37",
+    "applied": "1",
+    "elsewhere": "1"
+   }
+  },
+  {
+   "id": "EV-20",
+   "class": "dump.fragmented",
+   "at": "12:20:21",
+   "cite": "8e4fca10#93",
+   "cluster": "X-10",
+   "payload": {
+    "dump": "37",
+    "atoms": "1"
+   }
+  },
+  {
+   "id": "EV-8",
+   "class": "dump.received",
+   "at": "12:20:17",
+   "cite": "8e4fca10#93",
+   "cluster": "X-10",
+   "payload": {
+    "dump": "37",
+    "notes": "1",
+    "chars": "57",
+    "from": "X-10"
+   }
+  },
+  {
+   "id": "EV-94",
+   "class": "ripple.return",
+   "at": "12:17:45",
+   "cluster": "X-7",
+   "payload": {
+    "ripple": "fragment",
+    "to": "dump",
+    "result": "ok"
+   }
+  },
+  {
+   "id": "EV-42",
+   "class": "transaction_committed",
+   "at": "12:13:45",
+   "cluster": "X-3",
+   "payload": {
+    "transaction": "tx-4093",
+    "writes": "T-4, M-2",
+    "by": "curation"
+   }
+  },
+  {
+   "id": "EV-95",
+   "class": "ripple.return",
+   "at": "12:10:28",
+   "cluster": "X-9",
+   "payload": {
+    "ripple": "author",
+    "to": "typed_unit",
+    "result": "error"
+   }
+  },
+  {
+   "id": "EV-57",
+   "class": "schedule",
+   "at": "12:10:00",
+   "payload": {
+    "every": "idle 10m"
+   }
+  },
+  {
+   "id": "EV-96",
+   "class": "ripple.return",
+   "at": "12:02:52",
+   "cluster": "X-3",
+   "payload": {
+    "ripple": "author",
+    "to": "apply",
+    "result": "ok"
+   }
+  },
+  {
+   "id": "EV-66",
+   "class": "push",
+   "at": "12:01:44",
+   "cluster": "X-1",
+   "payload": {
+    "to": "voice",
+    "what": "Q-2 closed"
+   }
+  },
+  {
+   "id": "EV-97",
+   "class": "ripple.return",
+   "at": "11:57:45",
+   "cluster": "X-3",
+   "payload": {
+    "ripple": "link",
+    "to": "dump",
+    "result": "no_change"
+   }
+  },
+  {
+   "id": "EV-98",
+   "class": "ripple.return",
+   "at": "11:52:25",
+   "cluster": "X-2",
+   "payload": {
+    "ripple": "link",
+    "to": "context_for",
+    "result": "no_change"
+   }
+  },
+  {
+   "id": "EV-43",
+   "class": "transaction_committed",
+   "at": "11:47:07",
+   "cluster": "X-10",
+   "payload": {
+    "transaction": "tx-4092",
+    "writes": "IS-12",
+    "by": "curation"
+   }
+  },
+  {
+   "id": "EV-68",
+   "class": "report_landed",
+   "at": "11:44:27",
+   "cluster": "X-2",
+   "payload": {
+    "report": "0181-report-build-audit-partials",
+    "task": "0181-task"
+   }
+  },
+  {
+   "id": "EV-99",
+   "class": "ripple.return",
+   "at": "11:43:17",
+   "cluster": "X-2",
+   "payload": {
+    "ripple": "link",
+    "to": "typed_unit",
+    "result": "no_change"
+   }
+  },
+  {
+   "id": "EV-100",
+   "class": "ripple.return",
+   "at": "11:35:55",
+   "cluster": "X-3",
+   "payload": {
+    "ripple": "link",
+    "to": "dump",
+    "result": "ok"
+   }
+  },
+  {
+   "id": "EV-101",
+   "class": "ripple.return",
+   "at": "11:30:55",
+   "cluster": "X-9",
+   "payload": {
+    "ripple": "apply",
+    "to": "typed_unit",
+    "result": "error"
+   }
+  },
+  {
+   "id": "EV-44",
+   "class": "transaction_committed",
+   "at": "11:23:38",
+   "cluster": "X-9",
+   "payload": {
+    "transaction": "tx-4091",
+    "writes": "DEC-12",
+    "by": "curation"
+   }
+  },
+  {
+   "id": "EV-102",
+   "class": "ripple.return",
+   "at": "11:23:10",
+   "cluster": "X-7",
+   "payload": {
+    "ripple": "link",
+    "to": "dump",
+    "result": "ok"
+   }
+  },
+  {
+   "id": "EV-26",
+   "class": "dump.processed",
+   "at": "11:21:14",
+   "cite": "60f0380d#12",
+   "cluster": "X-6",
+   "payload": {
+    "dump": "36",
+    "applied": "2",
+    "elsewhere": "0"
+   }
+  },
+  {
+   "id": "EV-27",
+   "class": "dump.processed",
+   "at": "11:20:52",
+   "cite": "60f0380d#11",
+   "cluster": "X-6",
+   "payload": {
+    "dump": "35",
+    "applied": "1",
+    "elsewhere": "1"
+   }
+  },
+  {
+   "id": "EV-15",
+   "class": "dump.fragmented",
+   "at": "11:20:34",
+   "cite": "60f0380d#12",
+   "cluster": "X-6",
+   "payload": {
+    "dump": "36",
+    "atoms": "2"
+   }
+  },
+  {
+   "id": "EV-16",
+   "class": "dump.fragmented",
+   "at": "11:20:33",
+   "cite": "60f0380d#11",
+   "cluster": "X-6",
+   "payload": {
+    "dump": "35",
+    "atoms": "1"
+   }
+  },
+  {
+   "id": "EV-3",
+   "class": "dump.received",
+   "at": "11:20:30",
+   "cite": "60f0380d#12",
+   "cluster": "X-6",
+   "payload": {
+    "dump": "36",
+    "notes": "2",
+    "chars": "188",
+    "from": "X-6"
+   }
+  },
+  {
+   "id": "EV-4",
+   "class": "dump.received",
+   "at": "11:20:29",
+   "cite": "60f0380d#11",
+   "cluster": "X-6",
+   "payload": {
+    "dump": "35",
+    "notes": "1",
+    "chars": "9",
+    "from": "X-6"
+   }
+  },
+  {
+   "id": "EV-103",
+   "class": "ripple.return",
+   "at": "11:15:56",
+   "cluster": "X-2",
+   "payload": {
+    "ripple": "classify",
+    "to": "typed_unit",
+    "result": "error"
+   }
+  },
+  {
+   "id": "EV-104",
+   "class": "ripple.return",
+   "at": "11:07:19",
+   "cluster": "X-10",
+   "payload": {
+    "ripple": "open_region",
+    "to": "typed_unit",
+    "result": "ok"
+   }
+  },
+  {
+   "id": "EV-64",
+   "class": "cluster_opened",
+   "at": "11:05:58",
+   "cluster": "X-7",
+   "payload": {
+    "cluster": "X-7"
+   }
+  },
+  {
+   "id": "EV-45",
+   "class": "transaction_committed",
+   "at": "11:04:32",
+   "cluster": "X-1",
+   "payload": {
+    "transaction": "tx-4090",
+    "writes": "T-4, M-2",
+    "by": "dump"
+   }
+  },
+  {
+   "id": "EV-105",
+   "class": "ripple.return",
+   "at": "11:04:17",
+   "cluster": "X-9",
+   "payload": {
+    "ripple": "fragment",
+    "to": "apply",
+    "result": "no_change"
+   }
+  },
+  {
+   "id": "EV-32",
+   "class": "dump.processed",
+   "at": "10:59:06",
+   "cite": "60f0380d#10",
+   "cluster": "X-7",
+   "payload": {
+    "dump": "34",
+    "applied": "2",
+    "elsewhere": "0"
+   }
+  },
+  {
+   "id": "EV-21",
+   "class": "dump.fragmented",
+   "at": "10:58:48",
+   "cite": "60f0380d#10",
+   "cluster": "X-7",
+   "payload": {
+    "dump": "34",
+    "atoms": "3"
+   }
+  },
+  {
+   "id": "EV-9",
+   "class": "dump.received",
+   "at": "10:58:44",
+   "cite": "60f0380d#10",
+   "cluster": "X-7",
+   "payload": {
+    "dump": "34",
+    "notes": "2",
+    "chars": "142",
+    "from": "X-7"
+   }
+  },
+  {
+   "id": "EV-106",
+   "class": "ripple.return",
+   "at": "10:55:55",
+   "cluster": "X-3",
+   "payload": {
+    "ripple": "open_region",
+    "to": "context_for",
+    "result": "ok"
+   }
+  },
+  {
+   "id": "EV-107",
+   "class": "ripple.return",
+   "at": "10:52:53",
+   "cluster": "X-2",
+   "payload": {
+    "ripple": "match_existing",
+    "to": "apply",
+    "result": "no_change"
+   }
+  },
+  {
+   "id": "EV-108",
+   "class": "ripple.return",
+   "at": "10:50:01",
+   "cluster": "X-7",
+   "payload": {
+    "ripple": "fragment",
+    "to": "dump",
+    "result": "ok"
+   }
+  },
+  {
+   "id": "EV-109",
+   "class": "ripple.return",
+   "at": "10:44:29",
+   "cluster": "X-3",
+   "payload": {
+    "ripple": "apply",
+    "to": "apply",
+    "result": "ok"
+   }
+  },
+  {
+   "id": "EV-110",
+   "class": "ripple.return",
+   "at": "10:39:53",
+   "cluster": "X-3",
+   "payload": {
+    "ripple": "apply",
+    "to": "typed_unit",
+    "result": "ok"
+   }
+  },
+  {
+   "id": "EV-111",
+   "class": "ripple.return",
+   "at": "10:37:38",
+   "cluster": "X-1",
+   "payload": {
+    "ripple": "classify",
+    "to": "typed_unit",
+    "result": "ok"
+   }
+  },
+  {
+   "id": "EV-46",
+   "class": "transaction_committed",
+   "at": "10:34:29",
+   "cluster": "X-3",
+   "payload": {
+    "transaction": "tx-4089",
+    "writes": "Q-11",
+    "by": "author"
+   }
+  },
+  {
+   "id": "EV-33",
+   "class": "dump.processed",
+   "at": "10:31:46",
+   "cite": "8e4fca10#92",
+   "cluster": "X-1",
+   "payload": {
+    "dump": "33",
+    "applied": "4",
+    "elsewhere": "1"
+   }
+  },
+  {
+   "id": "EV-22",
+   "class": "dump.fragmented",
+   "at": "10:31:13",
+   "cite": "8e4fca10#92",
+   "cluster": "X-1",
+   "payload": {
+    "dump": "33",
+    "atoms": "5"
+   }
+  },
+  {
+   "id": "EV-10",
+   "class": "dump.received",
+   "at": "10:31:09",
+   "cite": "8e4fca10#92",
+   "cluster": "X-1",
+   "payload": {
+    "dump": "33",
+    "notes": "4",
+    "chars": "611",
+    "from": "X-1"
+   }
+  },
+  {
+   "id": "EV-70",
+   "class": "nag",
+   "at": "10:15:00",
+   "cluster": "X-6",
+   "payload": {
+    "about": "Q-7",
+    "waiting": "2d"
+   }
+  },
+  {
+   "id": "EV-47",
+   "class": "transaction_committed",
+   "at": "10:10:25",
+   "cluster": "X-10",
+   "payload": {
+    "transaction": "tx-4088",
+    "writes": "Q-3",
+    "by": "curation"
+   }
+  },
+  {
+   "id": "EV-69",
+   "class": "report_landed",
+   "at": "10:02:05",
+   "cluster": "X-1",
+   "payload": {
+    "report": "0179-report-intake-backlog",
+    "task": "0179-task"
+   }
+  },
+  {
+   "id": "EV-48",
+   "class": "transaction_committed",
+   "at": "09:46:37",
+   "cluster": "X-7",
+   "payload": {
+    "transaction": "tx-4087",
+    "writes": "IS-12",
+    "by": "author"
+   }
+  },
+  {
+   "id": "EV-28",
+   "class": "dump.processed",
+   "at": "09:40:47",
+   "cite": "8e4fca10#64",
+   "cluster": "X-3",
+   "payload": {
+    "dump": "32",
+    "applied": "2",
+    "elsewhere": "1"
+   }
+  },
+  {
+   "id": "EV-17",
+   "class": "dump.fragmented",
+   "at": "09:40:16",
+   "cite": "8e4fca10#64",
+   "cluster": "X-3",
+   "payload": {
+    "dump": "32",
+    "atoms": "2"
+   }
+  },
+  {
+   "id": "EV-5",
+   "class": "dump.received",
+   "at": "09:40:12",
+   "cite": "8e4fca10#64",
+   "cluster": "X-3",
+   "payload": {
+    "dump": "32",
+    "notes": "2",
+    "chars": "240",
+    "from": "X-3"
+   }
+  },
+  {
+   "id": "EV-65",
+   "class": "cluster_opened",
+   "at": "09:30:12",
+   "cluster": "X-3",
+   "payload": {
+    "cluster": "X-3"
+   }
+  },
+  {
+   "id": "EV-49",
+   "class": "transaction_committed",
+   "at": "09:29:12",
+   "cluster": "X-6",
+   "payload": {
+    "transaction": "tx-4086",
+    "writes": "Q-15",
+    "by": "dump"
+   }
+  },
+  {
+   "id": "EV-34",
+   "class": "dump.processed",
+   "at": "09:13:21",
+   "cite": "7a2bb4c2#406",
+   "cluster": "X-9",
+   "payload": {
+    "dump": "31",
+    "applied": "1",
+    "elsewhere": "1"
+   }
+  },
+  {
+   "id": "EV-23",
+   "class": "dump.fragmented",
+   "at": "09:12:59",
+   "cite": "7a2bb4c2#406",
+   "cluster": "X-9",
+   "payload": {
+    "dump": "31",
+    "atoms": "2"
+   }
+  },
+  {
+   "id": "EV-11",
+   "class": "dump.received",
+   "at": "09:12:55",
+   "cite": "7a2bb4c2#406",
+   "cluster": "X-9",
+   "payload": {
+    "dump": "31",
+    "notes": "1",
+    "chars": "78",
+    "from": "X-9"
+   }
+  },
+  {
+   "id": "EV-50",
+   "class": "transaction_committed",
+   "at": "09:08:24",
+   "cluster": "X-7",
+   "payload": {
+    "transaction": "tx-4085",
+    "writes": "DEC-31",
+    "by": "dump"
+   }
+  },
+  {
+   "id": "EV-51",
+   "class": "transaction_committed",
+   "at": "08:49:51",
+   "cluster": "X-10",
+   "payload": {
+    "transaction": "tx-4084",
+    "writes": "Q-2, T-9",
+    "by": "author"
+   }
+  },
+  {
+   "id": "EV-24",
+   "class": "dump.fragmented",
+   "at": "08:47:34",
+   "cite": "8e4fca10#91",
+   "cluster": "X-1",
+   "payload": {
+    "dump": "30",
+    "atoms": "3"
+   }
+  },
+  {
+   "id": "EV-12",
+   "class": "dump.received",
+   "at": "08:47:30",
+   "cite": "8e4fca10#91",
+   "cluster": "X-1",
+   "payload": {
+    "dump": "30",
+    "notes": "2",
+    "chars": "203",
+    "from": "X-1"
+   }
+  },
+  {
+   "id": "EV-52",
+   "class": "transaction_committed",
+   "at": "08:26:17",
+   "cluster": "X-7",
+   "payload": {
+    "transaction": "tx-4083",
+    "writes": "Q-15",
+    "by": "curation"
+   }
+  },
+  {
+   "id": "EV-53",
+   "class": "transaction_committed",
+   "at": "07:56:21",
+   "cluster": "X-10",
+   "payload": {
+    "transaction": "tx-4082",
+    "writes": "T-4, M-2",
+    "by": "author"
+   }
+  },
+  {
+   "id": "EV-54",
+   "class": "transaction_committed",
+   "at": "07:44:25",
+   "cluster": "X-7",
+   "payload": {
+    "transaction": "tx-4081",
+    "writes": "T-4, M-2",
+    "by": "author"
+   }
+  },
+  {
+   "id": "EV-55",
+   "class": "transaction_committed",
+   "at": "07:14:31",
+   "cluster": "X-10",
+   "payload": {
+    "transaction": "tx-4080",
+    "writes": "DEC-31",
+    "by": "author"
+   }
+  },
+  {
+   "id": "EV-56",
+   "class": "transaction_committed",
+   "at": "06:47:43",
+   "cluster": "X-2",
+   "payload": {
+    "transaction": "tx-4079",
+    "writes": "T-4, M-2",
+    "by": "adjudicate"
+   }
+  },
+  {
+   "id": "EV-58",
+   "class": "schedule",
+   "at": "02:10:00",
+   "payload": {
+    "every": "idle 10m"
+   }
+  },
+  {
+   "id": "EV-59",
+   "class": "schedule",
+   "at": "23:40:12",
+   "day": "yesterday",
+   "cluster": "X-9",
+   "payload": {
+    "every": "idle 10m"
+   }
+  }
+ ],
+ "stats": {
+  "dump": {
+   "today": 12,
+   "week": 61,
+   "median_s": 41,
+   "cost_each": 0.21,
+   "running": 1,
+   "last": "2s",
+   "fires": {
+    "0": [
+     {
+      "at": "14:31:04",
+      "cite": "8e4fca10#97",
+      "cluster": "X-1",
+      "run": "r-9c2e",
+      "state": "running"
+     },
+     {
+      "at": "14:02:11",
+      "cite": "8e4fca10#96",
+      "cluster": "X-1",
+      "run": "r-8f3a",
+      "elapsed": "41s",
+      "state": "done"
+     },
+     {
+      "at": "13:12:40",
+      "cite": "8e4fca10#95",
+      "cluster": "X-2",
+      "state": "done",
+      "elapsed": "30s"
+     },
+     {
+      "at": "12:51:03",
+      "cite": "8e4fca10#94",
+      "cluster": "X-1",
+      "state": "done",
+      "elapsed": "40s"
+     },
+     {
+      "at": "12:20:17",
+      "cite": "8e4fca10#93",
+      "cluster": "X-10",
+      "state": "done",
+      "elapsed": "10s"
+     },
+     {
+      "at": "11:20:30",
+      "cite": "60f0380d#12",
+      "cluster": "X-6",
+      "run": "r-7a10",
+      "elapsed": "12s",
+      "state": "done"
+     },
+     {
+      "at": "11:20:29",
+      "cite": "60f0380d#11",
+      "cluster": "X-6",
+      "state": "refused"
+     },
+     {
+      "at": "10:58:44",
+      "cite": "60f0380d#10",
+      "cluster": "X-7",
+      "state": "done",
+      "elapsed": "23s"
+     },
+     {
+      "at": "10:31:09",
+      "cite": "8e4fca10#92",
+      "cluster": "X-1",
+      "state": "done",
+      "elapsed": "12s"
+     },
+     {
+      "at": "09:40:12",
+      "cite": "8e4fca10#64",
+      "cluster": "X-3",
+      "run": "r-3c77",
+      "elapsed": "9s",
+      "state": "done"
+     },
+     {
+      "at": "09:12:55",
+      "cite": "7a2bb4c2#406",
+      "cluster": "X-9",
+      "state": "done",
+      "elapsed": "13s"
+     },
+     {
+      "at": "08:47:30",
+      "cite": "8e4fca10#91",
+      "cluster": "X-1",
+      "state": "done",
+      "elapsed": "9s"
+     }
+    ]
+   }
+  },
+  "fragment": {
+   "today": 12,
+   "week": 61,
+   "median_s": 4.1,
+   "cost_each": 0.02,
+   "last": "2s"
+  },
+  "apply": {
+   "today": 71,
+   "week": 402,
+   "median_s": 5.2
+  },
+  "context_for": {
+   "today": 71,
+   "week": 402,
+   "median_s": 3.0
+  },
+  "open_context": {
+   "today": 71,
+   "week": 402,
+   "median_s": 2.3
+  },
+  "open_region": {
+   "today": 71,
+   "week": 402,
+   "median_s": 0.9,
+   "last": "2m",
+   "drift": "3% this week · 2 of 71 disagreed at p ≥ 0.20",
+   "recent": [
+    {
+     "run": "r-8f3a",
+     "at": "14:02",
+     "cluster": "X-1",
+     "cite": "8e4fca10#96",
+     "line": "opened R-4 R-11 of 9 · 2 passes",
+     "tail": "haiku 0.91 ⇄ jev 0.87 · 0.9s",
+     "state": "done"
+    },
+    {
+     "run": "r-7a10",
+     "at": "13:40",
+     "cluster": "X-6",
+     "cite": "60f0380d#12",
+     "line": "opened R-1 of 6 · 1 pass",
+     "tail": "haiku 0.76 ⇄ jev 0.81 · 0.8s",
+     "state": "done"
+    }
+   ]
+  },
+  "open_node": {
+   "today": 71,
+   "week": 402,
+   "median_s": 0.8
+  },
+  "follow_edge": {
+   "today": 71,
+   "week": 402,
+   "median_s": 0.7
+  },
+  "select_context": {
+   "today": 71,
+   "week": 402,
+   "median_s": 0.9
+  },
+  "match_existing": {
+   "today": 71,
+   "week": 402,
+   "median_s": 0.8
+  },
+  "judgment_gate": {
+   "today": 71,
+   "week": 402,
+   "median_s": 0.7
+  },
+  "adjudicate": {
+   "today": 9,
+   "week": 46,
+   "median_s": 3.2,
+   "cost_each": 0.034,
+   "last": "2m",
+   "used_week": {
+    "close": 31,
+    "no_change": 12,
+    "pin": 2,
+    "retract": 0,
+    "supersede": 0
+   },
+   "recent": [
+    {
+     "run": "r-8f3a",
+     "at": "14:02",
+     "cluster": "X-1",
+     "cite": "8e4fca10#96",
+     "line": "close Q-2 → closed",
+     "tail": "3 turns · 3.1s · $0.034",
+     "state": "done"
+    },
+    {
+     "run": "r-7a10",
+     "at": "13:40",
+     "cluster": "X-6",
+     "cite": "60f0380d#12",
+     "line": "no_change already_reflected",
+     "tail": "1 turn · 1.9s · $0.021",
+     "state": "done"
+    },
+    {
+     "run": "r-61d0",
+     "at": "09:12",
+     "cluster": "X-9",
+     "cite": "7a2bb4c2#407",
+     "line": "max turns reached",
+     "tail": "4 turns · 2m · $0.19",
+     "state": "failed"
+    }
+   ]
+  },
+  "typed_unit": {
+   "today": 62,
+   "week": 356,
+   "median_s": 7.0
+  },
+  "classify": {
+   "today": 62,
+   "week": 356,
+   "median_s": 0.9
+  },
+  "author": {
+   "today": 54,
+   "week": 301,
+   "median_s": 5.0,
+   "cost_each": 0.04
+  },
+  "link": {
+   "today": 54,
+   "week": 301,
+   "median_s": 0.8
+  },
+  "consequence": {
+   "today": 8,
+   "week": 44,
+   "median_s": 1.1,
+   "cost_each": 0.01,
+   "last": "14m",
+   "fires": {
+    "0": [
+     {
+      "at": "14:02:53",
+      "cite": "",
+      "cluster": "X-7",
+      "state": "done",
+      "elapsed": "5s",
+      "run": "r-5b07"
+     },
+     {
+      "at": "13:57:45",
+      "cite": "",
+      "cluster": "X-10",
+      "state": "done",
+      "elapsed": "4s"
+     },
+     {
+      "at": "13:48:02",
+      "cite": "",
+      "cluster": "X-9",
+      "state": "done",
+      "elapsed": "7s"
+     },
+     {
+      "at": "13:16:29",
+      "cite": "",
+      "cluster": "X-10",
+      "state": "done",
+      "elapsed": "9s"
+     },
+     {
+      "at": "13:05:02",
+      "cite": "",
+      "cluster": "X-10",
+      "state": "done",
+      "elapsed": "6s"
+     },
+     {
+      "at": "12:52:48",
+      "cite": "",
+      "cluster": "X-9",
+      "state": "done",
+      "elapsed": "8s"
+     },
+     {
+      "at": "12:28:14",
+      "cite": "",
+      "cluster": "X-2",
+      "state": "done",
+      "elapsed": "9s"
+     },
+     {
+      "at": "12:13:45",
+      "cite": "",
+      "cluster": "X-3",
+      "state": "done",
+      "elapsed": "3s"
+     },
+     {
+      "at": "11:47:07",
+      "cite": "",
+      "cluster": "X-10",
+      "state": "done",
+      "elapsed": "5s"
+     },
+     {
+      "at": "11:23:38",
+      "cite": "",
+      "cluster": "X-9",
+      "state": "done",
+      "elapsed": "4s"
+     },
+     {
+      "at": "11:04:32",
+      "cite": "",
+      "cluster": "X-1",
+      "state": "done",
+      "elapsed": "8s"
+     },
+     {
+      "at": "10:34:29",
+      "cite": "",
+      "cluster": "X-3",
+      "state": "done",
+      "elapsed": "1s"
+     },
+     {
+      "at": "10:10:25",
+      "cite": "",
+      "cluster": "X-10",
+      "state": "done",
+      "elapsed": "5s"
+     },
+     {
+      "at": "09:46:37",
+      "cite": "",
+      "cluster": "X-7",
+      "state": "done",
+      "elapsed": "9s"
+     },
+     {
+      "at": "09:29:12",
+      "cite": "",
+      "cluster": "X-6",
+      "state": "done",
+      "elapsed": "5s"
+     },
+     {
+      "at": "09:08:24",
+      "cite": "",
+      "cluster": "X-7",
+      "state": "done",
+      "elapsed": "3s"
+     },
+     {
+      "at": "08:49:51",
+      "cite": "",
+      "cluster": "X-10",
+      "state": "done",
+      "elapsed": "8s"
+     },
+     {
+      "at": "08:26:17",
+      "cite": "",
+      "cluster": "X-7",
+      "state": "done",
+      "elapsed": "8s"
+     },
+     {
+      "at": "07:56:21",
+      "cite": "",
+      "cluster": "X-10",
+      "state": "done",
+      "elapsed": "4s"
+     },
+     {
+      "at": "07:44:25",
+      "cite": "",
+      "cluster": "X-7",
+      "state": "done",
+      "elapsed": "4s"
+     },
+     {
+      "at": "07:14:31",
+      "cite": "",
+      "cluster": "X-10",
+      "state": "done",
+      "elapsed": "5s"
+     },
+     {
+      "at": "06:47:43",
+      "cite": "",
+      "cluster": "X-2",
+      "state": "done",
+      "elapsed": "7s"
+     }
+    ]
+   }
+  },
+  "curation": {
+   "today": 14,
+   "week": 80,
+   "median_s": 9,
+   "cost_each": 0.11,
+   "last": "14m",
+   "fires": {
+    "0": [
+     {
+      "at": "14:02:53",
+      "cite": "",
+      "cluster": "X-7",
+      "state": "done"
+     },
+     {
+      "at": "13:57:45",
+      "cite": "",
+      "cluster": "X-10",
+      "state": "refused"
+     },
+     {
+      "at": "13:48:02",
+      "cite": "",
+      "cluster": "X-9",
+      "state": "done",
+      "run": "r-44c1",
+      "elapsed": "14s"
+     },
+     {
+      "at": "13:16:29",
+      "cite": "",
+      "cluster": "X-10",
+      "state": "done"
+     },
+     {
+      "at": "13:05:02",
+      "cite": "",
+      "cluster": "X-10",
+      "state": "refused"
+     },
+     {
+      "at": "12:52:48",
+      "cite": "",
+      "cluster": "X-9",
+      "state": "refused"
+     },
+     {
+      "at": "12:28:14",
+      "cite": "",
+      "cluster": "X-2",
+      "state": "done"
+     },
+     {
+      "at": "12:13:45",
+      "cite": "",
+      "cluster": "X-3",
+      "state": "refused"
+     },
+     {
+      "at": "11:47:07",
+      "cite": "",
+      "cluster": "X-10",
+      "state": "refused"
+     },
+     {
+      "at": "11:23:38",
+      "cite": "",
+      "cluster": "X-9",
+      "state": "done"
+     },
+     {
+      "at": "11:04:32",
+      "cite": "",
+      "cluster": "X-1",
+      "state": "refused"
+     },
+     {
+      "at": "10:34:29",
+      "cite": "",
+      "cluster": "X-3",
+      "state": "refused"
+     },
+     {
+      "at": "10:10:25",
+      "cite": "",
+      "cluster": "X-10",
+      "state": "done"
+     },
+     {
+      "at": "09:46:37",
+      "cite": "",
+      "cluster": "X-7",
+      "state": "refused"
+     },
+     {
+      "at": "09:29:12",
+      "cite": "",
+      "cluster": "X-6",
+      "state": "refused"
+     },
+     {
+      "at": "09:08:24",
+      "cite": "",
+      "cluster": "X-7",
+      "state": "done"
+     },
+     {
+      "at": "08:49:51",
+      "cite": "",
+      "cluster": "X-10",
+      "state": "refused"
+     },
+     {
+      "at": "08:26:17",
+      "cite": "",
+      "cluster": "X-7",
+      "state": "refused"
+     },
+     {
+      "at": "07:56:21",
+      "cite": "",
+      "cluster": "X-10",
+      "state": "done"
+     },
+     {
+      "at": "07:44:25",
+      "cite": "",
+      "cluster": "X-7",
+      "state": "refused"
+     },
+     {
+      "at": "07:14:31",
+      "cite": "",
+      "cluster": "X-10",
+      "state": "refused"
+     },
+     {
+      "at": "06:47:43",
+      "cite": "",
+      "cluster": "X-2",
+      "state": "done"
+     }
+    ],
+    "1": [
+     {
+      "at": "23:40:12",
+      "cite": "",
+      "cluster": "X-9",
+      "run": "r-61d0",
+      "state": "done",
+      "elapsed": "2m",
+      "day": "yesterday"
+     },
+     {
+      "at": "12:10:00",
+      "cite": "",
+      "cluster": "",
+      "state": "done",
+      "elapsed": "11s"
+     },
+     {
+      "at": "02:10:00",
+      "cite": "",
+      "cluster": "",
+      "state": "done",
+      "elapsed": "11s"
+     }
+    ]
+   }
+  },
+  "edge_drawer": {
+   "today": 14,
+   "week": 80,
+   "median_s": 4.2,
+   "cost_each": 0.05
+  },
+  "valuer": {
+   "today": 14,
+   "week": 80,
+   "median_s": 3.9,
+   "cost_each": 0.05
+  },
+  "voice": {
+   "today": 6,
+   "week": 31,
+   "median_s": 0.3,
+   "failed_last": "1h",
+   "fires": {
+    "0": [
+     {
+      "at": "14:12:31",
+      "cite": "",
+      "cluster": "X-1",
+      "state": "done",
+      "elapsed": "3s"
+     },
+     {
+      "at": "13:55:02",
+      "cite": "",
+      "cluster": "X-2",
+      "state": "done",
+      "elapsed": "3s"
+     },
+     {
+      "at": "13:02:40",
+      "cite": "",
+      "cluster": "X-1",
+      "state": "failed",
+      "elapsed": "3s",
+      "run": "r-0f1d"
+     },
+     {
+      "at": "12:44:19",
+      "cite": "",
+      "cluster": "X-6",
+      "state": "done",
+      "elapsed": "3s"
+     },
+     {
+      "at": "11:05:58",
+      "cite": "",
+      "cluster": "X-7",
+      "state": "done",
+      "elapsed": "3s"
+     },
+     {
+      "at": "09:30:12",
+      "cite": "",
+      "cluster": "X-3",
+      "state": "done",
+      "elapsed": "3s"
+     }
+    ],
+    "1": [
+     {
+      "at": "12:01:44",
+      "cite": "",
+      "cluster": "X-1",
+      "state": "done",
+      "elapsed": "2s"
+     }
+    ]
+   }
+  },
+  "proposals": {
+   "today": 3,
+   "week": 17,
+   "median_s": 20,
+   "cost_each": 0.09,
+   "last": "2h",
+   "fires": {
+    "0": [
+     {
+      "at": "13:40:10",
+      "cite": "",
+      "cluster": "X-6",
+      "state": "done",
+      "elapsed": "63s",
+      "run": "r-2e90"
+     },
+     {
+      "at": "11:44:27",
+      "cite": "",
+      "cluster": "X-2",
+      "state": "done",
+      "elapsed": "65s"
+     },
+     {
+      "at": "10:02:05",
+      "cite": "",
+      "cluster": "X-1",
+      "state": "done",
+      "elapsed": "61s"
+     }
+    ]
+   }
+  },
+  "proposal_unit": {
+   "today": 12,
+   "week": 66,
+   "median_s": 1.6
+  },
+  "proposal_disposition": {
+   "today": 11,
+   "week": 60,
+   "median_s": 0.8
+  },
+  "task": {
+   "today": 19,
+   "week": 96,
+   "median_s": 2400,
+   "cost_each": 2.1,
+   "running": 2,
+   "parked": 1,
+   "last": "41m"
+  },
+  "worker": {
+   "today": 19,
+   "week": 96,
+   "median_s": 2100,
+   "cost_each": 1.8
+  },
+  "inspector": {
+   "today": 19,
+   "week": 96,
+   "median_s": 180,
+   "cost_each": 0.3
+  },
+  "flag_triage": {
+   "today": 31,
+   "week": 140,
+   "median_s": 0.6
+  },
+  "seed_cluster": {
+   "today": 0,
+   "week": 0,
+   "median_s": 0
+  },
+  "reflex": {
+   "today": 0,
+   "week": 0,
+   "median_s": 0,
+   "fires": {
+    "0": [
+     {
+      "at": "10:15:00",
+      "cite": "",
+      "cluster": "X-6",
+      "state": "done",
+      "elapsed": "1s"
+     }
+    ]
+   }
+  }
+ },
+ "runs": [
+  {
+   "id": "r-9c2e",
+   "ripple": "dump",
+   "cluster": "X-1",
+   "cite": "8e4fca10#97",
+   "started": "14:31:04",
+   "elapsed": "41s",
+   "cost": 0.01,
+   "state": "running",
+   "line": "writing the node for \"Pools is Energy\"",
+   "account": "sam-broomstick",
+   "steps": 2,
+   "tree": [
+    {
+     "step": "load_dump",
+     "kind": "native",
+     "line": "{mode: intake, messages: 1}",
+     "ms": 2
+    },
+    {
+     "step": "fragment",
+     "kind": "type_two",
+     "line": "2 items",
+     "ms": 4100,
+     "model": "sonnet",
+     "turns": 2,
+     "cost": 0.01
+    },
+    {
+     "step": "apply",
+     "kind": "shell",
+     "line": "",
+     "ms": 0,
+     "foreach": 2,
+     "parallel": 4,
+     "state": "running",
+     "items": [
+      {
+       "text": "rename Pools to Energy",
+       "ms": 0,
+       "steps": [
+        {
+         "step": "author",
+         "kind": "type_two",
+         "line": "writing the node for \"Pools is Energy\"",
+         "ms": 0,
+         "model": "sonnet",
+         "state": "running"
+        }
+       ]
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "id": "r-8f3a",
+   "ripple": "dump",
+   "cluster": "X-1",
+   "cite": "8e4fca10#96",
+   "started": "14:02:11",
+   "elapsed": "41s",
+   "cost": 0.21,
+   "state": "done",
+   "line": "6 atoms · 5 here · 1 Broomstick",
+   "account": "sam-broomstick",
+   "steps": 41,
+   "tree": [
+    {
+     "step": "load_dump",
+     "kind": "native",
+     "line": "{mode: intake, messages: 1}",
+     "ms": 2
+    },
+    {
+     "step": "fragment",
+     "kind": "type_two",
+     "line": "6 items",
+     "ms": 4100,
+     "model": "sonnet",
+     "turns": 2,
+     "cost": 0.02
+    },
+    {
+     "step": "collect_items",
+     "kind": "native",
+     "line": "6 units",
+     "ms": 1
+    },
+    {
+     "step": "apply",
+     "kind": "shell",
+     "line": "",
+     "ms": 31000,
+     "foreach": 6,
+     "parallel": 4,
+     "items": [
+      {
+       "text": "rename the Globs header to Cluster",
+       "ms": 8900,
+       "steps": [
+        {
+         "step": "open_region",
+         "kind": "type_one",
+         "line": "opened R-4 R-11 of 9 · 2 passes",
+         "ms": 900,
+         "model": "haiku ⇄ jev",
+         "p": {
+          "haiku": 0.91,
+          "jev": 0.87
+         },
+         "prompt_hash": "9c1a40e2",
+         "input": "unit: rename the Globs header to Cluster\ntop tier: R-1 … R-31 (9 regions)",
+         "output": "{\"open\": {\"R-4\": 0.91, \"R-11\": 0.88}}"
+        },
+        {
+         "step": "open_node",
+         "kind": "type_one",
+         "line": "opened 14 of 31",
+         "ms": 800,
+         "model": "haiku",
+         "p": {
+          "haiku": 0.74
+         }
+        },
+        {
+         "step": "select_context",
+         "kind": "type_one",
+         "line": "full 6 · summary 9 · handle 11 · drop 5",
+         "ms": 900,
+         "model": "haiku ⇄ jev"
+        },
+        {
+         "step": "match_existing",
+         "kind": "type_one",
+         "line": "same → none",
+         "ms": 800,
+         "model": "haiku ⇄ jev",
+         "p": {
+          "haiku": 0.08,
+          "jev": 0.11
+         }
+        },
+        {
+         "step": "judgment_gate",
+         "kind": "type_one",
+         "line": "to_typed",
+         "ms": 700,
+         "model": "haiku ⇄ jev",
+         "p": {
+          "haiku": 0.12,
+          "jev": 0.09
+         }
+        },
+        {
+         "step": "classify",
+         "kind": "type_one",
+         "line": "new_content · decision",
+         "ms": 900,
+         "model": "haiku ⇄ jev",
+         "p": {
+          "haiku": 0.81,
+          "jev": 0.77
+         }
+        },
+        {
+         "step": "author",
+         "kind": "type_two",
+         "line": "DEC-14 \"Globs are Clusters\"",
+         "ms": 5000,
+         "model": "sonnet",
+         "turns": 1,
+         "cost": 0.04,
+         "prompt_hash": "b7e2d019",
+         "input": "unit: rename the Globs header to Cluster\ntype: decision",
+         "output": "create(handle=\"Globs are Clusters\", body=…, cite=8e4fca10#96)",
+         "effects": [
+          {
+           "node": "DEC-14",
+           "rev_after": 1
+          }
+         ]
+        },
+        {
+         "step": "link",
+         "kind": "type_one",
+         "line": "3 of 7 edges",
+         "ms": 800,
+         "model": "haiku ⇄ jev",
+         "p": {
+          "haiku": 0.66,
+          "jev": 0.71
+         }
+        }
+       ]
+      },
+      {
+       "text": "rename Pools to Energy",
+       "ms": 3900,
+       "steps": [
+        {
+         "step": "judgment_gate",
+         "kind": "type_one",
+         "line": "to_typed",
+         "ms": 700,
+         "model": "haiku ⇄ jev",
+         "p": {
+          "haiku": 0.1,
+          "jev": 0.14
+         }
+        },
+        {
+         "step": "author",
+         "kind": "type_two",
+         "line": "DEC-15 \"Pools is Energy\"",
+         "ms": 3000,
+         "model": "sonnet",
+         "turns": 1,
+         "cost": 0.03,
+         "effects": [
+          {
+           "node": "DEC-15",
+           "rev_after": 1
+          }
+         ]
+        }
+       ]
+      },
+      {
+       "text": "add a Ripples menu to configure the ripples",
+       "ms": 12100,
+       "steps": [
+        {
+         "step": "judgment_gate",
+         "kind": "type_one",
+         "line": "to_typed",
+         "ms": 700,
+         "model": "haiku ⇄ jev",
+         "p": {
+          "haiku": 0.21,
+          "jev": 0.19
+         }
+        },
+        {
+         "step": "author",
+         "kind": "type_two",
+         "line": "T-9 \"Build the Ripples menu\"",
+         "ms": 6000,
+         "model": "sonnet",
+         "turns": 2,
+         "cost": 0.06,
+         "effects": [
+          {
+           "node": "T-9",
+           "rev_after": 1
+          }
+         ]
+        }
+       ]
+      },
+      {
+       "text": "the settings items don't indicate which we're scrolled over",
+       "ms": 2200,
+       "steps": [
+        {
+         "step": "judgment_gate",
+         "kind": "type_one",
+         "line": "to_adjudicate",
+         "ms": 700,
+         "model": "haiku ⇄ jev",
+         "p": {
+          "haiku": 0.62,
+          "jev": 0.58
+         }
+        },
+        {
+         "step": "adjudicate",
+         "kind": "type_two",
+         "line": "close Q-2 → closed",
+         "ms": 3100,
+         "model": "sonnet",
+         "turns": 3,
+         "cost": 0.034,
+         "effects": [
+          {
+           "node": "Q-2",
+           "rev_before": 4,
+           "rev_after": 5
+          }
+         ]
+        }
+       ]
+      },
+      {
+       "text": "look at the ripples thread and how the ripples work",
+       "ms": 1100,
+       "steps": [
+        {
+         "step": "classify",
+         "kind": "type_one",
+         "line": "context_only",
+         "ms": 900,
+         "model": "haiku ⇄ jev",
+         "p": {
+          "haiku": 0.84,
+          "jev": 0.8
+         }
+        }
+       ]
+      },
+      {
+       "text": "get familiar with the event bus in blueprints and soup",
+       "ms": 2600,
+       "steps": [
+        {
+         "step": "classify",
+         "kind": "type_one",
+         "line": "new_content · note → Broomstick",
+         "ms": 900,
+         "model": "haiku ⇄ jev",
+         "p": {
+          "haiku": 0.71,
+          "jev": 0.69
+         }
+        }
+       ]
+      }
+     ]
+    },
+    {
+     "step": "cascade",
+     "kind": "native",
+     "line": "T-9 ready",
+     "ms": 3
+    },
+    {
+     "step": "commit",
+     "kind": "native",
+     "line": "6 nodes · rev 212 → 218",
+     "ms": 41,
+     "effects": [
+      {
+       "node": "pool",
+       "rev_before": 212,
+       "rev_after": 218
+      }
+     ]
+    },
+    {
+     "step": "receipt",
+     "kind": "native",
+     "line": "\"6 atoms · 5 here · 1 Broomstick\"",
+     "ms": 1
+    }
+   ]
+  },
+  {
+   "id": "r-5b07",
+   "ripple": "consequence",
+   "cluster": "X-1",
+   "cite": "",
+   "started": "14:02:53",
+   "elapsed": "1.1s",
+   "cost": 0.01,
+   "state": "done",
+   "line": "r-8f3a → Q-2 closed · T-9 ready",
+   "account": "sam-broomstick",
+   "steps": 1,
+   "tree": [
+    {
+     "step": "consequence",
+     "kind": "type_two",
+     "line": "unblock T-9",
+     "ms": 1100,
+     "model": "sonnet",
+     "turns": 1,
+     "cost": 0.01,
+     "effects": [
+      {
+       "node": "T-9",
+       "rev_before": 1,
+       "rev_after": 2
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "id": "r-44c1",
+   "ripple": "curation",
+   "cluster": "X-1",
+   "cite": "",
+   "started": "13:48:02",
+   "elapsed": "9s",
+   "cost": 0.11,
+   "state": "done",
+   "line": "re-ranked 3 questions · Q-1 stays first",
+   "account": "acct2",
+   "steps": 5,
+   "tree": [
+    {
+     "step": "load_queue",
+     "kind": "native",
+     "line": "3 questions",
+     "ms": 4
+    },
+    {
+     "step": "edge_drawer",
+     "kind": "type_two",
+     "line": "1 conditions edge",
+     "ms": 4200,
+     "model": "sonnet",
+     "turns": 1,
+     "cost": 0.05
+    },
+    {
+     "step": "valuer",
+     "kind": "type_two",
+     "line": "Q-1 ask 82 · Q-3 confirm 61 · Q-2 ask 40",
+     "ms": 3900,
+     "model": "opus",
+     "turns": 1,
+     "cost": 0.06
+    },
+    {
+     "step": "scorer",
+     "kind": "native",
+     "line": "Q-1 · Q-3 · Q-2",
+     "ms": 2
+    },
+    {
+     "step": "push_gate",
+     "kind": "native",
+     "line": "no push",
+     "ms": 1
+    }
+   ]
+  },
+  {
+   "id": "r-2e90",
+   "ripple": "proposals",
+   "cluster": "X-6",
+   "cite": "",
+   "started": "13:40:10",
+   "elapsed": "20s",
+   "cost": 0.09,
+   "state": "done",
+   "line": "0073 report → 4 proposals · 3 accepted · 1 judged",
+   "account": "acct2",
+   "steps": 12,
+   "tree": [
+    {
+     "step": "load_fold_after",
+     "kind": "native",
+     "line": "4 units",
+     "ms": 3
+    }
+   ]
+  },
+  {
+   "id": "r-0f1d",
+   "ripple": "voice",
+   "cluster": "X-1",
+   "cite": "",
+   "started": "13:02:40",
+   "elapsed": "0.3s",
+   "state": "failed",
+   "line": "tts refused: service stopped",
+   "account": "sam-broomstick",
+   "steps": 1,
+   "tree": [
+    {
+     "step": "voice",
+     "kind": "type_two",
+     "line": "tts refused: service stopped",
+     "ms": 300,
+     "model": "sonnet",
+     "state": "failed"
+    }
+   ]
+  },
+  {
+   "id": "r-7a10",
+   "ripple": "dump",
+   "cluster": "X-6",
+   "cite": "60f0380d#12",
+   "started": "11:20:30",
+   "elapsed": "12s",
+   "cost": 0.06,
+   "state": "done",
+   "line": "2 atoms · 2 here",
+   "account": "acct2",
+   "steps": 14,
+   "tree": [
+    {
+     "step": "load_dump",
+     "kind": "native",
+     "line": "{mode: intake, messages: 1}",
+     "ms": 2
+    },
+    {
+     "step": "fragment",
+     "kind": "type_two",
+     "line": "2 items",
+     "ms": 3000,
+     "model": "sonnet",
+     "turns": 1,
+     "cost": 0.02
+    }
+   ]
+  },
+  {
+   "id": "r-3c77",
+   "ripple": "dump",
+   "cluster": "X-3",
+   "cite": "8e4fca10#64",
+   "started": "09:40:12",
+   "elapsed": "14s",
+   "cost": 0.07,
+   "state": "done",
+   "line": "2 atoms · 2 here",
+   "account": "sam-broomstick",
+   "steps": 15,
+   "tree": [
+    {
+     "step": "load_dump",
+     "kind": "native",
+     "line": "{mode: intake, messages: 1}",
+     "ms": 2
+    },
+    {
+     "step": "fragment",
+     "kind": "type_two",
+     "line": "2 items",
+     "ms": 2900,
+     "model": "sonnet",
+     "turns": 1,
+     "cost": 0.02
+    }
+   ]
+  },
+  {
+   "id": "r-61d0",
+   "ripple": "curation",
+   "cluster": "X-9",
+   "day": "yesterday",
+   "cite": "",
+   "started": "23:40:12",
+   "elapsed": "11s",
+   "cost": 0.12,
+   "state": "done",
+   "line": "re-ranked 7 questions · Q-4 ↑ 2",
+   "account": "acct3",
+   "steps": 5,
+   "tree": [
+    {
+     "step": "load_queue",
+     "kind": "native",
+     "line": "7 questions",
+     "ms": 5
+    }
+   ]
+  }
+ ],
+ "week": {
+  "today": 41,
+  "week": 212,
+  "cost_today": 1.84,
+  "cost_week": 12.4,
+  "failed_today": 1,
+  "yesterday": 29
+ }
+}

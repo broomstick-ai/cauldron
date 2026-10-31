@@ -1,0 +1,106 @@
+[package]
+name = "threads"
+version.workspace = true
+edition.workspace = true
+# DG-5: one integration-test binary, tests/it/ (see [[test]] below).
+autotests = false
+description = "The thread system-of-record daemon — supersedes lib/ccw (substrate-ccw)."
+
+# `threads` deliberately depends on NO other workspace crate: it is the
+# system-of-record for the operator's threads and must outlive branch drift in
+# the rest of the workspace (lib/ccw lived on V1; this crate lives everywhere).
+# Errors are therefore local (`error.rs`), not `substrate_types::SubstrateError`.
+
+# MOVED from substrate `lib/threads` @9cf7615 (R3.S2.M, move-and-fit). The
+# substrate workspace pinned every third-party dependency in its root
+# manifest; cauldron's root declares only the versions it shares, so the
+# FEATURES substrate's root carried are restated here at the use site and the
+# dependencies cauldron's root does not name are pinned literally, at the
+# versions substrate's root named (rusqlite 0.31 bundled, thiserror 1,
+# tracing-subscriber 0.3 env-filter, tokio-tungstenite 0.21 native-tls).
+
+
+# DG-5: every integration test is a module of tests/it/main.rs; add new ones
+# there, never as a new top-level tests/*.rs (skill core:cargo-lease).
+[[test]]
+name = "it"
+path = "tests/it/main.rs"
+
+[dependencies]
+# THE CHASSIS. The one workspace-path dependency this crate has, and it is
+# deliberate: `shapewire` is the shape chassis, extracted because Cauldron
+# must depend on it too and a chassis inside `threads` would have made that
+# circular (docs/shapes.md 6.1). It carries the same no-workspace-crates rule
+# this file states above, for the same reason.
+#
+# `features = ["server"]` since the whole network API moved in (operator ruling,
+# 2026-09-26): the router, the handshake, auth, the connection loop, dispatch and
+# `/health` are the chassis's, and `src/chassis.rs` is this daemon's `Producer`
+# impl over them. The flag is opt-in rather than default so a CONSUMER taking the
+# chassis for its mirror does not link axum.
+shapewire = { path = "../../libs/shapewire", features = ["server"] }
+serde = { workspace = true }
+serde_json = { workspace = true }
+toml = { workspace = true }
+chrono = { workspace = true, features = ["serde"] }
+rusqlite = { version = "0.31", features = ["bundled"] }
+tracing = { workspace = true }
+thiserror = "1"
+tokio = { workspace = true, features = ["full"] }
+futures = { workspace = true }
+axum = { workspace = true, features = ["ws"] }
+# R9.C7h: `startup` forwards each request to the chassis router once it is
+# built (`ServiceExt::oneshot`). Already in the lock via axum.
+tower = { version = "0.5", features = ["util"] }
+# R9.C7i: the off-runtime health door watches SIGTERM beside tokio's own
+# handler (`health_door::Door::watch_sigterm`). Already in the lock via tokio.
+signal-hook-registry = "1"
+uuid = { workspace = true, features = ["v4", "serde"] }
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+# kill(pid, 0) liveness probe for turn re-adoption (G1). Already a transitive
+# dependency of rusqlite/tokio; pinned directly because we call it ourselves.
+libc = "0.2"
+# Keychain service-name suffix for CLAUDE_CONFIG_DIR isolation: Claude Code
+# derives it as sha256(config_dir)[..8]; we must reproduce it byte-for-byte.
+sha2 = { workspace = true }
+# WS CLIENT — used by the `threads-stress` bin target (the stress-test driver
+# the coordinator runs for live threshold/budget trials) and by the test
+# harness, which drives the daemon on an ephemeral port.
+tokio-tungstenite = { version = "0.21", features = ["native-tls"] }
+# PL-0 (docs/PROTOLEDGER-INTEGRATION.md rev 3, §3): protoledger's first public
+# release, pinned by full SHA on its public GitHub repo: 9cfec2d4 ("README for
+# the first public release", 2026-10-21). Its tree is identical (14ade0b9) to
+# protoledger main 6b794ae8, which contains R1.S4d c13d166 and R3.S7 1ffd6e4;
+# the public history is squashed, so 6b794ae8 itself is not on GitHub.
+# Defaults OFF, then only store + sync + sqlite. NEVER "serve" (tokio + axum)
+# or "cli" (clap, the binary's alone): tests/protoledger_features.rs fails if
+# either is enabled. Only src/pl/ may `use protoledger::…` (PL-1).
+protoledger = { git = "https://github.com/broomstick-ai/protoledger", rev = "9cfec2d49672e5d113ddc5f79d1ae5836a21e892", default-features = false, features = ["store", "sync", "sqlite"] }
+# R11.J2 (docs/STRUCTURED-OUTPUT.md §3.3): the daemon validates every
+# `structured_output` value against the schema the asker sent, and does not
+# rely on the CLI's own check. Default features OFF: they pull reqwest/rustls
+# to resolve remote `$ref`s, and a schema here must be self-contained.
+# R11.J3 (§3.1) also checks a spawn's `json_schema` against the 2020-12
+# meta-schema with it, before the commit point.
+jsonschema = { version = "0.49", default-features = false }
+
+[features]
+# R9.N2c (inspect F1): compiles `managed::testing`, the re-point test seams.
+# Never enabled by a production build; the dev-dependency on this crate itself
+# below turns it on for this crate's own tests only.
+test-seams = []
+
+[dev-dependencies]
+threads = { path = ".", features = ["test-seams"] }
+tempfile = "3"
+# R5.S2b (DEC-34): `tests/mcp_wire_cross.rs` joins this crate's half of the
+# supervisor's MCP wire (`src/mcp_route.rs`) to the supervisor's REAL half
+# (`mcp_host::wire`). DEV-only: the library still links no workspace crate
+# but the chassis.
+mcp-host = { path = "../../libs/mcp-host" }
+libc = "0.2"
+# `tests/build_provenance.rs` recomputes the compiled-input scope that build.rs
+# publishes, using a REAL TOML parser rather than build.rs's line scan — the
+# point of the check is that the two are independent. Already a normal
+# dependency of this crate, so this adds nothing to the build.
+toml = { workspace = true }

@@ -1,0 +1,760 @@
+#!/usr/bin/env bash
+# add-account [--login] <label> — register a Claude account under its own
+# CLAUDE_CONFIG_DIR.
+#
+# TWO MODES.
+#
+#   add-account <label>            CAPTURE mode (thin wrapper over
+#                                  `threads accounts add`): clones the live
+#                                  keychain secret into a new service name.
+#                                  DEPRECATED for real multi-account use — see
+#                                  the DRAGON below. Kept for snapshotting.
+#
+#   add-account --login <label>    OWN-LOGIN mode (task-multiaccount-signin):
+#                                  prepares the slot and has the operator
+#                                  complete a REAL `claude auth login` scoped to
+#                                  it. A fresh grant ALWAYS lands, whatever the
+#                                  slot held before. The one thing it will not
+#                                  register is a CLONE of a credential that
+#                                  already lives in another store.
+#
+# ── THE DRAGON: why capture mode is not multi-account ────────────────────────
+# A cloned keychain entry is byte-identical to the live one, so it is the SAME
+# OAuth session, not a second login. Claude Code rotates the refresh token on
+# refresh, and cross-process reconciliation exists only WITHIN one credential
+# store — two config dirs are two stores, so the copy that refreshes second is
+# rejected and self-wipes ("OAuth session expired and could not be refreshed").
+# Measured: account-visibility-report. Confirmed against the shipped binary
+# v2.1.220 and against upstream issues #24317 / #43392 (single-use refresh
+# tokens) and #20553 (the ≤2.1.19 shared-service-name bug this all predates).
+# Only an OWN LOGIN per config dir is durable.
+#
+# ── HARD CONSTRAINTS (this script is the one that touches a live credential) ──
+#   * NEVER disturb the operator's live login. Own-login mode never runs
+#     `logout`, never writes the machine-default keychain service, and asserts
+#     afterwards that the default entry's modification date, secret hash, and
+#     identity fingerprint are all unchanged.
+#   * NEVER print, log, or write a credential VALUE, email, uuid or org name.
+#     Everything is compared as an 8-hex-char sha256 prefix. THE ONE EXCEPTION
+#     is the login hint written at the very end — see "THE LOGIN HINT" below.
+#     It is deliberate, it is the operator's own address, and it is never
+#     printed, only written to a mode-600 file inside the 0700 slot dir.
+#   * REFUSE LOUDLY rather than register a CLONE of a credential that already
+#     lives somewhere else. That is the ONE registration refusal left.
+#
+# ── THE LAW: PRIOR STATE NEVER REFUSES A LOGIN ───────────────────────────────
+# Operator ruling. Re-logging a slot in is ALWAYS permitted and ALWAYS replaces
+# what was there. Nothing on this path may refuse on the grounds that state
+# already exists — not a snapshot, not a manifest, not a live keychain entry,
+# not a dead one, not a ten-minute-old one, not a same-account verdict, not a
+# backup directory. And a refusal that only relaxes when you pass an extra flag
+# IS STILL A REFUSAL: he must not have to know a flag exists.
+#
+# What that replaced, so nobody re-adds it by reasoning from first principles:
+#
+#   * `manifest.toml already exists → pass --force`. GONE. A slot's whole
+#     purpose is to hold a login; replacing that login is the normal case, not
+#     the exceptional one. `--force` is now accepted and ignored.
+#   * `SameAccount → pass --allow-same-account`. GONE. It is now a loud WARNING
+#     that registers. The verdict is still computed, still printed, and still
+#     recorded in the manifest — the registry never claims a same-account slot
+#     is distinct — but it never stops the run. `--allow-same-account` is now
+#     accepted and ignored.
+#   * `no machine-default keychain entry → cannot establish a baseline`. GONE,
+#     downgraded to a warning: with no live login there is nothing to clone, so
+#     the check it was protecting is vacuous, not violated.
+#   * `CLAUDE_CONFIG_DIR is already set`. GONE, downgraded to a warning. The
+#     variable is simply ignored — the baseline is read from the machine-default
+#     keychain service and `$HOME/.claude.json` by name, never from the env.
+#
+# THE RISK THE SAME-ACCOUNT WARNING ACCEPTS, stated plainly: two live grants for
+# one account are two refresh-token lineages on one server-side account. This
+# script can prove the live keychain item is untouched LOCALLY — it cannot prove
+# the server did not invalidate the older grant when the newer one was issued.
+# If the machine store stops working after such a run, that is the cause, and
+# the fix is to sign the machine store in again. That is a cost he has said he
+# will pay; it is not a reason to stop him.
+#
+# ── THE TWO REFUSALS THAT SURVIVE, AND WHY NEITHER IS ABOUT PRIOR STATE ──────
+#
+#   1. `CLAUDE_CODE_OAUTH_TOKEN` IS SET. Upstream issue #37512: with that env
+#      var set, the CLI silently DELETES the machine-default
+#      `Claude Code-credentials` keychain item on process exit, breaking every
+#      other session. This one is not policy and it is not about the slot — it
+#      is the difference between logging in and destroying the live login. It
+#      refuses, and it names the variable to unset.
+#
+#   2. `SameSession` — THE CLONE. The slot's secret came out byte-identical to
+#      the live login's, which means ONE refresh token now has two homes. Two
+#      stores cannot reconcile, so the second refresher is handed a retired
+#      token and self-wipes. That is what destroyed `primary` and
+#      `secondary-live`.
+#
+#      READ THE DISTINCTION PRECISELY, because it is the whole argument:
+#      refusing to DUPLICATE a credential into a second store is not the same as
+#      refusing a FRESH BROWSER LOGIN into an existing slot. A fresh grant is a
+#      new token in ONE place and replaces the old one; it can never trip this.
+#      Only a copy can. So this refusal cannot block a re-login, by
+#      construction.
+set -euo pipefail
+
+# ── INTERPRETER GUARD: this script needs bash ≥ 4.4 ──────────────────────────
+# `${x@Q}` is 4.4+. macOS ships bash 3.2 at /bin/bash, and `#!/usr/bin/env bash`
+# finds THAT whenever /bin precedes homebrew on PATH. Without this guard the
+# script starts, announces the slot, and only then dies with "bad substitution"
+# — partway into a credential operation. Re-exec under a modern bash first.
+if [ "${BASH_VERSINFO[0]:-0}" -lt 4 ] \
+   || { [ "${BASH_VERSINFO[0]}" -eq 4 ] && [ "${BASH_VERSINFO[1]:-0}" -lt 4 ]; }; then
+  # Version-checked before the exec, so the re-exec'd shell cannot re-enter
+  # this branch — no loop marker needed (and a marker would be inherited from
+  # `claude-accounts`, which carries the same guard, and break this one).
+  for _newer_bash in /opt/homebrew/bin/bash /usr/local/bin/bash /bin/bash; do
+    [ -x "$_newer_bash" ] || continue
+    case "$("$_newer_bash" -c 'echo "${BASH_VERSINFO[0]}.${BASH_VERSINFO[1]}"' 2>/dev/null)" in
+      4.4|4.[5-9]|[5-9].*|[1-9][0-9].*)
+        exec "$_newer_bash" "${BASH_SOURCE[0]}" "$@" ;;
+    esac
+  done
+  echo "add-account: needs bash 4.4 or newer; this is ${BASH_VERSION:-unknown}." >&2
+  echo "  Install one and re-run — nothing else is needed:  brew install bash" >&2
+  exit 1
+fi
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+THREADS_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
+# CLAUDE_ACCOUNTS_HOME: the threads home whose `accounts/` holds the slot, the
+# same variable `claude-accounts` honours (R5.S4). `claude-accounts login` always
+# passes its own home, so the slot signed in here is the slot its identity
+# guard then checks (R12.5 inspect B2). Set but not a directory = refused.
+if [ -n "${CLAUDE_ACCOUNTS_HOME:-}" ]; then
+  [ -d "$CLAUDE_ACCOUNTS_HOME" ] || {
+    printf 'add-account: CLAUDE_ACCOUNTS_HOME=%s is not a directory\n' \
+      "$CLAUDE_ACCOUNTS_HOME" >&2; exit 1; }
+  THREADS_DIR="$(cd "$CLAUDE_ACCOUNTS_HOME" && pwd)"
+fi
+# REPO_ROOT follows the PHYSICAL scripts dir (`cd -P`/`pwd -P`): under cauldron
+# this script is reached as <data-home>/scripts/<name>, where `scripts` is a
+# SYMLINKED DIR into services/threads/scripts and <data-home> is outside any repo.
+# The logical path put REPO_ROOT above the data home (H179: "not a git
+# repository" on every board sign-in). THREADS_DIR stays the invoking home on
+# purpose: it is the data dir (threads.db, accounts) the caller meant.
+REPO_ROOT="$(cd -P "$SCRIPT_DIR/../../.." && pwd -P)"
+
+KEYCHAIN_SERVICE_BASE="Claude Code-credentials"
+
+usage() {
+  cat >&2 <<'EOF'
+usage:
+  add-account <label>                       capture the live login (clone; see DRAGON)
+  add-account --login <label> [options]     give <label> its OWN login (durable)
+
+--login options:
+  --email <addr>        pre-fill the login page (claude auth login --email), so
+                        there is no doubt which account is being registered
+  --chrome-profile <d>  open the consent page in this Chrome profile directory
+                        (e.g. "Profile 2"); implies a named-profile browser
+  --no-browser          open nothing; print the URL and wait for the pasted
+                        code#state (best when the browser is signed into the
+                        wrong account)
+  --force               ACCEPTED AND IGNORED. Logging in over a slot that
+                        already has a snapshot is the normal case and needs no
+                        flag. Kept so old commands and scripts still run.
+  --allow-same-account  ACCEPTED AND IGNORED. Landing on the same account as the
+                        live login is a loud warning now, never a refusal. Kept
+                        so old commands and scripts still run.
+  --dry-run             preflight + announce only; never invokes claude
+  --skip-usage-check    skip the free post-login /usage probe
+EOF
+  exit 2
+}
+
+# ── shared helpers ───────────────────────────────────────────────────────────
+
+# sha8 of stdin. Mirrors `accounts::sha8` (Rust); both are pinned to
+# scripts/login-golden-vectors.txt by add-account-login_conformance_test.sh.
+sha8_stdin() { shasum -a 256 | cut -c1-8; }
+sha8_str() { printf %s "$1" | sha8_stdin; }
+
+# The keychain service name Claude Code uses for a CLAUDE_CONFIG_DIR.
+# Mirrors `accounts::keychain_service_for`.
+kc_service() { printf '%s-%s' "$KEYCHAIN_SERVICE_BASE" "$(sha8_str "$1")"; }
+
+kc_account() { printf '%s' "${USER:-claude-code-user}"; }
+
+# sha8 of a keychain secret, or "" if the entry does not exist. The secret is
+# piped straight into shasum — it never reaches argv, a variable, or disk.
+#
+# The existence check is SEPARATE and comes first, deliberately: piping a
+# missing entry's empty output into shasum yields sha8("") = e3b0c442, a
+# perfectly plausible-looking hash that would make "no credential at all" look
+# like a real, distinct secret and defeat the NoCredential verdict.
+kc_secret_sha8() {
+  local svc="$1"
+  security find-generic-password -a "$(kc_account)" -s "$svc" >/dev/null 2>&1 || return 0
+  security find-generic-password -a "$(kc_account)" -w -s "$svc" 2>/dev/null \
+    | tr -d '\n' | sha8_stdin
+}
+
+# The keychain item's modification date — metadata only, no secret read. Used as
+# an independent witness that the live entry was never written.
+kc_mdat() {
+  local svc="$1"
+  security find-generic-password -a "$(kc_account)" -s "$svc" 2>/dev/null \
+    | sed -n 's/.*"mdat"<timedate>=0x[0-9A-F]*  *"\(.*\)\\000".*/\1/p' | head -1 || true
+}
+
+# Identity fingerprint of a .claude.json's oauthAccount. Hashes only — mirrors
+# `accounts::IdentityFingerprint::from_config_json`. Prints
+# "acct=<sha8> email=<sha8> org=<sha8> tier=<verbatim>", or "" when absent.
+fingerprint() {
+  local f="$1"
+  [ -f "$f" ] || { printf ''; return 0; }
+  python3 - "$f" <<'PY' || true
+import hashlib, json, sys
+def h(v):
+    return hashlib.sha256(v.encode()).hexdigest()[:8] if isinstance(v, str) else "-"
+try:
+    with open(sys.argv[1]) as fh:
+        oa = (json.load(fh) or {}).get("oauthAccount")
+except Exception:
+    sys.exit(0)
+if not oa:
+    sys.exit(0)
+tier = oa.get("billingType") or oa.get("subscriptionType") or "unknown"
+print(f'acct={h(oa.get("accountUuid"))} email={h(oa.get("emailAddress"))} '
+      f'org={h(oa.get("organizationUuid"))} tier={tier}')
+PY
+}
+
+say() { printf '%s\n' "$*"; }
+die() { printf 'add-account: %s\n' "$*" >&2; exit 1; }
+
+# ── THE VERDICT → ACTION TABLE, as a pure function ───────────────────────────
+#
+# `login_verdict_action <verdict>` prints exactly one word:
+#
+#   register  the slot is registered, silently — the happy path
+#   warn      the slot IS registered, after a loud warning. The operator is told
+#             what he got and is not stopped from getting it.
+#   report    nothing to register, because the login did not land. This is a
+#             STATEMENT OF FACT, not a policy refusal: there is no credential in
+#             the slot to write a manifest about. It does not stop him
+#             re-running, and re-running is the remedy it names.
+#   refuse    the ONE hard stop: a clone. See the header.
+#
+# It is a FUNCTION, above the argument-parsing banner, precisely so the
+# conformance test can source it and drive every verdict through it without a
+# login, a keychain read, or a credential of any kind. The `case` further down
+# does nothing but dispatch on what this returns, so testing this IS testing
+# the policy.
+login_verdict_action() {
+  case "$1" in
+    Distinct)     printf 'register' ;;
+    SameAccount)  printf 'warn'     ;;
+    NoCredential) printf 'report'   ;;
+    SameSession)  printf 'refuse'   ;;
+    *)            printf 'refuse'   ;;
+  esac
+}
+
+# The slot dir must be gitignored before any account state is written into it.
+# This is NOT a prior-state refusal — it does not care what the slot contains,
+# only that what lands there cannot be committed. And it SELF-HEALS first: the
+# ignore rule it wants is one file this script already knows how to write, so
+# the overwhelmingly common cause (a fresh accounts root with no `.gitignore`
+# yet) fixes itself silently instead of stopping a login.
+require_gitignored() {
+  local label="$1"
+  ( cd "$REPO_ROOT" && git check-ignore -q "services/threads/accounts/$label/.probe" ) && return 0
+  mkdir -p "$THREADS_DIR/accounts" 2>/dev/null || true
+  [ -f "$THREADS_DIR/accounts/.gitignore" ] \
+    || printf '*\n' > "$THREADS_DIR/accounts/.gitignore" 2>/dev/null || true
+  ( cd "$REPO_ROOT" && git check-ignore -q "services/threads/accounts/$label/.probe" ) && return 0
+  die "services/threads/accounts/$label/ is NOT covered by .gitignore, and writing the
+  ignore rule did not fix it. This is not about your account — it is about a
+  credential ending up in a commit. Fix the ignore rule and re-run; the login
+  itself is not blocked by anything."
+}
+
+# ── argument parsing ─────────────────────────────────────────────────────────
+
+MODE=capture
+LABEL=""
+EMAIL=""
+CHROME_PROFILE=""
+NO_BROWSER=0
+FORCE=0
+ALLOW_SAME_ACCOUNT=0
+DRY_RUN=0
+SKIP_USAGE=0
+
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --login) MODE=login; shift ;;
+    --email) [ $# -ge 2 ] || usage; EMAIL="$2"; shift 2 ;;
+    --chrome-profile) [ $# -ge 2 ] || usage; CHROME_PROFILE="$2"; shift 2 ;;
+    --no-browser) NO_BROWSER=1; shift ;;
+    # ACCEPTED AND IGNORED, both of them. They used to unlock the two refusals
+    # this script no longer makes. They are still PARSED — and must stay parsed —
+    # because saved commands, the `claude-accounts` wrapper, `login.rs` and the
+    # boards all still pass them, and a hard error on an obsolete flag would be a
+    # brand-new way to refuse him a login. Recorded, never read.
+    --force) FORCE=1; shift ;;
+    --allow-same-account) ALLOW_SAME_ACCOUNT=1; shift ;;
+    --dry-run) DRY_RUN=1; shift ;;
+    --skip-usage-check) SKIP_USAGE=1; shift ;;
+    -h|--help) usage ;;
+    -*) say "add-account: unknown option $1" >&2; usage ;;
+    *) [ -z "$LABEL" ] || usage; LABEL="$1"; shift ;;
+  esac
+done
+[ -n "$LABEL" ] || usage
+printf '%s' "$LABEL" | grep -Eq '^[A-Za-z0-9_-]{1,64}$' \
+  || die "invalid label ${LABEL@Q}: use [A-Za-z0-9_-], max 64 chars"
+
+# ── CAPTURE mode (unchanged behaviour, now with a warning) ───────────────────
+
+if [ "$MODE" = capture ]; then
+  require_gitignored "$LABEL"
+  say "add-account: NOTE — capture mode CLONES the live session. The clone dies"
+  say "  the next time either copy refreshes. For a durable second account use:"
+  say "      add-account --login $LABEL"
+  export THREADS_HOME="$THREADS_DIR"
+  # `--clone-session` is REQUIRED by `threads accounts add` (F-1): the clone is
+  # only reachable when someone has said out loud that they want a shared
+  # session. This script says it, right after the warning above.
+  exec cargo run --quiet --manifest-path "$REPO_ROOT/Cargo.toml" -p threads --bin threads \
+    -- accounts add "$LABEL" --clone-session
+fi
+
+# ── OWN-LOGIN mode ───────────────────────────────────────────────────────────
+
+[ "$(uname -s)" = "Darwin" ] || die "own-login mode is macOS-only (keychain-backed)"
+command -v claude >/dev/null 2>&1 || die "claude is not on PATH"
+command -v python3 >/dev/null 2>&1 || die "python3 is required (fingerprinting)"
+
+# ── THE ONE ENVIRONMENT REFUSAL ──────────────────────────────────────────────
+# This is NOT about the slot and NOT about prior state. With this variable set,
+# running `claude` at all destroys the machine-default login. Refusing here is
+# the difference between a login and a data loss, so it stays — and it says, in
+# one copy-pasteable line, exactly what to unset.
+if [ -n "${CLAUDE_CODE_OAUTH_TOKEN:-}" ]; then
+  die "CLAUDE_CODE_OAUTH_TOKEN is set in this shell, and that variable DESTROYS
+  your live login: with it set, \`claude\` silently deletes the machine-default
+  'Claude Code-credentials' keychain item when it exits (upstream issue #37512).
+  That would sign you out of plain \`claude\` everywhere.
+
+  UNSET IT AND RE-RUN — copy this line:
+
+      unset CLAUDE_CODE_OAUTH_TOKEN
+
+  Then run the same command again. Nothing has been touched.
+
+  (This is the only environment variable that stops this script. It is not a
+  policy about your account; it is the one setting under which logging in and
+  losing your login are the same action.)"
+fi
+
+# ── CLAUDE_CONFIG_DIR: A WARNING, NOT A REFUSAL ──────────────────────────────
+# This used to be a hard stop, on the grounds that the script needs the
+# MACHINE-DEFAULT login as its distinctness baseline. But it never actually
+# needed the variable to be unset — it reads the baseline from the
+# machine-default keychain service and `$HOME/.claude.json` BY NAME, and the
+# login itself always runs with `CLAUDE_CONFIG_DIR` set explicitly to the slot.
+# So the variable was never consulted for anything; it was refused for what it
+# might have meant. Say so and carry on.
+if [ -n "${CLAUDE_CONFIG_DIR:-}" ]; then
+  say "  ! note: CLAUDE_CONFIG_DIR is set in this shell (${CLAUDE_CONFIG_DIR@Q})."
+  say "    It is IGNORED here. The baseline is read from the machine-default"
+  say "    keychain service and \$HOME/.claude.json by name, and the login below"
+  say "    runs with CLAUDE_CONFIG_DIR pointed at the slot explicitly."
+  say ""
+fi
+
+require_gitignored "$LABEL"
+
+SLOT_DIR="$THREADS_DIR/accounts/$LABEL"
+SLOT_SERVICE="$(kc_service "$SLOT_DIR")"
+[ "$SLOT_SERVICE" != "$KEYCHAIN_SERVICE_BASE" ] \
+  || die "refusing: the slot resolved to the machine-default keychain service"
+
+# ── THE SNAPSHOT GUARD IS GONE ───────────────────────────────────────────────
+# This is where `"<label> already has a snapshot at <dir>" — pass --force` used
+# to live. It cost the operator half an hour and it was never defensible: a slot
+# that already has a manifest is a slot whose login is being REPLACED, which is
+# the single most common reason anyone runs this command. Logging in again is
+# always allowed and always replaces what was there.
+#
+# All the manifest tells us now is that this is a re-login, which is worth
+# SAYING and not worth stopping for.
+RELOGIN=0
+if [ -f "$SLOT_DIR/manifest.toml" ]; then
+  RELOGIN=1
+fi
+
+# ── baseline: the live login, so we can prove we never touched it ────────────
+
+LIVE_CONFIG_JSON="$HOME/.claude.json"
+LIVE_FP_BEFORE="$(fingerprint "$LIVE_CONFIG_JSON")"
+LIVE_SECRET_BEFORE="$(kc_secret_sha8 "$KEYCHAIN_SERVICE_BASE")"
+LIVE_MDAT_BEFORE="$(kc_mdat "$KEYCHAIN_SERVICE_BASE")"
+
+# ── NO BASELINE IS A WARNING, NOT A REFUSAL ──────────────────────────────────
+# This used to refuse: "cannot establish a baseline, so cannot prove a new login
+# is distinct." But look at what the baseline is FOR. It exists to catch a clone
+# of the live login. With no machine-default entry there IS no live login, so
+# there is nothing to be a clone of — the check is vacuous, not violated, and
+# turning a vacuous check into a locked door is how a man ends up unable to sign
+# in on a machine that has never been signed in.
+NO_BASELINE=0
+if [ -z "$LIVE_SECRET_BEFORE" ]; then
+  NO_BASELINE=1
+fi
+
+SLOT_SECRET_BEFORE="$(kc_secret_sha8 "$SLOT_SERVICE")"
+
+say ""
+say "════ add-account --login $LABEL ════"
+say "  slot dir         : $SLOT_DIR"
+say "  keychain service : $SLOT_SERVICE   (live login uses '$KEYCHAIN_SERVICE_BASE')"
+say "  login as         : ${EMAIL:-<whatever account you choose on the page>}"
+if [ "$NO_BASELINE" -eq 1 ]; then
+  say "  live login       : NONE — there is no machine-default keychain entry."
+  say "                     Nothing to compare against, and nothing to clone."
+  say "                     Proceeding; this is a warning, not a problem."
+else
+  say "  live login       : $LIVE_FP_BEFORE"
+  say "                     secret $LIVE_SECRET_BEFORE, keychain mdat $LIVE_MDAT_BEFORE"
+fi
+if [ "$RELOGIN" -eq 1 ]; then
+  say "  RE-LOGIN         : this slot already has a manifest. That is fine and it"
+  say "                     is expected — the new grant REPLACES the old one, in"
+  say "                     place, and the manifest is rewritten to match."
+fi
+if [ -n "$SLOT_SECRET_BEFORE" ]; then
+  say "  NOTE             : this slot ALREADY has a keychain entry (secret $SLOT_SECRET_BEFORE)."
+  say "                     A fresh login replaces it. Nothing else is affected."
+  say "                     It does not matter whether it is live, dead, or was"
+  say "                     issued ten minutes ago. Signing in again is always"
+  say "                     allowed and always replaces what is there."
+fi
+say ""
+say "  You will NOT be logged out of anything. This login is scoped to the slot"
+say "  dir above, which means its own keychain service and its own .claude.json."
+say "  Your live session keeps its own credential, untouched."
+say ""
+
+# The same-account outcome is PREDICTABLE before the browser opens whenever an
+# --email hint was given: the fingerprint's email field is sha8 of exactly that
+# string. Say it now, because knowing what you are about to get is worth having
+# up front. It is a HEADS-UP, not a threat — this run will register either way.
+if [ -n "$EMAIL" ]; then
+  LIVE_MAIL_BEFORE="$(printf '%s' "$LIVE_FP_BEFORE" | tr ' ' '\n' | sed -n 's/^email=//p')"
+  if [ -n "$LIVE_MAIL_BEFORE" ] && [ "$(sha8_str "$EMAIL")" = "$LIVE_MAIL_BEFORE" ]; then
+    say "  !! $EMAIL IS the account your live login already holds."
+    say "     This WILL register: a second independent grant on one account,"
+    say "     sharing one rate-limit pool. Nothing stops it and no flag is needed."
+    say "     Accepted risk: the server may invalidate the older grant when it"
+    say "     issues this one. If plain \`claude\` stops working afterwards, that"
+    say "     is why — sign the machine store in again."
+    say "     If you meant a DIFFERENT account, pick it on the consent page."
+    say ""
+  fi
+fi
+
+# ── browser selection: make WHICH ACCOUNT unambiguous ───────────────────────
+#
+# CONFIRMED-CODE (v2.1.220): the opener resolves `settings.json`'s `browser`
+# key, else the BROWSER env var, else `open`, and spawns `<browser> <url>` with
+# the URL as a single argv. So BROWSER must be ONE executable — hence the
+# wrapper script rather than a command string.
+BROWSER_CMD=""
+BROWSER_NOTE=""
+if [ "$NO_BROWSER" -eq 1 ]; then
+  BROWSER_CMD="/usr/bin/true"
+  BROWSER_NOTE="nothing will open; use the printed URL, then paste the code#state"
+elif [ -n "$CHROME_PROFILE" ]; then
+  BROWSER_CMD="$SCRIPT_DIR/claude-login-browser"
+  [ -x "$BROWSER_CMD" ] || die "missing helper: $BROWSER_CMD"
+  export CLAUDE_LOGIN_CHROME_PROFILE="$CHROME_PROFILE"
+  BROWSER_NOTE="Chrome profile ${CHROME_PROFILE@Q}"
+else
+  BROWSER_CMD="$SCRIPT_DIR/claude-login-browser"
+  [ -x "$BROWSER_CMD" ] || die "missing helper: $BROWSER_CMD"
+  export CLAUDE_LOGIN_PRIVATE=1
+  BROWSER_NOTE="a fresh private/incognito window (so no signed-in cookie decides for you)"
+fi
+say "  browser          : $BROWSER_NOTE"
+say ""
+
+if [ "$DRY_RUN" -eq 1 ]; then
+  say "  --dry-run: stopping before invoking claude. Nothing was written."
+  exit 0
+fi
+
+mkdir -p "$SLOT_DIR"
+chmod 700 "$THREADS_DIR/accounts" "$SLOT_DIR" 2>/dev/null || true
+[ -f "$THREADS_DIR/accounts/.gitignore" ] || printf '*\n' > "$THREADS_DIR/accounts/.gitignore"
+
+# ── the login itself ────────────────────────────────────────────────────────
+#
+# `claude auth login` is a plain subcommand, not a session: it prints the URL,
+# opens the browser, and reads a pasted `code#state` from stdin. stdin/stdout are
+# inherited so the operator can paste if the localhost callback can't be reached.
+LOGIN_ARGS=(auth login --claudeai)
+[ -z "$EMAIL" ] || LOGIN_ARGS+=(--email "$EMAIL")
+
+say "  running: CLAUDE_CONFIG_DIR=$SLOT_DIR claude ${LOGIN_ARGS[*]}"
+say "  ── if a code appears in the browser, paste it at the prompt ──"
+say ""
+LOGIN_RC=0
+env -u CLAUDE_CODE_OAUTH_TOKEN -u ANTHROPIC_API_KEY \
+    CLAUDE_CONFIG_DIR="$SLOT_DIR" BROWSER="$BROWSER_CMD" \
+    claude "${LOGIN_ARGS[@]}" || LOGIN_RC=$?
+say ""
+
+# ── verification, in the order that matters ─────────────────────────────────
+
+# 1. The live login MUST be untouched. Checked first and unconditionally: even a
+#    failed login must not have cost the operator his session.
+LIVE_FP_AFTER="$(fingerprint "$LIVE_CONFIG_JSON")"
+LIVE_SECRET_AFTER="$(kc_secret_sha8 "$KEYCHAIN_SERVICE_BASE")"
+LIVE_MDAT_AFTER="$(kc_mdat "$KEYCHAIN_SERVICE_BASE")"
+LIVE_OK=1
+[ "$LIVE_SECRET_AFTER" = "$LIVE_SECRET_BEFORE" ] || LIVE_OK=0
+[ "$LIVE_MDAT_AFTER" = "$LIVE_MDAT_BEFORE" ] || LIVE_OK=0
+[ "$LIVE_FP_AFTER" = "$LIVE_FP_BEFORE" ] || LIVE_OK=0
+if [ "$LIVE_OK" -eq 1 ]; then
+  say "  ✓ live login untouched (secret, keychain mdat and identity all unchanged)"
+else
+  say "  ✗✗ LIVE LOGIN CHANGED — this must not happen. Details (hashes only):" >&2
+  say "     secret  before=$LIVE_SECRET_BEFORE after=$LIVE_SECRET_AFTER" >&2
+  say "     mdat    before=$LIVE_MDAT_BEFORE after=$LIVE_MDAT_AFTER" >&2
+  say "     ident   before=$LIVE_FP_BEFORE after=$LIVE_FP_AFTER" >&2
+  say "     A live claude session of your own refreshing normally can change the" >&2
+  say "     secret and mdat; an identity change cannot. Do not re-run until this" >&2
+  say "     is understood." >&2
+fi
+
+if [ "$LOGIN_RC" -ne 0 ]; then
+  die "claude auth login exited $LOGIN_RC — nothing registered. The slot dir is
+  left in place; re-run to retry."
+fi
+
+# 2. Is the slot actually logged in? `claude auth status` exits 0 iff logged in
+#    and is a pure local read: no turn, no spend, no token refresh.
+AUTH_JSON="$(env -u CLAUDE_CODE_OAUTH_TOKEN -u ANTHROPIC_API_KEY \
+  CLAUDE_CONFIG_DIR="$SLOT_DIR" claude auth status --json 2>/dev/null || true)"
+# The program goes in a VARIABLE, not a `python3 - <<PY` heredoc. A heredoc is
+# a stdin redirection, so it collides with the JSON piped in: python ends up
+# reading `<the json><the program>` as its source, dies with a SyntaxError, and
+# the `||` fallback fires every single time. (Found while building
+# claude-accounts; this line used to always say "unparseable".)
+read -r -d '' AUTH_SUMMARY_PY <<'PY' || true
+import hashlib, json, sys
+def h(v):
+    return hashlib.sha256(v.encode()).hexdigest()[:8] if isinstance(v, str) else "-"
+try:
+    d = json.loads(sys.stdin.read() or "{}")
+except Exception:
+    print("loggedIn=? (unparseable)")
+    raise SystemExit
+# Hash every identifying field: this line is spoken aloud and lands in reports.
+print("loggedIn={} authMethod={} subscription={} email={} org={}".format(
+    d.get("loggedIn"), d.get("authMethod"), d.get("subscriptionType"),
+    h(d.get("email")), h(d.get("orgId"))))
+PY
+AUTH_SUMMARY="$(printf '%s' "$AUTH_JSON" | python3 -c "$AUTH_SUMMARY_PY" 2>/dev/null \
+  || printf 'loggedIn=? (unparseable)')"
+say "  slot auth status : $AUTH_SUMMARY"
+
+# 3. Distinctness. Mirrors `accounts::verify_distinct`; same precedence —
+#    SameSession outranks SameAccount because a byte-identical secret is the
+#    failure that actively kills a working login.
+SLOT_FP="$(fingerprint "$SLOT_DIR/.claude.json")"
+SLOT_SECRET="$(kc_secret_sha8 "$SLOT_SERVICE")"
+say "  slot identity    : ${SLOT_FP:-<none>}"
+say "  slot secret      : ${SLOT_SECRET:-<none>}"
+
+# sha8 of the empty string. An entry that EXISTS but is empty is not a
+# credential — that is the shape claude leaves behind when it wipes a session it
+# could not refresh (what killed `primary`).
+EMPTY_SHA8="$(sha8_str "")"
+
+VERDICT=""
+if [ "$SLOT_SECRET" = "$EMPTY_SHA8" ]; then
+  SLOT_SECRET=""
+fi
+if [ -z "$SLOT_SECRET" ] || [ -z "$SLOT_FP" ]; then
+  VERDICT=NoCredential
+elif [ "$SLOT_SECRET" = "$LIVE_SECRET_AFTER" ]; then
+  VERDICT=SameSession
+else
+  live_acct="$(printf '%s' "$LIVE_FP_AFTER" | tr ' ' '\n' | sed -n 's/^acct=//p')"
+  live_mail="$(printf '%s' "$LIVE_FP_AFTER" | tr ' ' '\n' | sed -n 's/^email=//p')"
+  slot_acct="$(printf '%s' "$SLOT_FP" | tr ' ' '\n' | sed -n 's/^acct=//p')"
+  slot_mail="$(printf '%s' "$SLOT_FP" | tr ' ' '\n' | sed -n 's/^email=//p')"
+  if [ "$live_acct" = "$slot_acct" ] && [ "$live_mail" = "$slot_mail" ]; then
+    VERDICT=SameAccount
+  else
+    VERDICT=Distinct
+  fi
+fi
+
+# Dispatch on the pure table above. This `case` decides NOTHING itself — that is
+# deliberate, so that what the conformance test drives through
+# `login_verdict_action` is the same policy that runs here.
+case "$(login_verdict_action "$VERDICT")" in
+  register)
+    say "  ✓ distinct: different account AND different session secret" ;;
+
+  warn)
+    # SAME ACCOUNT. Was a refusal gated behind --allow-same-account; that gate is
+    # gone. He asked for this login, the secret is genuinely distinct, and it is
+    # his rate-limit pool to share. Tell him exactly what he got, then register.
+    say "  ! SAME ACCOUNT as the live login — registering anyway."
+    say "    You did not need a flag for this and there is no flag to pass."
+    say "    The session secret IS distinct, so this is a real second grant and"
+    say "    not a clone — but both grants draw on one rate-limit pool, and the"
+    say "    server may yet invalidate the older one. Machine store: re-check it"
+    say "    today. The manifest records this honestly as a same-account slot." ;;
+
+  report)
+    # NOT A POLICY REFUSAL — a statement of fact. There is no credential in the
+    # slot, so there is nothing to write a manifest about. It names re-running as
+    # the remedy, and re-running is never blocked.
+    die "the login did not complete for $LABEL — no credential landed in the slot,
+  so there is nothing to register yet. Your live login is untouched and the slot
+  dir is left exactly as it was.
+
+  Just run the same command again. Nothing is holding you back and no flag is
+  needed: signing this slot in is always allowed, whatever it does or does not
+  already contain." ;;
+
+  refuse)
+    # THE ONE SURVIVING REGISTRATION REFUSAL: the clone. Read the header. This
+    # can only fire when the slot's secret is a COPY of a credential that already
+    # lives in another store — never when a fresh browser grant landed, because a
+    # fresh grant is a new token. Two stores on one refresh token means the
+    # second refresher gets a retired token and self-wipes; that is what
+    # destroyed `primary` and `secondary-live`.
+    die "NOT REGISTERING $LABEL: the slot's secret came out byte-identical to the
+  live login's. That is the same session in two places, not a second login.
+
+  This is the one thing that is still stopped, and it is not about your slot
+  having had a login before — a FRESH sign-in can never produce this, because a
+  fresh grant is a new token. Only a COPY of an existing credential can. Two
+  stores holding one refresh token means the second one to refresh is handed a
+  retired token and wipes itself; that is what killed \`primary\` and
+  \`secondary-live\`.
+
+  Sign in through the browser again and pick an account on the consent page —
+  that path is never blocked.
+
+  The slot's own keychain entry is left in place; drop it with:
+      security delete-generic-password -a $(kc_account) -s ${SLOT_SERVICE@Q}" ;;
+esac
+
+# ── register ────────────────────────────────────────────────────────────────
+#
+# manifest.toml is the wire format `threads accounts adopt` parses. Field shape
+# is mirrored from `accounts::write_login_manifest`; the conformance test proves
+# what this writes is what the Rust side reads.
+#
+# The note records the VERDICT, not the happy path. A same-account slot that
+# described itself as an ordinary own-login would be a lie told to whoever reads
+# the registry six months from now, when the shared pool is the surprising part.
+NOTE="own login (not a clone): this slot completed its own \`claude auth login\`, so it holds an independent OAuth grant with its own refresh token and cannot be invalidated by any other account's refresh"
+if [ "$VERDICT" = SameAccount ]; then
+  NOTE="own login (not a clone), same account as the machine-default login: this slot holds its OWN OAuth grant, but for the SAME account as the machine-default login — one rate-limit pool shared between them, and two refresh-token lineages on one server-side account"
+fi
+cat > "$SLOT_DIR/manifest.toml" <<EOF
+label = "$LABEL"
+captured_at = "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+source_config_dir = "$SLOT_DIR"
+source_config_json = "$SLOT_DIR/.claude.json"
+spawn_env = "CLAUDE_CONFIG_DIR=$SLOT_DIR"
+credential_mode = "own-login"
+keychain_service = "$SLOT_SERVICE"
+keychain_account = "$(kc_account)"
+note = "$NOTE"
+EOF
+chmod 600 "$SLOT_DIR/manifest.toml"
+
+# ── THE LOGIN HINT: a slot cannot exist without one ─────────────────────────
+#
+# `accounts/<label>/login-hint` is the address `claude-accounts login <label>`
+# passes as `--email` next time, so the consent page arrives pre-filled and
+# there is no doubt which account is being signed in.
+#
+# It used to be written ONLY when the operator passed `--email`, which made it
+# an optional convenience — and it failed in the worst possible place. The one
+# slot on this machine that ended up without a hint (`owner-account`)
+# is the one whose login is dead, so the single sign-in he is forced to do by
+# hand is the single sign-in the tooling could not prefill. That is backwards.
+#
+# It is written HERE, in the script that actually creates the slot, rather than
+# only in the `claude-accounts` wrapper — because this script can be, and is,
+# invoked directly. And the address does not need to have been typed: the login
+# that just completed wrote the AUTHENTICATED account's own email into the
+# slot's `.claude.json`, which is a better source than an operator's `--email`
+# anyway (it is what he actually consented as, not what he intended to).
+#
+# This is the one place this script writes a plain email. It is not a
+# credential, it never reaches stdout or a log, and it lands mode 600 inside
+# the 0700 `*`-gitignored slot dir.
+HINT_EMAIL="$EMAIL"
+if [ -z "$HINT_EMAIL" ]; then
+  HINT_EMAIL="$(python3 - "$SLOT_DIR/.claude.json" <<'PY' 2>/dev/null || true
+import json, sys
+try:
+    d = json.load(open(sys.argv[1]))
+except Exception:
+    sys.exit(0)
+e = ((d.get("oauthAccount") or {}).get("emailAddress"))
+print(e if isinstance(e, str) and "@" in e else "", end="")
+PY
+)"
+fi
+if [ -n "$HINT_EMAIL" ]; then
+  printf '%s\n' "$HINT_EMAIL" > "$SLOT_DIR/login-hint" && chmod 600 "$SLOT_DIR/login-hint"
+  say "  login hint       : written (the consent page will be pre-filled next time)"
+else
+  say "  login hint       : NOT written — the completed login recorded no email."
+  say "                     Set one by hand so the next sign-in can pre-fill:"
+  say "                       printf '%s\\n' you@example.com > $SLOT_DIR/login-hint"
+fi
+
+export THREADS_HOME="$THREADS_DIR"
+cargo run --quiet --manifest-path "$REPO_ROOT/Cargo.toml" -p threads --bin threads \
+  -- accounts adopt "$LABEL" \
+  || die "manifest written but \`threads accounts adopt $LABEL\` failed — the login
+  is good and the slot is usable by hand; only the registry entry is missing."
+
+# ── free proof that the account works ───────────────────────────────────────
+#
+# `/usage` is confirmed free (no billed tokens). Non-fatal: the account is
+# already proven registrable, and a fresh slot has none of the operator's
+# settings, so an unrelated startup hiccup must not fail the registration.
+if [ "$SKIP_USAGE" -eq 0 ]; then
+  say ""
+  say "  free /usage probe (no spend)…"
+  USAGE_OUT="$(env -u CLAUDE_CODE_OAUTH_TOKEN -u ANTHROPIC_API_KEY \
+    CLAUDE_CONFIG_DIR="$SLOT_DIR" \
+    claude -p "/usage" --output-format json --no-session-persistence 2>/dev/null || true)"
+  if printf '%s' "$USAGE_OUT" | grep -q 'Current session\|week (all models)\|utilization'; then
+    say "  ✓ /usage answered — $LABEL is live and its limits are readable"
+  else
+    say "  ~ /usage did not answer cleanly. Not fatal: auth status already says"
+    say "    logged-in. Re-check later with:"
+    say "      CLAUDE_CONFIG_DIR=$SLOT_DIR claude -p /usage --output-format json"
+  fi
+fi
+
+say ""
+say "════ $LABEL registered as an own-login account ════"
+say "  spawn it with: CLAUDE_CONFIG_DIR=$SLOT_DIR claude"
+say "  or via the registry: threads accounts show $LABEL"
+say ""
+say "  Never run \`claude auth logout\` in this slot unless you mean it: the CLI"
+say "  asks the server to REVOKE the refresh token, which cannot be undone."

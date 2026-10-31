@@ -1,0 +1,18 @@
+LEDGER v1 — sketch (Status › Ledger, first sub-tab)
+
+ ▶ #106  -4m   "Ledger first, for style feedback. Ship it early."       running
+ │  ③ dump ─────────────────────────────── 41.0s  running
+ │  ├─ load_dump · fragment · route · apply · cascade · commit
+ │  ├─╮ ② fragment          1.8s  done
+ │  │ ├ ① route             0.5s  done   → X-3 Ledger
+ │  │ ╰─╮ ③ apply          38.0s  running
+ │  │   ╰ ② author         38.0s  parked  weekly 80% on every account
+ │
+ ✓ #105  -2h   "[Q-3] The minimal crate."                               done
+ ✓ #104  -6h   thread fold · 14 messages · 2 nodes                      done
+ ✗ #103  -1d   one tranche rolled back, retried on the new base          done
+ ✓ #102  -2d   secret actions: masked input, routed                     done
+ ✓ #101  -3d   release plan                                             done
+
+Phases are the dump ripple's own steps. A fork (├─╮) is a sub-ripple run in
+parallel; a join (├─╯) is where its result merges back. ① ② ③ are ripple types.
