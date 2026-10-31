@@ -248,7 +248,7 @@ fn adversarial_0215_click_every_control() {
                 }
             }
         }
-        page(&mut a, &mut rec, &root, env, "Threads", &|a: &mut App| a.set_ctab(CTab::Agents));
+        page(&mut a, &mut rec, &root, env, "Threads", &|a: &mut App| a.set_ctab(CTab::Threads));
         for (i, t) in StatusTab::ALL.iter().enumerate() {
             page(&mut a, &mut rec, &root, env, &format!("Status {t:?}"), &move |a: &mut App| {
                 a.set_ctab(CTab::Status);

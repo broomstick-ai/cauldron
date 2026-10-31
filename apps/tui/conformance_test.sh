@@ -190,6 +190,11 @@ if pid == 0:
     env["TUI_THREADS_PORT"] = FACE_PORT
     env["AUI_V2_URL"] = "ws://127.0.0.1:1/"
     env["CAULDRON_BIN"] = "/usr/bin/false"
+    env["CAULDRON_ISOLATED"] = "1"
+    # REL-6a6: an isolated face dials only the scratch ports it is GIVEN.
+    # REL-6a8: with the pid holding it — the fake is not the face's child, so
+    # the face accepts it only as the listener this harness names.
+    env["CAULDRON_ISOLATED_PORTS"] = f"127.0.0.1:{FACE_PORT}@{os.environ['TUI_FAKE_PID']}" if os.environ.get("TUI_FAKE_PID") else FACE_PORT
     env["CAULDRON_OPENER"] = "none"; env["CAULDRON_TYPE_ONE"] = "off"
     # NOT HIS HOME (R7.S5b): `~/.cauldron` and `~/.tui` are his live face's.
     env["HOME"] = FACE_HOME
@@ -365,7 +370,7 @@ for r in grid:
     print("SCREEN " + "".join(r).rstrip())
 PY
 
-probe() { TUI_PROBE_HOME="$FACEHOME" TUI_PROBE_PORT="$FAKE_PORT" python3 "$PROBE" "${1:-100}" "${2:-24}" "$BIN" ${3:+"$3"}; }
+probe() { TUI_PROBE_HOME="$FACEHOME" TUI_PROBE_PORT="$FAKE_PORT" TUI_FAKE_PID="$FAKE_PID" python3 "$PROBE" "${1:-100}" "${2:-24}" "$BIN" ${3:+"$3"}; }
 
 # ── THE FAKE DAEMON THE PROBE TALKS TO (R7.S5b) ──────────────────────────────
 # R7.S5 pointed the probe at port 1, which is right for isolation and wrong for

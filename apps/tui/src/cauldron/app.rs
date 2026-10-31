@@ -37,26 +37,29 @@ use crate::cauldron::tags::{self, Tag};
 /// 8e4fca10 msg 457 renamed two of them: "Let's rename the root surface tab
 /// to Cauldron", and "instead of getting rid of the threads tab there at the
 /// top, let's just call it agents" — CAULDRON | AGENTS | STATUS | CONFIG.
+/// the release plan's environment bar names it THREADS again (REL-6,
+/// settling PRODUCT-SPEC (b)-Q3): CAULDRON | THREADS | STATUS | CONFIG.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CTab {
     Cauldron,
-    Agents,
+    Threads,
     Status,
     Config,
 }
 
-/// The cauldron tabs' names before 8e4fca10 msg 457, and what each is now.
-/// Typed (a flag) they are REFUSED, by name, as earlier renames were; read
-/// back from what this face STORED (a reference's origin, a setting) they are
-/// the tab they always were, because his data outlives the word.
-pub const CTAB_RENAMED: &[(&str, CTab)] = &[("surface", CTab::Cauldron), ("threads", CTab::Agents)];
+/// The cauldron tabs' former names, and what each is now: `surface` before
+/// 8e4fca10 msg 457, `agents` before REL-6. Typed (a flag) they are REFUSED,
+/// by name, as earlier renames were; read back from what this face STORED (a
+/// reference's origin, a setting) they are the tab they always were, because
+/// his data outlives the word.
+pub const CTAB_RENAMED: &[(&str, CTab)] = &[("surface", CTab::Cauldron), ("agents", CTab::Threads)];
 
 impl CTab {
-    pub const ALL: [CTab; 4] = [CTab::Cauldron, CTab::Agents, CTab::Status, CTab::Config];
+    pub const ALL: [CTab; 4] = [CTab::Cauldron, CTab::Threads, CTab::Status, CTab::Config];
     pub fn label(self) -> &'static str {
         match self {
             CTab::Cauldron => "Cauldron",
-            CTab::Agents => "Agents",
+            CTab::Threads => "Threads",
             CTab::Status => "Status",
             CTab::Config => "Config",
         }
@@ -508,7 +511,7 @@ pub const KEYMAP: &[(&str, &str)] = &[
     ("click", "a setting, band or button acts at once · else select, and click again to open"),
     ("click, on Cauldron", "its reference at the caret, in place of the one there · double click: a quote"),
     ("drag a ⣿", "resize the sidebar · the bucket"),
-    ("⇧Tab · F1 … F4", "next cauldron tab · Cauldron · Agents · Status · Config"),
+    ("⇧Tab · F1 … F4", "next cauldron tab · Cauldron · Threads · Status · Config"),
     ("→ ←, on a sub-tab strip · click one", "the next / previous sub-tab (Status, Config)"),
     ("^T", "disable or enable the cauldron (asks first; also `cauldron enabled`, Config's last tab)"),
     ("Tab · ⌥1 … ⌥6 · ⌥, ⌥.", "next cluster tab · a cluster tab · previous / next"),
@@ -539,8 +542,8 @@ pub const KEYMAP: &[(&str, &str)] = &[
     ("^G", "include everything below the cluster · Aggregated clusters: the whole cauldron too"),
     ("^E · click the cauldron", "cauldrons"),
     ("→ ←, on a ripple, on the Ledger", "open / shut the ripples it ran · Enter · click: explore it"),
-    ("→ · Enter, in Agents", "open a thread, a band, a tool call · on a subagent, its transcript"),
-    ("←, in Agents", "back: close it · a subagent to its thread · a thread to the list"),
+    ("→ · Enter, in Threads", "open a thread, a band, a tool call · on a subagent, its transcript"),
+    ("←, in Threads", "back: close it · a subagent to its thread · a thread to the list"),
     ("⌥↑ ⌥↓, in a thread", "the previous / next of your messages"),
     ("Enter, in a thread's message box", "send it"),
     ("double click a title or a tab", "rename it on screen (dev only)"),
@@ -610,8 +613,16 @@ pub fn tab_key(key: &KeyEvent) -> Option<TabKey> {
 pub struct App {
     /// The environment this face is in.
     pub env: Environment,
-    /// The Threads tab: its data and where he is in it.
+    /// The Threads tab: what it projects from the store, and where he is in it.
     pub threads: crate::cauldron::threads::Threads,
+    /// **THE FACE'S ONE CONNECTION TO THE THREADS DAEMON** (REL-6): the seam,
+    /// the chat face's store, the transcript and send paths. Detached until
+    /// face first shows the Threads tab ([`App::start_live`], from `cli`);
+    /// every tab that reads the daemon reads this one.
+    pub live: crate::cauldron::live::Live,
+    /// The launch's door to the threads daemon (REL-6a): set only by `cli`,
+    /// so an App a test builds has none and its `start_live` dials nothing.
+    pub(crate) live_door: Option<crate::cauldron::live::Door>,
     /// The FIXTURE seed directory a test or `--seeds` opened this face
     /// with; on a real environment `store::no_seeds`, which holds nothing,
     /// so the environment shows only its own data (REL-3.S2).
@@ -967,6 +978,8 @@ impl App {
             new_cluster_kept: None,
             new_cluster_opened: (String::new(), String::new()),
             threads: Default::default(),
+            live: crate::cauldron::live::Live::detached(String::new()),
+            live_door: None,
             env,
             seeds,
         };
@@ -1007,7 +1020,15 @@ impl App {
         app.aggregate = app.settings.get(settings::def("ui.aggregate_default"), &none).val.as_bool();
         app.sync_whole()?;
         app.arts = crate::cauldron::artifacts::load(&app.seeds, &app.env.name, &store::soup_dir(&app.env)?)?;
-        app.threads = crate::cauldron::threads::Threads::new(crate::cauldron::threads::load(&app.seeds, &app.env.name)?);
+        // The Threads tab lists this environment's threads (Q-T1): those
+        // under its cauldron root when he has set one, every thread when not.
+        let root = app.settings.get(settings::def("paths.root"), &none);
+        app.threads.root = match (root.prov, root.val) {
+            (settings::Prov::Default, _) => None,
+            (_, settings::Val::Str(p)) if !p.trim().is_empty() => Some(PathBuf::from(p)),
+            _ => None,
+        };
+        app.threads.refresh(&app.live);
         app.worktrees = app.arts.worktrees.clone();
         let seed = store::DumpSeed::load(&app.seeds, &app.env.name)?;
         app.seed_draft = seed.draft;
@@ -1069,7 +1090,20 @@ impl App {
         next.focus = self.focus;
         next.back_to = self.back_to;
         next.notice = Some(format!("cauldron → {name}"));
+        // **REL-6d: THE THREADS CONNECTION FOLLOWS THE CAULDRON.** The old
+        // environment's connection is torn down first (its runtime, socket
+        // and subscriptions go with it; its store is the producer's truth for
+        // the OLD environment and is never carried), then the launch's door
+        // moves over, and — when the shown tab reads the daemon — the new
+        // environment's own endpoint is resolved and connected through it.
+        // `start_live` never waits: the seam connects on its own runtime and
+        // the tab draws connecting / down until the daemon answers.
+        drop(std::mem::replace(&mut self.live, crate::cauldron::live::Live::detached(String::new())));
+        next.live_door = self.live_door.take();
         *self = next;
+        if self.ctab == CTab::Threads {
+            self.start_live();
+        }
         Ok(())
     }
 
@@ -2638,7 +2672,7 @@ impl App {
     }
 
     pub fn copy_path(&mut self, path: String) {
-        self.notice = Some(format!("copying {}", path.replace(&std::env::var("HOME").unwrap_or_default(), "~")));
+        self.notice = Some(format!("copying {}", crate::cauldron::artpage::tilde(&path)));
         self.flash = Some(path.clone());
         self.outbox.push(Outbox::Copy(path));
     }
@@ -2660,7 +2694,7 @@ impl App {
 
     pub fn open_path(&mut self, path: String) {
         // A path that does not exist is `open`'s to say; nothing here checks.
-        self.notice = Some(format!("open {}", path.replace(&std::env::var("HOME").unwrap_or_default(), "~")));
+        self.notice = Some(format!("open {}", crate::cauldron::artpage::tilde(&path)));
         self.outbox.push(Outbox::Open(path));
     }
 
@@ -2787,7 +2821,7 @@ impl App {
                 self.snav.set_open(band, !open);
                 true
             }
-            CTab::Cauldron | CTab::Agents => false,
+            CTab::Cauldron | CTab::Threads => false,
         }
     }
 
@@ -2796,7 +2830,7 @@ impl App {
         match self.ctab {
             CTab::Status => crate::cauldron::status::StatusTab::ALL.get(i).map(|t| t.label().to_string()),
             CTab::Config => crate::cauldron::menu::CfgTab::ALL.get(i).map(|t| self.cfg_label(*t)),
-            CTab::Cauldron | CTab::Agents => None,
+            CTab::Cauldron | CTab::Threads => None,
         }
     }
 
@@ -3137,14 +3171,14 @@ impl App {
         match self.ctab {
             CTab::Status => Some(0),
             CTab::Config => Some(crate::cauldron::menu::SETTINGS_ROW),
-            CTab::Cauldron | CTab::Agents => None,
+            CTab::Cauldron | CTab::Threads => None,
         }
     }
 
     /// The selectable rows of the tab on screen, in display order.
     pub fn dash_rows(&self) -> Vec<Row> {
         match self.ctab {
-            CTab::Cauldron | CTab::Agents => Vec::new(),
+            CTab::Cauldron | CTab::Threads => Vec::new(),
             CTab::Status => (0..crate::cauldron::status::view(self, 120).items.len()).map(Row::Status).collect(),
             CTab::Config => self.settings_rows(),
         }
@@ -3170,7 +3204,7 @@ impl App {
         let heads = match self.ctab {
             CTab::Config => self.settings_heads(),
             CTab::Status => crate::cauldron::status::view(self, 120).heads,
-            CTab::Cauldron | CTab::Agents => return,
+            CTab::Cauldron | CTab::Threads => return,
         };
         let Some(d) = self.dash_index() else { return };
         let at = self.rows[d];
@@ -3281,7 +3315,7 @@ impl App {
                     self.set_cfg_tab(t);
                 }
             }
-            CTab::Cauldron | CTab::Agents => {}
+            CTab::Cauldron | CTab::Threads => {}
         }
     }
 
@@ -3533,7 +3567,7 @@ impl App {
             CTab::Cauldron => self.named(self.ktab.label()),
             CTab::Status => format!("Status › {}", self.sttab.label()),
             CTab::Config => format!("Config › {}", self.cfg_tab.label()),
-            CTab::Agents => "Agents".into(),
+            CTab::Threads => "Threads".into(),
         }
     }
 
@@ -4022,7 +4056,7 @@ impl App {
                 // dictation arrives as a paste).
                 Some(_) if !s.trim().is_empty() => self.notice = Some("not pasted: this has no field — Esc, then paste into the bucket".into()),
                 Some(_) => {}
-                None if self.ctab == CTab::Agents => crate::cauldron::threads::paste(self, &s),
+                None if self.ctab == CTab::Threads => crate::cauldron::threads::paste(self, &s),
                 None if self.field.is_some() => {
                     if let Some(f) = &mut self.field {
                         f.text.push_str(s.trim());
@@ -4091,7 +4125,7 @@ impl App {
                 return self.dev_rename(&w);
             }
         }
-        if self.ctab == CTab::Agents && !matches!(hit, Some(Hit::CTab(_) | Hit::Env)) {
+        if self.ctab == CTab::Threads && !matches!(hit, Some(Hit::CTab(_) | Hit::Env)) {
             return crate::cauldron::threads::mouse(self, m, hit);
         }
         if matches!(m.kind, MouseEventKind::Down(_)) {
@@ -4607,7 +4641,7 @@ impl App {
             return self.tab(k);
         }
         // The Threads tab is the threads app (msg 235): its own keys.
-        if self.ctab == CTab::Agents {
+        if self.ctab == CTab::Threads {
             return crate::cauldron::threads::key(self, key);
         }
         if self.searching {
@@ -4912,6 +4946,11 @@ pub fn is_trace_root(it: Item) -> bool {
 /// is absent), exactly as every `cauldron` verb would.
 pub fn resolve_env(flag: Option<&str>) -> Result<Environment> {
     let base = Environment::resolve().context("resolving the cauldron environment")?;
+    // REL-6a4: an isolated process never writes his store, wherever an unset
+    // or live CAULDRON_HOME would have put it.
+    if let Some(why) = crate::cauldron::live::isolated_root_refusal(&base.root) {
+        anyhow::bail!(why);
+    }
     match flag {
         Some(name) => base.for_name(name),
         None => Ok(base),

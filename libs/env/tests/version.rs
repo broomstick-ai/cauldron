@@ -60,6 +60,7 @@ fn ident(commit: &str) -> Identity {
 /// A listener that answers HELLO once with `id`.
 fn answering(id: Identity) -> String {
     let l = TcpListener::bind("127.0.0.1:0").unwrap();
+    env::egress::grant_addr(l.local_addr().unwrap()).unwrap(); // REL-6a6: given
     let addr = l.local_addr().unwrap().to_string();
     std::thread::spawn(move || {
         if let Ok((s, _)) = l.accept() {

@@ -45,6 +45,7 @@ fn seam(addr: &str, token: &str, probe: &str) -> Seam {
 /// A listener that answers HELLO once with `id`, then stops.
 fn fake(id: Identity) -> String {
     let l = TcpListener::bind("127.0.0.1:0").unwrap();
+    env::egress::grant_addr(l.local_addr().unwrap()).unwrap(); // REL-6a6: given
     let addr = l.local_addr().unwrap().to_string();
     std::thread::spawn(move || {
         if let Ok((s, _)) = l.accept() {
@@ -88,6 +89,7 @@ fn stale_no_listener_even_though_the_pid_is_alive() {
     // case pid liveness gets wrong and the socket gets right.
     let addr = {
         let l = TcpListener::bind("127.0.0.1:0").unwrap();
+        env::egress::grant_addr(l.local_addr().unwrap()).unwrap(); // REL-6a6: given
         l.local_addr().unwrap().to_string()
     };
     let v = env::seams::probe(&seam(&addr, "tok-1", "seam"));
@@ -122,6 +124,7 @@ fn stale_wrong_env_when_the_listener_reports_another_environment() {
 #[test]
 fn a_non_cauldron_listener_is_wrong_owner_not_live() {
     let l = TcpListener::bind("127.0.0.1:0").unwrap();
+    env::egress::grant_addr(l.local_addr().unwrap()).unwrap(); // REL-6a6: given
     let addr = l.local_addr().unwrap().to_string();
     std::thread::spawn(move || {
         if let Ok((s, _)) = l.accept() {

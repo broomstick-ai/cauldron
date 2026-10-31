@@ -48,6 +48,7 @@ pub mod alias;
 // R9.CFG1 (E18-19): `[cli] interface` — which binary PATH's `cauldron` runs.
 pub mod cli_config;
 pub mod decl;
+pub mod egress;
 pub mod fingerprint;
 pub mod guard;
 pub mod hold;

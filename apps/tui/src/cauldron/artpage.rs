@@ -76,6 +76,10 @@ fn sw(s: &Span) -> usize {
     display_width(&s.content)
 }
 
+/// **THE ONE DISPLAY READ OF `$HOME`** in the face (REL-6a4b): a path
+/// written from `~`, for the eye only — it returns a `String` for a notice or
+/// a tag and is never a path anything opens. Every other home lookup is
+/// `cauldron::live::face_home` (`rel6a4b` census).
 pub fn tilde(path: &str) -> String {
     match std::env::var("HOME") {
         Ok(h) if !h.is_empty() && path.starts_with(&h) => format!("~{}", &path[h.len()..]),

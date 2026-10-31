@@ -55,6 +55,12 @@ fn parse(argv: Vec<String>) -> anyhow::Result<Args> {
 
 pub fn main(argv: Vec<String>) -> anyhow::Result<()> {
     let args = parse(argv)?;
+    // REL-6a3 rule A: a dump is non-interactive (main has already required
+    // its explicit port; this marks an in-process caller too), so the board's
+    // connection refuses his ports and its children inherit the marker.
+    if args.dump {
+        crate::cauldron::live::mark_non_interactive("tui pool --dump");
+    }
     let url = crate::seam::link::ws_url();
     let rt = tokio::runtime::Builder::new_multi_thread().enable_all().build()?;
     rt.block_on(async move {
@@ -165,6 +171,10 @@ async fn interactive(url: &str) -> anyhow::Result<()> {
                     term.draw(|f| view::draw(f, &app))?;
                     match perform(&h, &a).await {
                         Outcome::Done(n, t) => app.set_note(n, t),
+                        Outcome::NeedsTerminal(argv) if crate::pool::action::isolated_set_live_refusal(std::path::Path::new(&argv[0])).is_some() => {
+                            let why = crate::pool::action::isolated_set_live_refusal(std::path::Path::new(&argv[0])).unwrap_or_default();
+                            app.set_note(why, Tone::Bad);
+                        }
                         Outcome::NeedsTerminal(argv) => {
                             paused.store(true, Ordering::SeqCst);
                             term_shell::restore();

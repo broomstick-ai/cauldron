@@ -405,7 +405,8 @@ pub fn play_cmd() -> Option<Cmd> {
 /// `~/.tui/captures`. `None` when there is no home directory, which is a legal
 /// state: mic mode then simply has nowhere to record to and says so.
 pub fn dir() -> Option<PathBuf> {
-    dirs::home_dir().map(|h| h.join(".tui").join("captures"))
+    // `~` is `face_home`: an isolated process records into scratch (REL-6a4).
+    crate::cauldron::live::face_home().map(|h| h.join(".tui").join("captures"))
 }
 
 /// Create the capture directory at `0700` and return a fresh `0600` file path

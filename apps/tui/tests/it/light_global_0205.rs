@@ -119,7 +119,8 @@ fn c1_a_light_frame_is_drawn_in_the_light_palette_everywhere() {
     let mut a = open_in(&scratch_root(), "prod");
     set_theme(&mut a, "light");
     let mut frames: Vec<(String, HashMap<Color, usize>)> = Vec::new();
-    for t in [CTab::Cauldron, CTab::Agents] {
+    crate::live_fixture::feed(&mut a);
+    for t in [CTab::Cauldron, CTab::Threads] {
         a.set_ctab(t);
         frames.push((format!("{t:?}"), colours(&mut a)));
     }

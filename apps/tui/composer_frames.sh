@@ -319,6 +319,7 @@ if pid == 0:
     # The variables the face READS (R7.S5; pinned by `tests/drive_isolation.rs`).
     env["TUI_THREADS_CHASSIS_PORT"] = "1"; env["TUI_THREADS_PORT"] = "1"
     env["AUI_V2_URL"] = "ws://127.0.0.1:1/"; env["CAULDRON_BIN"] = "/usr/bin/false"
+    env["CAULDRON_ISOLATED"] = "1"
     env["CAULDRON_OPENER"] = "none"; env["CAULDRON_TYPE_ONE"] = "off"
     env["CAULDRON_HOME"] = os.path.join(WORK, "chome")
     env.pop("TMUX", None)

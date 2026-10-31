@@ -1,0 +1,9 @@
+[package]
+name = "test-isolation"
+version.workspace = true
+edition.workspace = true
+description = "REL-6a3 rule B: linked ONLY into test binaries (a dev-dependency); at load, before main and before any test thread, it exports CAULDRON_ISOLATED=1 so every child a test spawns is isolated."
+publish = false
+
+[lib]
+path = "src/lib.rs"

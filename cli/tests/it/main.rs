@@ -2,6 +2,9 @@
 //! former `tests/*.rs` file. A new integration test is a new module here,
 //! never a new top-level `tests/*.rs`.
 
+// REL-6a5: every child of this binary carries CAULDRON_ISOLATED=1.
+test_isolation::install!();
+
 mod broken_declaration;
 mod c7f4_pin_lock;
 mod c7f5_manifest_race;

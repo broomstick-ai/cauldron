@@ -5,6 +5,9 @@
 //! (`TUI_POOL_ACCOUNTS_TOOL`); nothing in this file may touch the real
 //! machine login. One test, because the env it sets is process-wide.
 
+// REL-6a3 rule B: every child this test binary spawns inherits CAULDRON_ISOLATED=1.
+test_isolation::install!();
+
 use std::os::unix::fs::PermissionsExt;
 
 use tokio::sync::mpsc;

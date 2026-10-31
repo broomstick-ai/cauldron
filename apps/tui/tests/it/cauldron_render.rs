@@ -573,15 +573,18 @@ fn no_bucket_state_carries_a_legend() {
 fn no_threads_mode_screen_carries_a_legend() {
     use tui::cauldron::threads::TFocus;
     let mut a = app();
-    a.set_ctab(CTab::Agents);
+    a.set_ctab(CTab::Threads);
+    crate::live_fixture::feed(&mut a);
     assert_clean(&sweep(&mut a), "Threads, the list");
     a.threads.bands.insert("archived".into());
     assert_clean(&sweep(&mut a), "Threads, the list, every band open");
-    for t in 0..a.threads.seed.threads.len() {
-        a.threads.open_thread(t);
-        let subjects: Vec<Option<String>> = std::iter::once(None).chain(a.threads.thread().unwrap().agents.iter().map(|x| Some(x.id.clone()))).collect();
+    for t in crate::live_fixture::LISTED {
+        crate::live_fixture::open(&mut a, t);
+        let subjects: Vec<Option<String>> = std::iter::once(None).chain(a.threads.agent_rows.iter().map(|x| Some(x.id.clone()))).collect();
         for subject in subjects {
             a.threads.set_subject(subject.clone());
+            tui::cauldron::threads::settle(&mut a);
+            crate::live_fixture::transcript(&mut a);
             for i in 0..a.threads.blocks().len() {
                 a.threads.chat_item = i;
                 a.handle(key(KeyCode::Right));
@@ -1232,7 +1235,7 @@ fn the_top_bar_is_cauldron_its_name_then_the_tabs_and_names_no_workspace() {
     // 8e4fca10 msg 457: the product name is gone, the environment leads.
     assert_eq!(&words[..3], &["prod", "▾", "Cauldron"], "{top}");
     assert_eq!(top.matches("Cauldron").count(), 1, "only the tab says Cauldron: {top}");
-    assert!(top.ends_with("Cauldron | Agents | Status | Config"), "{top}");
+    assert!(top.ends_with("Cauldron | Threads | Status | Config"), "{top}");
     for gone in ["Cluster ·", "Energy", "Ripples", "Mesh", "Settings", "Soup", "System", "Services", "Contents"] {
         assert!(!top.contains(gone), "{gone}: {top}");
     }
@@ -1398,7 +1401,7 @@ fn shift_tab_steps_cauldron_tabs_f_keys_jump_and_cmd_is_unbound() {
     // SHIFT as some stacks report it — each steps to the next, wrapping.
     // msg 235: Surface · Threads · Status · Config.
     a.handle(key(KeyCode::BackTab));
-    assert_eq!(a.ctab, CTab::Agents);
+    assert_eq!(a.ctab, CTab::Threads);
     a.handle(with(KeyCode::BackTab, KeyModifiers::SHIFT));
     assert_eq!(a.ctab, CTab::Status);
     a.handle(with(KeyCode::Tab, KeyModifiers::SHIFT));
@@ -1408,9 +1411,9 @@ fn shift_tab_steps_cauldron_tabs_f_keys_jump_and_cmd_is_unbound() {
     // From inside the bucket too, and nothing is typed.
     a.handle(key(KeyCode::Char('a')));
     a.handle(key(KeyCode::BackTab));
-    assert_eq!(a.ctab, CTab::Agents);
+    assert_eq!(a.ctab, CTab::Threads);
     a.handle(cmd('3'));
-    assert_eq!(a.ctab, CTab::Agents);
+    assert_eq!(a.ctab, CTab::Threads);
     assert!(a.composer.is_blank(), "{}", a.composer.text());
     // Clicking a tab works as before.
     click_on(&mut a, Hit::CTab(CTab::Status));

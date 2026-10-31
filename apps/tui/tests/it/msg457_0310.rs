@@ -1,6 +1,6 @@
 //! Task 0310 (8e4fca10 msg 457, the five UI landings he settled on): the
 //! bucket's copy at its bottom right, drawn unlike a reference chip; the root
-//! tabs Cauldron | Agents | Status | Config; the environment alone at the top
+//! tabs Cauldron | Threads | Status | Config; the environment alone at the top
 //! left; the top box's legend `surface`; and Status › Ledger, the whole
 //! history of execution — every dump a band, newest first, the ripples it ran
 //! nested inside it, each one explored by its type. Real seed files, real
@@ -134,30 +134,32 @@ fn item1_a_long_notice_never_covers_the_copy_at_any_width() {
     assert_eq!(a.composer.text(), "kept");
 }
 
-// ── 2: Cauldron | Agents | Status | Config ─────────────────────────────────
+// ── 2: Cauldron | Threads | Status | Config ─────────────────────────────────
 
+/// REL-6 named the second tab Threads again (the release plan's environment
+/// bar); msg 457's `Agents` is now the old name, as `Surface` is.
 #[test]
-fn item2_the_root_tabs_are_cauldron_agents_status_config_everywhere() {
-    assert_eq!(CTab::ALL.map(CTab::label), ["Cauldron", "Agents", "Status", "Config"]);
+fn item2_the_root_tabs_are_cauldron_threads_status_config_everywhere() {
+    assert_eq!(CTab::ALL.map(CTab::label), ["Cauldron", "Threads", "Status", "Config"]);
     let mut a = app();
     for t in CTab::ALL {
         a.set_ctab(t);
         let s = screen(&mut a);
         let top = s.lines().next().unwrap();
-        assert!(top.ends_with("Cauldron | Agents | Status | Config"), "{t:?}: {top}");
-        for old in ["Surface", "Threads"] {
+        assert!(top.ends_with("Cauldron | Threads | Status | Config"), "{t:?}: {top}");
+        for old in ["Surface", "Agents"] {
             assert!(!s.contains(old), "{t:?}: `{old}` is on screen:\n{s}");
         }
     }
     // The help palette names them by their new names, and only so.
     let help: String = KEYMAP.iter().map(|(k, w)| format!("{k} {w}\n")).collect();
-    assert!(help.contains("Cauldron · Agents · Status · Config"), "{help}");
-    for old in ["Surface", "Threads"] {
+    assert!(help.contains("Cauldron · Threads · Status · Config"), "{help}");
+    for old in ["Surface", "Agents"] {
         assert!(!help.contains(old), "`{old}` in the palette:\n{help}");
     }
     a.modal = Some(Modal::Palette { scroll: 0 });
     let s = render_to_text(&mut a, 160, 90).unwrap().join("\n");
-    assert!(!s.contains("Surface") && !s.contains("Threads"), "{s}");
+    assert!(!s.contains("Surface") && !s.contains("Agents"), "{s}");
 }
 
 /// Typed, an old name is REFUSED by name; stored (a reference's origin, a
@@ -165,17 +167,17 @@ fn item2_the_root_tabs_are_cauldron_agents_status_config_everywhere() {
 #[test]
 fn item2_old_names_are_refused_on_the_flag_and_kept_in_his_data() {
     assert_eq!(CTab::parse("surface"), None);
-    assert_eq!(CTab::parse("threads"), None);
+    assert_eq!(CTab::parse("agents"), None);
     assert_eq!(CTab::parse("cauldron"), Some(CTab::Cauldron));
-    assert_eq!(CTab::parse("agents"), Some(CTab::Agents));
+    assert_eq!(CTab::parse("threads"), Some(CTab::Threads));
     assert_eq!(CTab::stored("surface"), Some(CTab::Cauldron));
-    assert_eq!(CTab::stored("Threads"), Some(CTab::Agents));
-    for (old, now) in [("surface", "cauldron"), ("threads", "agents")] {
+    assert_eq!(CTab::stored("Agents"), Some(CTab::Threads));
+    for (old, now) in [("surface", "cauldron"), ("agents", "threads")] {
         let e = tui::cauldron::cli::main(vec!["--dump".into(), "--tab".into(), old.into()]).unwrap_err().to_string();
         assert!(e.contains(&format!("called {now} now")), "{old}: {e}");
     }
     // A settings file from before: its tab is the same tab, renamed.
-    for (old, now) in [("surface", "cauldron"), ("threads", "agents")] {
+    for (old, now) in [("surface", "cauldron"), ("agents", "threads")] {
         let st = tui::cauldron::settings::Store::parse(&format!("[ui]\ndefault_tab = \"{old}\"\n"), "test").unwrap();
         assert!(matches!(st.vals.get("ui.default_tab"), Some(tui::cauldron::settings::Val::Str(v)) if v == now), "{old}: {:?}", st.vals.get("ui.default_tab"));
         assert!(st.warnings.is_empty() && st.retired.is_empty(), "{:?} {:?}", st.warnings, st.retired);

@@ -87,6 +87,17 @@ pub fn accounts_tool() -> PathBuf {
         .join("../../services/threads/scripts/claude-accounts")
 }
 
+/// **REL-6a5: AN ISOLATED PROCESS NEVER RUNS THE REAL `claude-accounts`.**
+/// `set-live-login` switches the machine's Claude login, so under isolation
+/// (`cauldron::live::isolation`) the tool must be pointed explicitly at a
+/// stub IN A SCRATCH DIR with `TUI_POOL_ACCOUNTS_TOOL`; unpointed (the default
+/// is under his home) or pointed under his home is refused, nothing runs.
+/// Since MERGE-15 this is [`isolated_set_live_refusal`] on the configured tool
+/// — the same choke point, not a second rule.
+pub fn isolation_refusal() -> Option<String> {
+    isolated_set_live_refusal(&accounts_tool())
+}
+
 pub fn set_live_argv(label: &str, mode: Mode) -> Vec<String> {
     let mut v = vec![
         accounts_tool().to_string_lossy().into_owned(),
@@ -99,6 +110,32 @@ pub fn set_live_argv(label: &str, mode: Mode) -> Vec<String> {
         Mode::Switch => v.push("--yes".into()),
     }
     v
+}
+
+/// **AN ISOLATED PROCESS NEVER RUNS HIS `claude-accounts`** (REL-6a4b,
+/// REL-6a4-I N2). `set-live-login` writes `~/.claude.json` and the keychain
+/// under whatever HOME it inherits, and the keychain is not HOME-scoped at
+/// all, so no scratch HOME isolates it. In an isolated process (a test, a
+/// `--dump`, the marker) the child runs only when `tool` is itself an
+/// isolated root — a stub a test planted in its own scratch — and never when
+/// it is the default (in this repo, under his home) or any copy under his
+/// home. `None` for his interactive board.
+///
+/// **ONE REFUSAL PATH** (MERGE-15): REL-6a4b's local refusal is folded into
+/// REL-6a5's egress choke point, [`env::egress::admit_login_tool`]; this and
+/// [`isolation_refusal`] only supply the tool and the protected homes.
+/// `tool` counts as POINTED only when it is the `TUI_POOL_ACCOUNTS_TOOL` this
+/// process was given; anything else (the default) reaches the choke point as
+/// unpointed and is refused there.
+pub fn isolated_set_live_refusal(tool: &std::path::Path) -> Option<String> {
+    let why = crate::cauldron::live::isolation(false)?;
+    let pointed = std::env::var_os("TUI_POOL_ACCOUNTS_TOOL").filter(|v| !v.is_empty()).is_some_and(|v| std::path::Path::new(&v) == tool);
+    env::egress::admit_login_tool("set-live-login", pointed.then_some(tool), &crate::cauldron::live::protected_homes(), Some(&why)).err()
+}
+
+/// [`isolated_set_live_refusal`] over explicit inputs (`tool` given = pointed).
+pub fn isolated_set_live_refusal_from(isolated: Option<&str>, tool: &std::path::Path, protected: &[PathBuf]) -> Option<String> {
+    env::egress::admit_login_tool("set-live-login", Some(tool), protected, isolated).err()
 }
 
 /// Refuse while `CLAUDE_CONFIG_DIR` is set at all: the child would write a

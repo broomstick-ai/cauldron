@@ -1,145 +1,117 @@
 //! **THE THREADS TAB** (8e4fca10 msg 186, task 0167, made it a MODE behind
-//! the top-left button; msg 235 made it a TAB: "I actually don't like the
-//! cauldron and threads flipping back and forth with that top left button
-//! ... let's add another top level tab called threads ... And then the
-//! whole threads application can be moved inside of that threads tab"): the
+//! the top-left button; msg 235 made it a TAB; msg 457 called it Agents;
+//! the release plan (REL-6) names it Threads again and makes it REAL): the
 //! interface he talks to the coordinator through — the harness `tui` chat
-//! face — rebuilt inside this face, on its own data.
+//! face — rebuilt inside this face, on the REAL threads daemon.
 //!
-//! > *"that word cauldron at the top left, we should make that a button ...
-//! > we can have it switch from saying cauldron to saying threads and at a
-//! > whole different interface ... I don't want you to just copy the whole
-//! > lib because I want you to use fake data and I want you to be
-//! > intentional about how it looks."*
+//! > *"Threads are pinned or recent per environment, with no Projects
+//! > grouping. Reuse the `tui --chat` client code."* (REL-6)
 //!
-//! What it keeps from the chat face (`libs/tui-render`): its screens — the
-//! thread LIST (pinned, recent, projects, archived) and a THREAD (the
-//! transcript, the message box, the subagent tree under it); in a thread, a
-//! first line that says its name, its state and its project; the
-//! assistant on the left under `claude · time · took`, his words on the right
-//! with their id at the top right; the tool lane (`⚙`, `◇ n calls`, `⚠`);
-//! the compaction rule; a subagent tree whose first row is the thread itself
-//! and whose selected row is whose transcript is shown; the region order chat
-//! ↔ message box ↔ subagents; ← at the edge going back.
+//! What it keeps from the chat face: its CLIENT, whole — the seam, the
+//! mirror, the chat face's [`crate::store::Store`] and its derivations
+//! (`project_list`'s pinned and recent bands, `sort_pinned`, `Store::name_of`,
+//! the daemon's status words, `thread_blocks` for a transcript,
+//! `managed_rows` for the subagents) — reached through the cauldron face's one
+//! connection, [`crate::cauldron::live`]. And its screens: the thread LIST
+//! (Pinned, Recent, Archived — no Projects band) and a THREAD (the
+//! transcript, the message box, the subagent tree under it).
 //!
 //! What it changes, for this face's visual system (`look`, msg 186): the
 //! selection is a background, never a `▸` marker; his message is the node
-//! CARD (rounded, its id the legend), since a tinted block would hide the
-//! selection's background; the list's sections, a project, a tool call, a
-//! batch of calls and the subagents are BANDS on the one band line, their
-//! counts as metadata segments; thread rows, subagent rows and an opened
-//! call's details are TABLES; there is no footer of key hints (this face
-//! keeps its keys in the `?` palette, and no legends).
+//! CARD; the list's sections, a tool call and the subagents are BANDS on the
+//! one band line, their counts as metadata segments; thread rows and subagent
+//! rows are TABLES; no footer of key hints.
 //!
-//! The data is `<seeds>/threads.json`. Nothing here talks to a daemon: a message
-//! sent is kept in this face's memory and marked held.
+//! **Nothing here holds a copy of the daemon's truth.** [`Threads::refresh`]
+//! PROJECTS the store into rows and blocks once per batch; a message sent is
+//! sent through the seam and appears when the daemon logs it (TC-15). The
+//! daemon down: the rows the mirror last held stay drawn, marked stale, and
+//! the message box refuses to send behind [`live::SEND_BLOCKED`].
 
 use std::collections::{HashMap, HashSet};
-use std::path::Path;
+use std::path::PathBuf;
 
-use anyhow::{Context, Result};
+use chrono::{DateTime, Utc};
 use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
 use ratatui::layout::{Position, Rect};
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::Paragraph;
 use ratatui::Frame;
-use serde::Deserialize;
 use tui_render::compose::Composer;
 use tui_render::palette;
 
 use crate::cauldron::app::{App, Hit};
+use crate::cauldron::live::{self, Live};
 use crate::cauldron::look::{self, Card, Tone};
 use crate::cauldron::view::{display_width, wrap};
+use crate::agents::SubagentRow;
+use tui_render::model::RowKey;
 
-// ── the data ──────────────────────────────────────────────────────────────
-
-#[derive(Debug, Clone, Default, Deserialize)]
-pub struct Seed {
-    #[serde(default)]
-    pub projects: Vec<Project>,
-    #[serde(default)]
-    pub threads: Vec<Thread>,
+/// An in-process subagent's state in his words: it has no thread, so no
+/// `rolled.display` — the chat face's one renaming (`store::status_word`).
+/// No end and no running seen yet is drawn blank, never a word of its own
+/// (consumer §8: blank before it lands).
+fn direct_word(a: &SubagentRow) -> String {
+    crate::store::status_word(a.state).map(str::to_string).unwrap_or_default()
 }
 
-#[derive(Debug, Clone, Deserialize)]
-pub struct Project {
-    pub name: String,
-    pub path: String,
-}
+// ── the rows, as the store projects them ──────────────────────────────────
 
-#[derive(Debug, Clone, Deserialize)]
+/// One row of the thread list, projected from the store.
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Thread {
     pub id: String,
+    /// `Store::name_of`, else `untitled` — never the id, never a path.
     pub name: String,
+    /// The project index the row was read from, or the root its cwd is under.
     pub project: String,
-    /// `active` (a turn is running) or `idle`.
+    /// The daemon's own word (`rolled.display` when it said one), verbatim;
+    /// empty before it has said anything — never `absent`.
     pub state: String,
-    #[serde(default)]
+    /// The daemon says it, or a descendant, is running.
+    pub active: bool,
     pub unread: usize,
-    /// Since the last activity, as the list prints it.
+    /// Since his last input, as the list prints it.
     pub age: String,
-    #[serde(default)]
     pub pinned: bool,
-    #[serde(default)]
     pub archived: bool,
-    #[serde(default)]
-    pub blocks: Vec<Block>,
-    #[serde(default)]
-    pub agents: Vec<Agent>,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+/// A subagent of the open thread: a MANAGED child, a thread of its own
+/// (`Store::managed_rows`).
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Agent {
     pub id: String,
     /// The subagent that launched it; none for the thread's own.
-    #[serde(default)]
     pub parent: Option<String>,
     pub label: String,
-    /// `running`, `done` or `failed`.
+    /// The daemon's word for it (`rolled.display`), else the child's state.
     pub state: String,
     pub age: String,
-    #[serde(default)]
     pub tokens: u64,
-    #[serde(default)]
     pub calls: u64,
-    #[serde(default)]
-    pub blocks: Vec<Block>,
 }
 
 /// One thing in a transcript.
-#[derive(Debug, Clone, Deserialize)]
-#[serde(tag = "kind", rename_all = "snake_case")]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Block {
     /// His message: its id (the thread's message number) and time.
     User { id: String, at: String, text: String },
     /// The assistant's turn: when, and how long it took.
-    Assistant {
-        at: String,
-        #[serde(default)]
-        took: String,
-        text: String,
-    },
-    /// One tool call: its glyph, what it did, a short result, its details.
-    Tool {
-        tool: String,
-        text: String,
-        #[serde(default)]
-        meta: String,
-        #[serde(default)]
-        detail: Vec<[String; 2]>,
-    },
-    /// A run of tool calls folded into one row.
-    Group {
-        text: String,
-        count: u64,
-        #[serde(default)]
-        items: Vec<String>,
-    },
-    /// A subagent launched here (its row in the tree).
-    Agent { agent: String },
+    Assistant { at: String, took: String, text: String },
+    /// One tool call (the call and its result merged, DEC-33): its glyph and
+    /// what the chat face's projection says of it — one line closed, the
+    /// full arguments and result when `open` (REL-6b). `key` is its ledger
+    /// row, which is what is opened: the chat face's own `Opened` set.
+    Tool { tool: String, text: String, meta: String, key: Option<RowKey>, expandable: bool, open: bool },
+    /// A run of rows folded into one (`×n`); open, every row it stands for.
+    Group { text: String, count: u64, key: Option<RowKey>, expandable: bool, open: bool },
+    /// An in-process (Task) subagent launched here: the chat face's one
+    /// tile at its launch row. → shows its own transcript (REL-6b).
+    Agent { agent: String, label: String, state: String },
     Warn { text: String },
-    /// A line this face adds and no daemon wrote (a message held here).
+    /// A line the face adds and no daemon wrote (loading, a window's edge).
     Note { text: String },
     Compacted { text: String },
 }
@@ -148,8 +120,7 @@ impl Block {
     /// Whether → does anything on it.
     fn opens(&self) -> bool {
         match self {
-            Block::Tool { detail, .. } => !detail.is_empty(),
-            Block::Group { items, .. } => !items.is_empty(),
+            Block::Tool { key, expandable, .. } | Block::Group { key, expandable, .. } => key.is_some() && *expandable,
             Block::Agent { .. } => true,
             _ => false,
         }
@@ -160,16 +131,50 @@ impl Block {
     }
 }
 
-/// `<seeds>/threads.json` (or `<seeds>/soup/<env>.threads.json` for a cauldron of
-/// its own).
-pub fn load(seeds: &Path, env: &str) -> Result<Seed> {
-    let own = seeds.join("soup").join(format!("{env}.threads.json"));
-    let path = if own.exists() { own } else { seeds.join("threads.json") };
-    if !path.exists() {
-        return Ok(Seed::default());
+/// The chat face's transcript block as this face draws it. `agents` are the
+/// direct (Task) subagents of the thread the store has open: a tile at one's
+/// launch row becomes [`Block::Agent`].
+fn block_of(b: &tui_render::Block, agents: &[SubagentRow]) -> Block {
+    use tui_render::{Block as R, Sender, Severity};
+    let at = |ts: &Option<DateTime<Utc>>| ts.map(|t| t.with_timezone(&chrono::Local).format("%H:%M").to_string()).unwrap_or_default();
+    match b {
+        R::Message { id, sender: Sender::User, ts, text, .. } => Block::User { id: id.message_id.clone(), at: at(ts), text: text.clone() },
+        R::Message { sender: Sender::Assistant, ts, text, .. } => Block::Assistant { at: at(ts), took: String::new(), text: text.clone() },
+        R::Lane { severity: Severity::Warn | Severity::Critical, text, .. } => Block::Warn { text: text.clone() },
+        R::Lane { key: Some(k), affordance: Some(_), .. } if agents.iter().any(|a| &a.launched_at == k) => {
+            let a = agents.iter().find(|a| &a.launched_at == k).expect("just found");
+            Block::Agent { agent: a.id.clone(), label: a.label.clone(), state: direct_word(a) }
+        }
+        R::Lane { text, count: Some(n), key, expandable, open, .. } => Block::Group { text: text.clone(), count: *n, key: key.clone(), expandable: *expandable, open: *open },
+        R::Lane { glyph, text, key, expandable, open, .. } => Block::Tool { tool: glyph.to_string(), text: text.clone(), meta: String::new(), key: key.clone(), expandable: *expandable, open: *open },
+        R::Rule { text } if text.contains("compact") => Block::Compacted { text: text.clone() },
+        R::Rule { text } => Block::Note { text: text.clone() },
     }
-    let text = std::fs::read_to_string(&path).with_context(|| format!("reading {}", path.display()))?;
-    serde_json::from_str(&text).with_context(|| format!("parsing {}", path.display()))
+}
+
+/// `3m`, `2h`, `5d` since `t`; empty when the daemon has not said.
+fn age(t: Option<DateTime<Utc>>) -> String {
+    let Some(t) = t else { return String::new() };
+    let s = (Utc::now() - t).num_seconds().max(0);
+    match s {
+        s if s < 60 => format!("{s}s"),
+        s if s < 3600 => format!("{}m", s / 60),
+        s if s < 86_400 => format!("{}h", s / 3600),
+        s => format!("{}d", s / 86_400),
+    }
+}
+
+/// The word a row shows: the daemon's `rolled.display` verbatim when it said
+/// one, else the store's shown word; never `absent` or `?` (consumer §8: a
+/// state the daemon has not said is blank).
+fn word(store: &crate::store::Store, id: &str, shown: &str) -> String {
+    if let Some(d) = store.fact(id).and_then(|f| f.rolled.as_ref()).map(|r| r.display.clone()).filter(|d| !d.is_empty()) {
+        return d;
+    }
+    match shown {
+        "absent" | "?" => String::new(),
+        w => w.to_string(),
+    }
 }
 
 // ── the state ─────────────────────────────────────────────────────────────
@@ -190,10 +195,17 @@ pub enum TFocus {
 /// One selectable row of the thread list.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum LItem {
-    /// A band: `pinned`, `recent`, `projects`, `archived`, or `project:<name>`.
+    /// A band: `pinned`, `recent` or `archived`.
     Band(String),
-    /// Thread `.0` (into `Seed::threads`).
-    Thread(usize),
+    /// A thread, by its id.
+    Thread(String),
+}
+
+/// What a key asked of the connection; [`settle`] does it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum Want {
+    Open(String),
+    Send(String, String),
 }
 
 /// A laid-out page: its lines, and the line range of each selectable thing.
@@ -202,13 +214,39 @@ pub struct Laid<T> {
     pub items: Vec<(std::ops::Range<usize>, T)>,
 }
 
+/// The link, as the tab says it.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub enum Link {
+    /// No connection was started (`why`).
+    #[default]
+    None,
+    Connecting,
+    Up,
+    /// It was up and is not: what is drawn is what the daemon last said.
+    Down,
+}
+
 #[derive(Default)]
 pub struct Threads {
-    pub seed: Seed,
-    /// The thread on screen; none on the list.
-    pub open: Option<usize>,
-    /// Whose transcript is shown: a subagent's id, or none for the thread's.
+    /// The list, projected from the store by [`Threads::refresh`].
+    pub rows: Vec<Thread>,
+    /// The open thread's id; none on the list.
+    pub open: Option<String>,
+    /// The open thread's row (its name, state and project), projected.
+    pub head: Option<Thread>,
+    /// Whose transcript is shown: a subagent's (a thread) id, or none for the
+    /// thread's own.
     pub subject: Option<String>,
+    /// The transcript on screen, projected from the store.
+    pub transcript: Vec<Block>,
+    /// The open thread's subagents, projected from the store.
+    pub agent_rows: Vec<Agent>,
+    /// The environment's project root (Q-T1): only threads under it are
+    /// listed. None lists every thread.
+    pub root: Option<PathBuf>,
+    pub link: Link,
+    /// Why there is no connection, when there is none.
+    pub why_not: Option<String>,
     pub focus: Option<TFocus>,
     /// The selected row of the list.
     pub list_item: usize,
@@ -221,53 +259,208 @@ pub struct Threads {
     pub reveal: bool,
     /// The list's bands he turned from their default.
     pub bands: HashSet<String>,
-    /// Blocks opened in place, by `thread/subject/block`.
-    pub opened: HashSet<String>,
+    /// Transcript rows he opened in place (a tool call's full arguments and
+    /// result): the chat face's own `Opened`, keyed by LEDGER ROW, so an
+    /// opened row stays open as the tail grows (REL-6b).
+    pub opened: crate::store::Opened,
+    /// The open thread's in-process (Task) subagents, the chat face's
+    /// `agents::direct_attribute` over the rows the mirror holds — no
+    /// subscription of their own: they live in the thread's own log.
+    pub direct: Vec<SubagentRow>,
+    /// The last direct subagents seen for each thread, so the open thread's
+    /// keep their rows while a managed child is the store's open thread.
+    /// In memory only, and CAPPED at [`SUBAGENT_CACHE_THREADS`] threads,
+    /// least recently used first out (REL-6a2; consumer §11).
+    direct_of: HashMap<String, Vec<SubagentRow>>,
+    /// `direct_of`'s keys, least recently used first.
+    direct_lru: std::collections::VecDeque<String>,
     /// The subagent tree's row (0 its band, 1 the thread, then each agent).
     pub agent_row: usize,
     pub agents_shut: bool,
-    /// Each thread's message box.
-    pub composers: HashMap<usize, Composer>,
+    /// Each thread's message box, by thread id.
+    pub composers: HashMap<String, Composer>,
     /// The message box's text width in the last frame.
     pub input_w: usize,
     /// The first tree row the last frame drew (the band shows a window).
     pub tree_top: usize,
+    /// A draft owed to the journal, and since when (coalesced, 100 ms).
+    draft_owed: Option<(String, std::time::Instant)>,
+    wants: Vec<Want>,
 }
 
-impl Threads {
-    pub fn new(seed: Seed) -> Self {
-        Self { seed, ..Self::default() }
-    }
+/// **THE CAP ON THE FACE'S SUBAGENT CACHE** (REL-6a2, REL-6ab-I F5): how
+/// many threads' direct (Task) subagent rows the face keeps in memory.
+/// Consumer §11 rules finished messages kept in memory WITH a cap and names
+/// no number; 8 is a modest pick of this step's, equal to the seam's
+/// `open_keys_per_conn` (the most `threads/log` windows a face holds at once),
+/// so the cache never outlives the windows it was derived from by much. The
+/// open thread is never evicted. Not an operator ruling: revisit freely.
+pub const SUBAGENT_CACHE_THREADS: usize = 8;
 
+/// How long a typed draft waits before it is written (consumer §9: coalesced
+/// on a debounce of at most 100 ms).
+pub const DRAFT_DEBOUNCE: std::time::Duration = std::time::Duration::from_millis(100);
+
+impl Threads {
     pub fn focus(&self) -> TFocus {
         self.focus.unwrap_or(if self.open.is_some() { TFocus::Chat } else { TFocus::List })
     }
 
+    /// Keep `rows` as `id`'s direct subagents, as its most recent use, and
+    /// evict the least recently used past [`SUBAGENT_CACHE_THREADS`] — never
+    /// the open thread.
+    fn remember_direct(&mut self, id: &str, rows: Vec<SubagentRow>) {
+        self.direct_of.insert(id.to_string(), rows);
+        self.touch_direct(id);
+        while self.direct_of.len() > SUBAGENT_CACHE_THREADS {
+            let Some(at) = self.direct_lru.iter().position(|k| Some(k.as_str()) != self.open.as_deref()) else { break };
+            if let Some(k) = self.direct_lru.remove(at) {
+                self.direct_of.remove(&k);
+            }
+        }
+    }
+
+    /// A read or a write of `id`'s entry is a use (most recent last).
+    fn touch_direct(&mut self, id: &str) {
+        if !self.direct_of.contains_key(id) {
+            return;
+        }
+        if let Some(at) = self.direct_lru.iter().position(|k| k == id) {
+            self.direct_lru.remove(at);
+        }
+        self.direct_lru.push_back(id.to_string());
+    }
+
+    /// The threads whose subagent rows the face holds, least recently used
+    /// first (for the cap's guard).
+    pub fn direct_cached(&self) -> Vec<String> {
+        self.direct_lru.iter().cloned().collect()
+    }
+
+    /// **PROJECT THE STORE**: the list's rows, the open thread's head, its
+    /// transcript and its subagents. Once per batch, never per fact.
+    pub fn refresh(&mut self, live: &Live) {
+        let store = &live.store;
+        self.link = if live.is_up() {
+            Link::Up
+        } else if live.is_down() {
+            Link::Down
+        } else if live.is_started() {
+            Link::Connecting
+        } else {
+            Link::None
+        };
+        self.why_not = live.why_not.clone();
+        let rows = project(store, self.root.as_deref());
+        self.rows = rows;
+        self.head = self.open.as_deref().map(|id| {
+            self.rows.iter().find(|r| r.id == id).cloned().unwrap_or_else(|| {
+                let shown = store.shown_word(id).unwrap_or_default();
+                Thread {
+                    id: id.to_string(),
+                    name: store.name_of(id).unwrap_or_else(|| crate::store::UNTITLED.to_string()),
+                    project: store.project_of(id).unwrap_or_default().to_string(),
+                    state: word(store, id, &shown),
+                    active: store.fact(id).is_some_and(|f| f.executing) || shown == "active",
+                    unread: 0,
+                    age: String::new(),
+                    pinned: false,
+                    archived: false,
+                }
+            })
+        });
+        // The direct (Task) subagents of whatever thread the store has open,
+        // from the rows the mirror holds (the chat face's attribution).
+        let here: Vec<SubagentRow> = match store.open_id() {
+            Some(id) => {
+                let rows = crate::store::open_rows(store);
+                let d = crate::agents::direct_attribute(&rows, Utc::now());
+                self.remember_direct(id, d.clone());
+                d
+            }
+            None => Vec::new(),
+        };
+        if let Some(o) = self.open.clone() {
+            self.touch_direct(&o);
+        }
+        self.direct = self.open.as_deref().and_then(|o| self.direct_of.get(o)).cloned().unwrap_or_default();
+        let old = self.transcript.len();
+        let was_last = self.chat_item + 1 >= old;
+        // A direct subagent's chat is its parent thread's rows seen through
+        // the chat face's lens — the store keeps the THREAD open; a managed
+        // child is a thread of its own and the store opens it.
+        let lens = self.direct_subject();
+        let shown = if lens.is_some() { self.open.as_deref() } else { self.subject.as_deref().or(self.open.as_deref()) };
+        self.transcript = match store.open_id() {
+            Some(id) if Some(id) == shown => {
+                let subject = lens.map_or(tui_render::TreeId::Parent, |a| tui_render::TreeId::Agent(a.to_string()));
+                crate::store::thread_blocks(store, false, false, &self.opened, &here, &subject, None).iter().map(|b| block_of(b, &here)).collect()
+            }
+            _ if self.open.is_some() => vec![Block::Note { text: "loading this thread's tail from the daemon…".into() }],
+            _ => Vec::new(),
+        };
+        if was_last {
+            self.chat_item = self.transcript.len().saturating_sub(1);
+        }
+        self.agent_rows = match &self.open {
+            Some(id) => store
+                .managed_rows(id)
+                .into_iter()
+                .filter_map(|r| match r.id {
+                    tui_render::TreeId::Thread(child) => Some(Agent {
+                        state: r.status.clone().unwrap_or_else(|| r.state.word().to_string()),
+                        id: child,
+                        parent: None,
+                        label: r.label,
+                        age: age(r.started),
+                        tokens: r.tokens.unwrap_or(0),
+                        calls: r.calls.unwrap_or(0),
+                    }),
+                    _ => None,
+                })
+                .chain(self.direct.iter().map(|a| Agent {
+                    id: a.id.clone(),
+                    // Nested under another of the thread's own subagents; one
+                    // whose parent left the tail is drawn at the first level.
+                    parent: a.parent.clone().filter(|p| self.direct.iter().any(|d| &d.id == p)),
+                    label: a.label.clone(),
+                    state: direct_word(a),
+                    age: age(a.started),
+                    tokens: a.tokens.unwrap_or(0),
+                    calls: a.calls.unwrap_or(0),
+                }))
+                .collect(),
+            None => Vec::new(),
+        };
+    }
+
+    /// The subject, when it is one of the open thread's in-process (Task)
+    /// subagents rather than a managed child thread.
+    pub fn direct_subject(&self) -> Option<&str> {
+        self.subject.as_deref().filter(|s| self.direct.iter().any(|a| a.id == *s))
+    }
+
     /// Unread across every thread that is not archived.
     pub fn unread(&self) -> usize {
-        self.seed.threads.iter().filter(|t| !t.archived).map(|t| t.unread).sum()
+        self.rows.iter().filter(|t| !t.archived).map(|t| t.unread).sum()
     }
 
     pub fn active(&self) -> usize {
-        self.seed.threads.iter().filter(|t| t.state == "active").count()
+        self.rows.iter().filter(|t| t.active).count()
     }
 
     /// The thread on screen.
     pub fn thread(&self) -> Option<&Thread> {
-        self.open.and_then(|i| self.seed.threads.get(i))
+        self.head.as_ref()
     }
 
     pub fn agent(&self, id: &str) -> Option<&Agent> {
-        self.thread()?.agents.iter().find(|a| a.id == id)
+        self.agent_rows.iter().find(|a| a.id == id)
     }
 
     /// The transcript on screen: the subject's.
     pub fn blocks(&self) -> &[Block] {
-        let Some(t) = self.thread() else { return &[] };
-        match &self.subject {
-            Some(id) => t.agents.iter().find(|a| &a.id == id).map(|a| a.blocks.as_slice()).unwrap_or(&[]),
-            None => &t.blocks,
-        }
+        &self.transcript
     }
 
     /// The message box shows only for the thread itself: a subagent takes
@@ -277,12 +470,12 @@ impl Threads {
     }
 
     pub fn composer(&mut self) -> &mut Composer {
-        let i = self.open.unwrap_or(usize::MAX);
-        self.composers.entry(i).or_default()
+        let id = self.open.clone().unwrap_or_default();
+        self.composers.entry(id).or_default()
     }
 
     pub fn composer_ref(&self) -> Option<&Composer> {
-        self.open.and_then(|i| self.composers.get(&i))
+        self.open.as_ref().and_then(|i| self.composers.get(i))
     }
 
     fn band_open(&self, key: &str) -> bool {
@@ -299,36 +492,41 @@ impl Threads {
         }
     }
 
-    fn block_key(&self, i: usize) -> String {
-        format!("{}/{}/{i}", self.open.unwrap_or(0), self.subject.as_deref().unwrap_or("-"))
+    /// The ledger row block `i` stands for, when it can open.
+    fn block_key(&self, i: usize) -> Option<RowKey> {
+        match self.blocks().get(i) {
+            Some(b @ (Block::Tool { key, .. } | Block::Group { key, .. })) if b.opens() => key.clone(),
+            _ => None,
+        }
     }
 
     pub fn block_open(&self, i: usize) -> bool {
-        self.opened.contains(&self.block_key(i))
+        matches!(self.blocks().get(i), Some(Block::Tool { open: true, .. } | Block::Group { open: true, .. }))
     }
 
-    /// Open thread `i`: its transcript at the newest line, read.
-    pub fn open_thread(&mut self, i: usize) {
-        if i >= self.seed.threads.len() {
-            return;
-        }
-        self.open = Some(i);
+    /// Open thread `id`: its transcript at the newest line. The connection
+    /// is asked for it by [`settle`].
+    pub fn open_thread(&mut self, id: &str) {
+        self.open = Some(id.to_string());
         self.subject = None;
-        self.seed.threads[i].unread = 0;
-        self.chat_item = self.blocks().len().saturating_sub(1);
+        self.transcript.clear();
+        self.chat_item = 0;
         self.chat_scroll = 0;
         self.agent_row = 1;
         self.focus = Some(TFocus::Chat);
         self.reveal = true;
+        self.wants.push(Want::Open(id.to_string()));
     }
 
     /// Back to the list, on the row of the thread he left.
     pub fn close_thread(&mut self) {
         let was = self.open.take();
         self.subject = None;
+        self.head = None;
+        self.transcript.clear();
         self.focus = Some(TFocus::List);
         if let Some(w) = was {
-            if let Some(at) = self.list_items().iter().position(|(_, it)| *it == LItem::Thread(w)) {
+            if let Some(at) = self.list_items().iter().position(|(_, it)| *it == LItem::Thread(w.clone())) {
                 self.list_item = at;
             }
         }
@@ -338,10 +536,17 @@ impl Threads {
     /// Show `subject`'s transcript (none: the thread's own).
     pub fn set_subject(&mut self, subject: Option<String>) {
         self.subject = subject;
-        self.chat_item = self.blocks().len().saturating_sub(1);
+        self.transcript.clear();
+        self.chat_item = 0;
         self.chat_scroll = 0;
         self.agent_row = self.tree().iter().position(|r| r.id == self.subject).map_or(1, |p| p + 1);
         self.reveal = true;
+        // A Task subagent's chat is in its thread's own log: the store keeps
+        // (or goes back to) the thread — no subscription of its own.
+        let target = if self.direct_subject().is_some() { self.open.clone() } else { self.subject.clone().or_else(|| self.open.clone()) };
+        if let Some(id) = target {
+            self.wants.push(Want::Open(id));
+        }
     }
 
     // ── the list ──
@@ -350,65 +555,57 @@ impl Threads {
         self.list(100).items
     }
 
-    /// The thread list: PINNED, RECENT, PROJECTS (each project a band of its
-    /// threads) and ARCHIVED, on the one band line.
+    /// The thread list: PINNED, RECENT and ARCHIVED, on the one band line.
+    /// No Projects band (REL-6: "with no Projects grouping").
     pub fn list(&self, width: usize) -> Laid<LItem> {
         let mut lines = Vec::new();
         let mut items = Vec::new();
-        let threads = &self.seed.threads;
+        let threads = &self.rows;
+        // What the link is, above the bands, when it is not simply up.
+        let said = match (&self.link, threads.is_empty()) {
+            (Link::Up, _) => None,
+            (Link::Down, _) => Some(("threads is down · showing what it last said".to_string(), palette::amber())),
+            (Link::Connecting, true) => Some(("loading threads from the daemon…".to_string(), palette::muted())),
+            (Link::Connecting, false) => None,
+            (Link::None, _) => Some((format!("no threads daemon · {}", self.why_not.as_deref().unwrap_or("not connected")), palette::muted())),
+        };
+        if let Some((text, style)) = said {
+            lines.push(Line::from(Span::styled(text, style)));
+            lines.push(Line::raw(""));
+        }
         // One table for every thread row on the page, so their columns line
         // up whatever band they are in.
         let cells: Vec<Vec<String>> = threads.iter().map(|t| thread_cells(t, width)).collect();
         let widths = look::widths(&cells);
         let count = |idx: &[usize]| {
             let unread: usize = idx.iter().map(|&i| threads[i].unread).sum();
-            let active = idx.iter().filter(|&&i| threads[i].state == "active").count();
+            let active = idx.iter().filter(|&&i| threads[i].active).count();
             look::meta([
                 look::seg("", idx.len(), if idx.len() == 1 { "thread" } else { "threads" }, Tone::Plain),
                 if active > 0 { look::seg("●", active, "active", Tone::Good) } else { Span::raw("") },
                 if unread > 0 { look::seg("•", unread, "unread", Tone::Warn) } else { Span::raw("") },
             ])
         };
-        let band = |lines: &mut Vec<Line<'static>>, items: &mut Vec<(std::ops::Range<usize>, LItem)>, key: &str, name: &str, idx: Vec<usize>, depth: usize, extra: Vec<Span<'static>>| {
-            if !lines.is_empty() && depth == 0 {
+        let mut band = |lines: &mut Vec<Line<'static>>, key: &str, name: &str, idx: Vec<usize>| {
+            if !lines.is_empty() && !lines.last().is_some_and(|l| l.width() == 0) {
                 lines.push(Line::raw(""));
             }
             let open = self.band_open(key);
             let at = lines.len();
-            let mut label = vec![look::name(name)];
-            label.extend(extra);
-            lines.push(look::band_line(depth, open, label, count(&idx), width));
+            lines.push(look::band_line(0, open, vec![look::name(name)], count(&idx), width));
             items.push((at..at + 1, LItem::Band(key.to_string())));
             if open {
                 for i in idx {
                     let at = lines.len();
-                    // Under its project, a thread's project cell is blank:
-                    // the band above says it (the columns still line up).
-                    lines.push(thread_row(&threads[i], &cells[i], &widths, depth + 1, !key.starts_with("project:"), width));
-                    items.push((at..at + 1, LItem::Thread(i)));
+                    lines.push(thread_row(&threads[i], &cells[i], &widths, 1, width));
+                    items.push((at..at + 1, LItem::Thread(threads[i].id.clone())));
                 }
             }
         };
         let live: Vec<usize> = (0..threads.len()).filter(|&i| !threads[i].archived).collect();
-        band(&mut lines, &mut items, "pinned", "Pinned", live.iter().copied().filter(|&i| threads[i].pinned).collect(), 0, vec![]);
-        band(&mut lines, &mut items, "recent", "Recent", live.iter().copied().filter(|&i| !threads[i].pinned).collect(), 0, vec![]);
-        // PROJECTS: a band, and each project a band of its threads.
-        lines.push(Line::raw(""));
-        let open = self.band_open("projects");
-        let at = lines.len();
-        let n = self.seed.projects.len();
-        lines.push(look::band_line(0, open, vec![look::name("Projects")], look::meta([look::seg("", n, if n == 1 { "project" } else { "projects" }, Tone::Plain)]), width));
-        items.push((at..at + 1, LItem::Band("projects".into())));
-        if open {
-            let pw = self.seed.projects.iter().map(|p| display_width(&p.name)).max().unwrap_or(0);
-            for p in &self.seed.projects {
-                let idx: Vec<usize> = live.iter().copied().filter(|&i| threads[i].project == p.name).collect();
-                let key = format!("project:{}", p.name);
-                let pad = " ".repeat(pw.saturating_sub(display_width(&p.name)) + 2);
-                band(&mut lines, &mut items, &key, &p.name, idx, 1, vec![Span::styled(format!("{pad}{}", p.path), palette::muted())]);
-            }
-        }
-        band(&mut lines, &mut items, "archived", "Archived", (0..threads.len()).filter(|&i| threads[i].archived).collect(), 0, vec![]);
+        band(&mut lines, "pinned", "Pinned", live.iter().copied().filter(|&i| threads[i].pinned).collect());
+        band(&mut lines, "recent", "Recent", live.iter().copied().filter(|&i| !threads[i].pinned).collect());
+        band(&mut lines, "archived", "Archived", (0..threads.len()).filter(|&i| threads[i].archived).collect());
         Laid { lines, items }
     }
 
@@ -442,30 +639,40 @@ impl Threads {
                     lines.push(Line::from(head));
                     wrap(&mut lines, text, width.saturating_sub(margin).max(20), 0, palette::ink());
                 }
-                Block::Tool { tool, text, meta, detail } => {
-                    let open = self.block_open(i);
-                    let name = vec![Span::styled(format!("{tool} {text}"), palette::ink2())];
-                    let meta = if meta.is_empty() { vec![] } else { vec![look::word(meta.clone(), Tone::Plain)] };
-                    lines.push(lane_line(!detail.is_empty(), open, name, meta, width));
-                    if open {
-                        let rows = detail.iter().map(|[k, v]| (k.clone(), vec![Span::styled(v.clone(), palette::ink2())])).collect();
-                        lines.extend(look::table(rows, 8, width));
+                // A tool call: one line closed; open, the chat face's whole
+                // rendering of it — the full arguments and the full result —
+                // under its line (REL-6b).
+                Block::Tool { tool, text, meta, open, .. } => {
+                    let first = text.lines().next().unwrap_or_default();
+                    // A band carries its metadata (msg 183): an openable
+                    // call's is its outcome, the projection's last clause
+                    // (`ok`, `failed`, `running`).
+                    let (first, outcome) = match (meta.is_empty() && b.opens(), first.rsplit_once(" · ")) {
+                        (true, Some((head, last))) => (head, last.to_string()),
+                        _ => (first, meta.clone()),
+                    };
+                    let name = vec![Span::styled(format!("{tool} {first}"), palette::ink2())];
+                    let tone = match outcome.as_str() {
+                        "failed" | "error" => Tone::Bad,
+                        _ => Tone::Plain,
+                    };
+                    let meta = if outcome.is_empty() { vec![] } else { vec![look::word(outcome, tone)] };
+                    lines.push(lane_line(b.opens(), *open, name, meta, width));
+                    if *open {
+                        wrap(&mut lines, text, width.saturating_sub(10).max(20), 8, palette::muted());
                     }
                 }
-                Block::Group { text, count, items: calls } => {
-                    let open = self.block_open(i);
-                    let name = vec![Span::styled(format!("◇ {text}"), palette::ink2())];
-                    lines.push(lane_line(!calls.is_empty(), open, name, vec![look::seg("", count, "calls", Tone::Plain)], width));
-                    if open {
-                        for c in calls {
-                            lines.push(Line::from(vec![Span::raw(" ".repeat(8)), Span::styled(c.clone(), palette::muted())]));
-                        }
+                Block::Group { text, count, open, .. } => {
+                    let first = text.lines().next().unwrap_or_default();
+                    let name = vec![Span::styled(format!("◇ {first}"), palette::ink2())];
+                    lines.push(lane_line(b.opens(), *open, name, vec![look::seg("", count, "calls", Tone::Plain)], width));
+                    if *open {
+                        wrap(&mut lines, text, width.saturating_sub(10).max(20), 8, palette::muted());
                     }
                 }
-                Block::Agent { agent } => {
-                    let (label, state) = self.agent(agent).map_or((agent.clone(), "unknown".to_string()), |a| (a.label.clone(), a.state.clone()));
+                Block::Agent { label, state, .. } => {
                     let name = vec![Span::styled(format!("◆ {label}"), palette::ink2())];
-                    lines.push(lane_line(true, false, name, vec![state_seg(&state)], width));
+                    lines.push(lane_line(true, false, name, vec![state_seg(state)], width));
                 }
                 Block::Warn { text } => lines.push(Line::from(vec![Span::raw("    "), Span::styled(format!("⚠ {text}"), palette::amber())])),
                 Block::Note { text } => lines.push(Line::from(vec![Span::raw("    "), Span::styled(format!("◇ {text}"), palette::muted())])),
@@ -482,13 +689,12 @@ impl Threads {
     /// The subagent tree: the thread itself, then every subagent depth
     /// first under the one that launched it.
     pub fn tree(&self) -> Vec<TreeRow> {
-        let Some(t) = self.thread() else { return Vec::new() };
-        if t.agents.is_empty() {
+        if self.thread().is_none() || self.agent_rows.is_empty() {
             return Vec::new();
         }
         let mut out = vec![TreeRow { id: None, depth: 0, last: false, rails: String::new() }];
-        fn walk(t: &Thread, parent: Option<&str>, depth: usize, rails: &str, out: &mut Vec<TreeRow>) {
-            let kids: Vec<&Agent> = t.agents.iter().filter(|a| a.parent.as_deref() == parent).collect();
+        fn walk(t: &[Agent], parent: Option<&str>, depth: usize, rails: &str, out: &mut Vec<TreeRow>) {
+            let kids: Vec<&Agent> = t.iter().filter(|a| a.parent.as_deref() == parent).collect();
             for (k, a) in kids.iter().enumerate() {
                 let last = k + 1 == kids.len();
                 out.push(TreeRow { id: Some(a.id.clone()), depth, last, rails: rails.to_string() });
@@ -496,7 +702,7 @@ impl Threads {
                 walk(t, Some(&a.id), depth + 1, &next, out);
             }
         }
-        walk(t, None, 1, "", &mut out);
+        walk(&self.agent_rows, None, 1, "", &mut out);
         out
     }
 
@@ -507,11 +713,14 @@ impl Threads {
         if tree.is_empty() {
             return Vec::new();
         }
-        let n = |s: &str| t.agents.iter().filter(|a| a.state == s).count();
+        // Counted off the daemon's words: `active…` runs, an error failed.
+        let running = self.agent_rows.iter().filter(|a| a.state.starts_with("active") || a.state == "running").count();
+        let failed = self.agent_rows.iter().filter(|a| a.state.starts_with("error") || a.state == "failed").count();
+        let rest = self.agent_rows.len() - running - failed;
         let meta = look::meta([
-            look::seg("▶", n("running"), "running", if n("running") > 0 { Tone::Good } else { Tone::Plain }),
-            look::seg("✓", n("done"), "done", Tone::Plain),
-            if n("failed") > 0 { look::seg("✕", n("failed"), "failed", Tone::Bad) } else { Span::raw("") },
+            look::seg("▶", running, "running", if running > 0 { Tone::Good } else { Tone::Plain }),
+            look::seg("✓", rest, "idle", Tone::Plain),
+            if failed > 0 { look::seg("✕", failed, "failed", Tone::Bad) } else { Span::raw("") },
         ]);
         let open = !self.agents_shut;
         let mut lines = vec![look::band_line(0, open, vec![look::name("Subagents")], meta, width)];
@@ -541,8 +750,8 @@ impl Threads {
             let state = r.id.as_ref().and_then(|id| self.agent(id)).map(|a| a.state.as_str()).unwrap_or("");
             let mut spans = vec![Span::raw("  "), Span::styled(look::cell(&c[0], widths[0] + 2), label_style)];
             let st = match state {
-                "running" => look::tone(Tone::Good),
-                "failed" => look::tone(Tone::Bad),
+                s if s.starts_with("active") || s == "running" => look::tone(Tone::Good),
+                s if s.starts_with("error") || s == "failed" => look::tone(Tone::Bad),
                 _ => palette::muted(),
             };
             spans.push(Span::styled(look::cell(&c[1], widths[1] + 2), if r.id.is_none() { palette::muted() } else { st }));
@@ -569,10 +778,18 @@ impl Threads {
                     s.push(Span::styled(" › ", palette::muted()));
                     s.push(Span::styled(a.label.clone(), palette::ink2()));
                 }
-                s.push(sep());
-                s.push(if t.state == "active" { Span::styled("active", palette::code()) } else { Span::styled(t.state.clone(), palette::muted()) });
-                s.push(sep());
-                s.push(Span::styled(t.project.clone(), palette::muted()));
+                if !t.state.is_empty() {
+                    s.push(sep());
+                    s.push(if t.active { Span::styled(t.state.clone(), palette::code()) } else { Span::styled(t.state.clone(), palette::muted()) });
+                }
+                if !t.project.is_empty() {
+                    s.push(sep());
+                    s.push(Span::styled(t.project.clone(), palette::muted()));
+                }
+                if self.link == Link::Down {
+                    s.push(sep());
+                    s.push(Span::styled("threads is down · showing what it last said", palette::amber()));
+                }
                 if elsewhere > 0 {
                     s.push(sep());
                     s.push(Span::styled(format!("{elsewhere} unread elsewhere"), palette::amber()));
@@ -587,26 +804,108 @@ impl Threads {
         }
     }
 
-    /// Send the message box's text into the thread: it lands as his message
-    /// with the next id, and is held here — there is no daemon behind this
-    /// tab — which the transcript says.
+    /// **SEND the message box's text into the thread** — through the seam's
+    /// `send`, by [`settle`]; never a local echo. The message appears when
+    /// the daemon logs it, and the box empties only when the daemon accepted
+    /// it (an optimistic clear is a box that eats his words).
     pub fn send(&mut self) {
-        let Some(i) = self.open else { return };
+        let Some(id) = self.open.clone() else { return };
         let text = self.composer().text();
         if text.trim().is_empty() {
             return;
         }
-        let t = &mut self.seed.threads[i];
-        let next = t.blocks.iter().filter_map(|b| match b {
-            Block::User { id, .. } => id.parse::<u64>().ok(),
-            _ => None,
-        }).max().unwrap_or(0) + 1;
-        let at = chrono::Local::now().format("%H:%M").to_string();
-        t.blocks.push(Block::User { id: next.to_string(), at, text: text.trim_end().to_string() });
-        t.blocks.push(Block::Note { text: "held in this face · no daemon behind the Agents tab".into() });
-        self.composers.insert(i, Composer::new());
-        self.chat_item = self.blocks().len().saturating_sub(1);
-        self.chat_scroll = 0;
+        self.wants.push(Want::Send(id, text.trim_end().to_string()));
+    }
+}
+
+impl Threads {
+    /// The open thread's box changed: its draft is owed to the journal.
+    pub fn owe_draft(&mut self) {
+        if let Some(id) = self.open.clone() {
+            self.draft_owed = Some((id, std::time::Instant::now()));
+        }
+    }
+}
+
+// ── the connection ────────────────────────────────────────────────────────
+
+/// **DO WHAT THE KEYS ASKED OF THE CONNECTION, THEN PROJECT**: open a
+/// transcript, issue a send, settle the sends the daemon answered (the box
+/// empties on an ACCEPTED send only, and a refusal keeps his words), and
+/// project the store once.
+pub fn settle(app: &mut App) {
+    for w in std::mem::take(&mut app.threads.wants) {
+        match w {
+            Want::Open(id) => {
+                app.live.open(&id);
+                // A draft he left in the journal comes back into an empty box,
+                // without asking (consumer §9); it is never sent by itself.
+                if app.live.drafts && app.threads.composers.get(&id).map_or(true, |c| c.text().is_empty()) {
+                    if let Some((text, _)) = crate::draft::load(&id) {
+                        app.threads.composers.insert(id.clone(), Composer::from_text(&text));
+                    }
+                }
+            }
+            Want::Send(id, text) => match app.live.send(&id, &text) {
+                Ok(()) => {
+                    app.error = None;
+                    app.notice = Some("sending…".into());
+                }
+                Err(why) => {
+                    app.notice = None;
+                    app.error = Some(why);
+                }
+            },
+        }
+    }
+    for (id, result) in app.live.take_sent() {
+        match result {
+            Ok(_) => {
+                app.threads.composers.insert(id.clone(), Composer::new());
+                if app.threads.draft_owed.as_ref().is_some_and(|(d, _)| *d == id) {
+                    app.threads.draft_owed = None;
+                }
+                if app.live.drafts {
+                    crate::draft::clear(&id);
+                }
+                app.error = None;
+                app.notice = Some("sent".into());
+            }
+            Err(why) => {
+                app.notice = None;
+                app.error = Some(format!("not sent: {why}"));
+            }
+        }
+    }
+    app.threads.refresh(&app.live);
+    // The link is back: the refusal it caused is no longer true.
+    if app.threads.link == Link::Up && app.error.as_deref() == Some(live::SEND_BLOCKED) {
+        app.error = None;
+    }
+}
+
+/// **ONE TICK**: drain the connection (never waiting on it), write an owed
+/// draft, and project once if anything arrived. Returns how many events were
+/// applied — non-zero means a frame is owed.
+pub fn tick(app: &mut App) -> usize {
+    let n = app.live.drain();
+    flush_draft(app, false);
+    if n > 0 {
+        settle(app);
+    }
+    n
+}
+
+/// Write the owed draft once it has waited [`DRAFT_DEBOUNCE`] (or `now`).
+pub fn flush_draft(app: &mut App, now: bool) {
+    let Some((id, at)) = app.threads.draft_owed.clone() else { return };
+    if !now && at.elapsed() < DRAFT_DEBOUNCE {
+        return;
+    }
+    app.threads.draft_owed = None;
+    if app.live.drafts {
+        let text = app.threads.composers.get(&id).map(|c| c.text()).unwrap_or_default();
+        crate::draft::save(&id, &text);
     }
 }
 
@@ -654,19 +953,94 @@ fn thread_cells(t: &Thread, width: usize) -> Vec<String> {
     vec![
         crate::cauldron::view::crop(&t.name, name_w),
         t.project.clone(),
-        if t.state == "active" { "● active".into() } else { t.state.clone() },
+        if t.active { format!("● {}", t.state) } else { t.state.clone() },
         if t.unread > 0 { format!("• {}", t.unread) } else { String::new() },
         t.age.clone(),
     ]
 }
 
-fn thread_row(t: &Thread, c: &[String], w: &[usize], depth: usize, project: bool, width: usize) -> Line<'static> {
+fn thread_row(t: &Thread, c: &[String], w: &[usize], depth: usize, width: usize) -> Line<'static> {
     let mut spans = vec![Span::raw("  ".repeat(depth + 1)), Span::styled(look::cell(&c[0], w[0] + 2), palette::ink())];
-    spans.push(Span::styled(look::cell(if project { &c[1] } else { "" }, w[1] + 2), palette::muted()));
-    spans.push(Span::styled(look::cell(&c[2], w[2] + 2), if t.state == "active" { palette::code() } else { palette::muted() }));
+    spans.push(Span::styled(look::cell(&c[1], w[1] + 2), palette::muted()));
+    spans.push(Span::styled(look::cell(&c[2], w[2] + 2), if t.active { palette::code() } else { palette::muted() }));
     spans.push(Span::styled(look::cell(&c[3], w[3] + 2), palette::amber()));
     spans.push(Span::styled(format!("{:>width$}", c[4], width = w[4]), palette::muted()));
     Line::from(look::fit_spans(spans, width))
+}
+
+/// **THE LIST, PROJECTED FROM THE CHAT FACE'S STORE** — its own bands, not a
+/// second derivation: `project_list` (the index drives, the daemon
+/// decorates; `sort_pinned`'s order; recent newest-first on his last input,
+/// with the daemon's own recent threads no index carries), each band taken
+/// whole (its `see all` page). A pinned thread is listed once, under Pinned.
+/// ARCHIVED is the closed threads of the indexes.
+///
+/// `root` (Q-T1, "per environment"): only threads whose project root or
+/// working directory is under it. A FACE-SIDE filter over rows the face
+/// already holds — no shape changes.
+pub fn project(store: &crate::store::Store, root: Option<&std::path::Path>) -> Vec<Thread> {
+    use tui_render::{BandId, Known};
+    let under = |id: &str, project: &str| -> bool {
+        let Some(root) = root else { return true };
+        let in_root = store.projects().iter().any(|p| p.name == project && p.root.starts_with(root));
+        let cwd = store.fact(id).map(|f| f.cwd.as_str()).unwrap_or("");
+        in_root || (!cwd.is_empty() && std::path::Path::new(cwd).starts_with(root))
+    };
+    let row = |r: &tui_render::ThreadRow, pinned: bool, archived: bool| -> Thread {
+        let state = word(store, &r.id, &r.state);
+        Thread {
+            id: r.id.clone(),
+            name: if r.summary.trim().is_empty() { crate::store::UNTITLED.to_string() } else { r.summary.clone() },
+            project: r.project.clone(),
+            active: r.executing || r.state == "active",
+            state,
+            unread: match r.unread {
+                Known::Known(n) => n as usize,
+                Known::Unknown => 0,
+            },
+            age: age(r.updated),
+            pinned,
+            archived,
+        }
+    };
+    let pinned = crate::store::project_list(store, 0, 0, Some(BandId::Pinned)).pinned;
+    let recent = crate::store::project_list(store, 0, 0, Some(BandId::Recent)).recent;
+    let mut out: Vec<Thread> = Vec::new();
+    for r in &pinned {
+        if !r.closed && under(&r.id, &r.project) {
+            out.push(row(r, true, false));
+        }
+    }
+    for r in &recent {
+        if !out.iter().any(|t| t.id == r.id) && under(&r.id, &r.project) {
+            out.push(row(r, false, false));
+        }
+    }
+    // The closed threads, each once, newest input first.
+    let mut closed: Vec<(String, String, Option<DateTime<Utc>>)> = Vec::new();
+    for p in store.projects() {
+        for t in p.threads.iter().filter(|t| t.closed) {
+            if !closed.iter().any(|(id, _, _)| id == &t.id) && under(&t.id, &p.name) {
+                closed.push((t.id.clone(), p.name.clone(), t.last_user_input_at));
+            }
+        }
+    }
+    closed.sort_by_key(|c| std::cmp::Reverse(c.2));
+    for (id, project, at) in closed {
+        let shown = store.shown_word(&id).unwrap_or_default();
+        out.push(Thread {
+            name: store.name_of(&id).unwrap_or_else(|| crate::store::UNTITLED.to_string()),
+            project,
+            active: store.fact(&id).is_some_and(|f| f.executing) || shown == "active",
+            state: word(store, &id, &shown),
+            unread: 0,
+            age: age(at),
+            pinned: false,
+            archived: true,
+            id,
+        });
+    }
+    out
 }
 
 // ── drawing ───────────────────────────────────────────────────────────────
@@ -805,8 +1179,12 @@ fn draw_thread(frame: &mut Frame, app: &mut App, area: Rect) {
         let name = app.threads.thread().map(|t| t.name.clone()).unwrap_or_default();
         let left = format!("Message · {name} ");
         let fill = width.saturating_sub(display_width(&left));
+        // While the link is not up the box still takes keys, and says it
+        // cannot send (consumer §9).
+        let blocked = app.threads.link != Link::Up;
         let (said, said_style) = match (&app.error, &app.notice) {
             (Some(e), _) => (format!(" {e} "), palette::red()),
+            (None, _) if blocked => (format!(" {} ", live::SEND_BLOCKED), palette::amber()),
             (None, Some(n)) => (format!(" {n} "), palette::green()),
             _ => (String::new(), palette::muted()),
         };
@@ -861,7 +1239,9 @@ pub fn key(app: &mut App, key: KeyEvent) {
     let bare = !ctrl && !alt && !key.modifiers.contains(KeyModifiers::SUPER);
     let focus = app.threads.focus();
     if focus == TFocus::Input && app.threads.has_input() {
-        return input_key(app, key, ctrl, alt);
+        input_key(app, key, ctrl, alt);
+        app.threads.owe_draft();
+        return settle(app);
     }
     let code = match key.code {
         KeyCode::Char('p') if ctrl => KeyCode::Up,
@@ -884,6 +1264,7 @@ pub fn key(app: &mut App, key: KeyEvent) {
         TFocus::Agents => agents_key(t, code),
         TFocus::Input => {}
     }
+    settle(app);
 }
 
 fn list_key(t: &mut Threads, code: KeyCode, alt: bool) {
@@ -901,7 +1282,7 @@ fn list_key(t: &mut Threads, code: KeyCode, alt: bool) {
         KeyCode::PageUp => t.list_scroll = t.list_scroll.saturating_sub(10),
         KeyCode::PageDown => t.list_scroll += 10,
         KeyCode::Right | KeyCode::Enter => match cur {
-            Some(LItem::Thread(i)) => t.open_thread(i),
+            Some(LItem::Thread(id)) => t.open_thread(&id),
             // A closed band opens where it is; on an open one, → steps to
             // its first row (rule 4).
             Some(LItem::Band(k)) if !t.band_open(&k) => t.set_band(&k, true),
@@ -924,7 +1305,6 @@ fn list_key(t: &mut Threads, code: KeyCode, alt: bool) {
 /// The band row above `at` whose line is less indented — the band `at` is in.
 fn parent_band(items: &[(std::ops::Range<usize>, LItem)], at: usize) -> Option<usize> {
     let depth = |it: &LItem| match it {
-        LItem::Band(k) if k.starts_with("project:") => 1,
         LItem::Band(_) => 0,
         LItem::Thread(_) => usize::MAX,
     };
@@ -937,7 +1317,7 @@ fn parent_band(items: &[(std::ops::Range<usize>, LItem)], at: usize) -> Option<u
 
 /// The next (or previous) top-level band from `at` (⌥↓ / ⌥↑).
 fn section(items: &[(std::ops::Range<usize>, LItem)], at: usize, d: isize) -> usize {
-    let top = |i: usize| matches!(&items[i].1, LItem::Band(k) if !k.starts_with("project:"));
+    let top = |i: usize| matches!(&items[i].1, LItem::Band(_));
     if d < 0 {
         (0..at).rev().find(|&i| top(i)).unwrap_or(at)
     } else {
@@ -985,8 +1365,8 @@ fn chat_key(t: &mut Threads, code: KeyCode, alt: bool, bare: bool) {
         // ← closes what is open, else climbs: a subagent to its thread, a
         // thread to the list.
         KeyCode::Left => {
-            let k = t.block_key(t.chat_item);
-            if !t.opened.remove(&k) {
+            let k = t.block_key(t.chat_item).filter(|_| t.block_open(t.chat_item));
+            if !k.is_some_and(|k| t.opened.remove(&k)) {
                 if t.subject.is_some() {
                     t.set_subject(None);
                 } else {
@@ -1005,11 +1385,12 @@ fn open_block(t: &mut Threads) {
     let i = t.chat_item;
     let Some(b) = t.blocks().get(i).cloned() else { return };
     match b {
-        Block::Agent { agent } => t.set_subject(Some(agent)),
+        Block::Agent { agent, .. } => t.set_subject(Some(agent)),
         b if b.opens() => {
-            let k = t.block_key(i);
-            if !t.opened.remove(&k) {
-                t.opened.insert(k);
+            if let Some(k) = t.block_key(i) {
+                if !t.opened.remove(&k) {
+                    t.opened.insert(k);
+                }
             }
         }
         _ => {}
@@ -1122,6 +1503,7 @@ fn input_key(app: &mut App, key: KeyEvent, ctrl: bool, alt: bool) {
 pub fn paste(app: &mut App, s: &str) {
     if app.threads.focus() == TFocus::Input && app.threads.has_input() {
         app.threads.composer().insert_paste(&s.replace('\r', ""));
+        app.threads.owe_draft();
     } else {
         app.notice = Some("the message box is not open: `a` opens it, then paste".into());
     }
@@ -1188,5 +1570,45 @@ pub fn mouse(app: &mut App, m: MouseEvent, hit: Option<Hit>) {
         }
         _ => {}
     }
+    settle(app);
 }
 
+#[cfg(test)]
+mod subagent_cache_tests {
+    use super::*;
+
+    /// **REL-6a2: the subagent cache is capped**, least recently used out,
+    /// and never evicts the open thread. Opposition: at the cap nothing is
+    /// evicted, and a READ of an entry keeps it (reads count as use).
+    #[test]
+    fn rel6a2_the_subagent_cache_holds_at_most_its_cap_and_keeps_the_open_thread() {
+        let mut t = Threads::default();
+        let id = |i: usize| format!("t{i}");
+        t.open = Some(id(0));
+        for i in 0..SUBAGENT_CACHE_THREADS {
+            t.remember_direct(&id(i), Vec::new());
+        }
+        assert_eq!(t.direct_of.len(), SUBAGENT_CACHE_THREADS, "at the cap nothing is evicted");
+        // A read of t1 (the open-thread path's `touch_direct`) is a use.
+        t.touch_direct(&id(1));
+        for i in SUBAGENT_CACHE_THREADS..SUBAGENT_CACHE_THREADS * 3 {
+            t.remember_direct(&id(i), Vec::new());
+            assert!(t.direct_of.len() <= SUBAGENT_CACHE_THREADS, "{} threads held past the cap", t.direct_of.len());
+            assert_eq!(t.direct_lru.len(), t.direct_of.len(), "the order and the map disagree");
+        }
+        assert!(t.direct_of.contains_key(&id(0)), "the open thread was evicted: {:?}", t.direct_cached());
+        assert!(!t.direct_of.contains_key(&id(1)), "t1 outlived 2x the cap of newer threads: {:?}", t.direct_cached());
+        let newest = id(SUBAGENT_CACHE_THREADS * 3 - 1);
+        assert_eq!(t.direct_cached().last(), Some(&newest));
+        // Reads count: t1 touched just before 1 newer insert survives where
+        // an untouched sibling of the same age does not.
+        let mut u = Threads::default();
+        for i in 0..SUBAGENT_CACHE_THREADS {
+            u.remember_direct(&id(i), Vec::new());
+        }
+        u.touch_direct(&id(0));
+        u.remember_direct("newer", Vec::new());
+        assert!(u.direct_of.contains_key(&id(0)), "a read did not count as use: {:?}", u.direct_cached());
+        assert!(!u.direct_of.contains_key(&id(1)), "the least recently used was kept: {:?}", u.direct_cached());
+    }
+}

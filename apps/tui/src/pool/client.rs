@@ -80,10 +80,22 @@ fn secret() -> Option<String> {
 }
 
 /// Start the connection task. Frames and link changes arrive on `events`.
+///
+/// An isolated process (`cauldron::live::isolation`: a test, a harness, a
+/// drive, a dump) is REFUSED a connection to one of his live ports, loudly
+/// (REL-6a2): the board's url names the operator's daemon unless pointed away.
 pub fn spawn(url: String, events: mpsc::Sender<In>) -> Handle {
+    if let Some(refusal) = crate::cauldron::live::refuse_isolated_url("pool", &url) {
+        panic!("{refusal}");
+    }
     let (tx, rx) = mpsc::channel(64);
     tokio::spawn(run(url, events, rx));
     Handle { tx }
+}
+
+/// The port a `ws://host:port/…` url names, if it names one.
+pub fn url_port(url: &str) -> Option<u16> {
+    crate::cauldron::live::url_port(url)
 }
 
 fn subscribe_params(key: Option<&str>) -> Value {
@@ -142,8 +154,7 @@ async fn session(
     events: &mpsc::Sender<In>,
     out: &mut mpsc::Receiver<Out>,
 ) -> Result<(), String> {
-    let (mut ws, _) =
-        tokio_tungstenite::connect_async(url).await.map_err(|e| format!("connect: {e}"))?;
+    let mut ws = crate::cauldron::live::dial_ws("pool", url).await.map_err(|e| format!("connect: {e}"))?;
     let mut n = 0u64;
     let mut pending: HashMap<String, oneshot::Sender<Result<Value, String>>> = HashMap::new();
     let mut subs: HashMap<String, &'static str> = HashMap::new();

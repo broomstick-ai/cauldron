@@ -172,11 +172,15 @@ fn the_stamp_answers_where_the_face_itself_would_refuse_to_start() {
 /// this crate forbids `unsafe`, so it cannot open one itself) for at most
 /// `seconds`, killing it after. Returns (exit code, or -signal; every byte it
 /// wrote to the terminal).
-fn on_a_pty(args: &[&str], env: &[(&str, &str)], seconds: f32) -> (i32, Vec<u8>) {
+/// Run the face on a pty until it closes the tty (EOF) or `until` appears in
+/// its output, whichever is first — EVENT-driven (MERGE-15: the old fixed 5 s
+/// window measured 4.7-5.3 s at load ~12). `cap` is only a backstop for a
+/// face that never does either; it is killed then.
+fn on_a_pty(args: &[&str], env: &[(&str, &str)], until: Option<&[u8]>, cap: f32) -> (i32, Vec<u8>) {
     const DRIVER: &str = r#"
 import os, pty, select, sys, time, signal
-secs, outp, binp = float(sys.argv[1]), sys.argv[2], sys.argv[3]
-args = sys.argv[4:]
+secs, outp, until, binp = float(sys.argv[1]), sys.argv[2], bytes.fromhex(sys.argv[3]), sys.argv[4]
+args = sys.argv[5:]
 pid, fd = pty.fork()
 if pid == 0:
     os.execv(binp, [binp] + args)
@@ -192,6 +196,8 @@ while time.time() < end:
         if not c:
             break
         buf += c
+        if until and until in buf:
+            break
 done, status = os.waitpid(pid, os.WNOHANG)
 if done == 0:
     os.kill(pid, signal.SIGKILL)
@@ -219,8 +225,9 @@ print(os.WEXITSTATUS(status) if os.WIFEXITED(status) else -os.WTERMSIG(status))
     let outp = dir.path().join("pty.bytes");
     // REL-1.S1c: the driver execs the face with the environment it was given,
     // which is the isolation helper's (the face's args follow `binp`).
-    let (secs, outs) = (seconds.to_string(), outp.to_str().unwrap().to_string());
-    let mut c = Face::wrapped(dir.path(), "python3", &["-c", DRIVER, &secs, &outs]);
+    let (secs, outs) = (cap.to_string(), outp.to_str().unwrap().to_string());
+    let hex: String = until.unwrap_or_default().iter().map(|b| format!("{b:02x}")).collect();
+    let mut c = Face::wrapped(dir.path(), "python3", &["-c", DRIVER, &secs, &outs, &hex]);
     c.args(args);
     c.env_clear().env("TERM", "xterm-256color");
     for (k, v) in env {
@@ -231,6 +238,9 @@ print(os.WEXITSTATUS(status) if os.WIFEXITED(status) else -os.WTERMSIG(status))
     let code: i32 = String::from_utf8_lossy(&o.stdout).trim().parse().expect("driver prints the exit code");
     (code, std::fs::read(&outp).unwrap())
 }
+
+/// The backstop for [`on_a_pty`]; both runs end on their event long before it.
+const PTY_CAP: f32 = 30.0;
 
 fn contains(hay: &[u8], needle: &[u8]) -> bool {
     hay.windows(needle.len()).any(|w| w == needle)
@@ -248,7 +258,7 @@ fn contains(hay: &[u8], needle: &[u8]) -> bool {
 fn on_a_pty_the_stamp_enters_neither_raw_mode_nor_the_alternate_screen() {
     let home = tempfile::tempdir().unwrap();
     let home_s = home.path().to_str().unwrap();
-    let (code, bytes) = on_a_pty(&["--build-stamp"], &[("HOME", home_s)], 5.0);
+    let (code, bytes) = on_a_pty(&["--build-stamp"], &[("HOME", home_s)], None, PTY_CAP);
     let text = String::from_utf8_lossy(&bytes);
     assert_eq!(code, 0, "exit 0 on a pty: {text:?}");
     assert!(!contains(&bytes, b"\x1b[?1049h"), "the stamp entered the alternate screen: {text:?}");
@@ -264,13 +274,15 @@ fn on_a_pty_the_stamp_enters_neither_raw_mode_nor_the_alternate_screen() {
     // ── SENTINEL: the predicate can see a claim when there is one ─────────
     // The chat face, pointed at a port nothing listens on (both halves of the
     // lever, so it is not refused) and with HOME a tempdir (its log and its
-    // flight recorder land there), killed after two seconds.
+    // flight recorder land there), killed as soon as it shows ESC[?1049h
+    // (the event), or at the PTY_CAP backstop.
     let face_home = tempfile::tempdir().unwrap();
     let face_home_s = face_home.path().to_str().unwrap();
     let (_, face) = on_a_pty(
         &[],
         &[("HOME", face_home_s), ("TUI_THREADS_CHASSIS_PORT", "1"), ("TUI_THREADS_PORT", "1"), ("TUI_DIAG", "off")],
-        2.0,
+        Some(&b"\x1b[?1049h"[..]),
+        PTY_CAP,
     );
     assert!(
         contains(&face, b"\x1b[?1049h"),

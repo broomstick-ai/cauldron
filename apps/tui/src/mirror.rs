@@ -13,7 +13,8 @@
 //! ## The three divergences that landed here, and they are the AUI's three
 //!
 //! * **D1 — who may start the daemon.** [`spawn`] passes
-//!   [`seam::link::Supervision`] `None`. **The terminal face does not start the
+//!   [`seam::link::Supervision`] [`EgressGate`] — a hook that STARTS NOTHING
+//!   and only refuses (REL-6a5). **The terminal face does not start the
 //!   threads daemon and never did** — an unreachable daemon is a DRAWN state
 //!   here, not an error path, and `Handle::call` refused loudly rather than
 //!   spawning anything. That is why this manifest has no `reqwest`: the
@@ -159,6 +160,11 @@ pub struct Handle {
 }
 
 impl Handle {
+    /// Where the one socket stands now (REL-6a5's reconnect test reads it).
+    pub fn link_state(&self) -> held::LinkState {
+        self.seam.lock().link.clone()
+    }
+
     /// Whether frames are reaching us right now. **Never used to decide what to
     /// RENDER** — that follows [`TransportEvent`], because that is ordered with
     /// respect to the frames and this is not.
@@ -460,13 +466,90 @@ fn refusal(r: shapewire::envelope::Refusal) -> String {
 /// `transport::spawn`: the same pair, so `app::run`'s loop, `store.rs` and
 /// every `TransportEvent` arm are unchanged.
 ///
-/// `Supervision::None` — see this module's header, D1.
+/// Supervision is [`EgressGate`] (refuses, starts nothing) — see this module's header, D1.
 pub fn spawn() -> (Handle, mpsc::Receiver<TransportEvent>) {
-    let seam = Arc::new(Seam::start(None));
+    spawn_with(EgressGate::default())
+}
+
+/// [`spawn`] with its gate given: production's is `EgressGate::default()`.
+fn spawn_with(gate: EgressGate) -> (Handle, mpsc::Receiver<TransportEvent>) {
+    // **THE LAST DOOR** (REL-6a2): every threads connection in this crate is
+    // made here. An isolated process (a test, a harness, a drive, a dump —
+    // `cauldron::live::isolation`) never opens one to his live ports, whatever
+    // pointed it there or left it unpointed (unset is 3653). Loud, because a
+    // caller that reached this is a defect to fix, not a state to draw.
+    let port = link::chassis_port();
+    if let Some(why) = crate::cauldron::live::isolation(false) {
+        assert!(
+            !crate::cauldron::live::PROD_PORTS.contains(&port),
+            "refused: a threads connection to port {port}, a live daemon of his, from an isolated process ({why})"
+        );
+    }
+    let seam = Arc::new(Seam::start(Some(Arc::new(gate))));
     let (tx, rx) = mpsc::channel(256);
     let bodies = Bodies::default();
     tokio::spawn(forward(seam.clone(), tx, bodies.clone()));
     (Handle { seam, bodies }, rx)
+}
+
+/// **THE DIAL-TIME GATE** (REL-6a5; was REL-6a4 item 1). The seam calls
+/// [`link::Supervisor::before_connect`] before EVERY connection attempt,
+/// reconnects included, and re-reads `ws_url()` for each — so a port that
+/// changes mid-life is re-checked here, at the attempt that would dial it,
+/// through the one choke point (`env::egress::admit_url` via
+/// `cauldron::live::refuse_isolated_url`). An `Err` is drawn as
+/// `LinkState::Down` and retried on the seam's ladder; nothing is dialled.
+/// It starts nothing, so DIR-7 (the face never spawns the daemon) holds.
+///
+/// Residual, by construction: the seam reads `ws_url()` once here and once
+/// for `connect_async`, on the same task a few instructions apart; a process
+/// that rewrote `TUI_THREADS_CHASSIS_PORT` from another thread inside that
+/// window would dial the new value unchecked. Closing it means a fenced edit
+/// of the vendored `link.rs` (seamdiff), which this step did not make.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct EgressGate {
+    /// TEST ONLY ([`spawn_gated_at`]): one more port to refuse, so the
+    /// reconnect re-check is proven against a SCRATCH listener standing in
+    /// for a live port — no test ever lets a real one be dialled. `None` in
+    /// production.
+    also_refuse: Option<u16>,
+}
+
+impl link::Supervisor for EgressGate {
+    fn before_connect(&self) -> link::BoxFuture<'_, Result<(), String>> {
+        let url = link::ws_url();
+        let r = match (self.also_refuse, crate::cauldron::live::url_port(&url)) {
+            (Some(p), Some(q)) if p == q => Err(format!("refused: a threads chassis connection to port {p}, which this test declared live")),
+            _ => gate(&url),
+        };
+        Box::pin(async move { r })
+    }
+}
+
+/// [`EgressGate`]'s decision for one attempt's url.
+pub fn gate(url: &str) -> Result<(), String> {
+    match crate::cauldron::live::refuse_isolated_url("threads chassis", url) {
+        Some(refusal) => Err(refusal),
+        None => Ok(()),
+    }
+}
+
+/// **A TEST SEAM POINTED AT `chassis`, WHOSE GATE ALSO REFUSES
+/// `also_refuse`** — a scratch port the test treats as live (REL-6a5's
+/// reconnect table). Hold the guard; re-point with [`TestPorts::repoint`].
+pub fn spawn_gated_at(chassis: u16, also_refuse: u16) -> (Handle, mpsc::Receiver<TransportEvent>, TestPorts) {
+    let guard = TEST_PORTS.lock().unwrap_or_else(|e| e.into_inner());
+    point(chassis);
+    let (h, rx) = spawn_with(EgressGate { also_refuse: Some(also_refuse) });
+    (h, rx, TestPorts(guard))
+}
+
+impl TestPorts {
+    /// Re-point the lever while this guard is held — the mid-life change the
+    /// seam's next attempt re-reads.
+    pub fn repoint(&self, chassis: u16) {
+        point(chassis);
+    }
 }
 
 // ──────────────────────────────────────────────────────────────────────────
@@ -539,6 +622,18 @@ pub fn spawn_dead() -> (Handle, mpsc::Receiver<TransportEvent>) {
     let _g = TEST_PORTS.lock().unwrap_or_else(|e| e.into_inner());
     point(1);
     spawn()
+}
+
+/// **THE LEVER HELD UNSET** (REL-6a): the lock, with BOTH halves of the
+/// lever removed, for as long as the guard lives. For a test proving what a
+/// face does when nothing points it — which must be NOTHING: the face is
+/// refused before it resolves or dials anything. Nothing in this binary can
+/// point the lever while it is held.
+pub fn ports_unset() -> TestPorts {
+    let guard = TEST_PORTS.lock().unwrap_or_else(|e| e.into_inner());
+    std::env::remove_var("TUI_THREADS_CHASSIS_PORT");
+    std::env::remove_var("TUI_THREADS_PORT");
+    TestPorts(guard)
 }
 
 /// BOTH halves of the lever, always together. `_PORT` is the legacy `/health`
@@ -642,6 +737,55 @@ mod spawn_guard {
              it is looking at the wrong text and the bans above prove nothing",
             files.len()
         );
+    }
+
+    /// **THE CAULDRON FACE'S DOOR IS SCANNED TOO, PRODUCTION HALF INCLUDED**
+    /// (REL-6a, REL-6-I F1). `cauldron/live.rs` hands `mirror::spawn` over as
+    /// a function VALUE (`connect(mirror::spawn)`), which the needle above —
+    /// a call with empty parentheses — can never match, and its unpointed
+    /// door is production code, which the scan above skips by design. So the
+    /// rule for that file is structural: every unpointed reference to
+    /// `mirror::spawn` sits inside `fn start`, that function takes an
+    /// already-resolved `Endpoint` (the only place an isolated face is refused
+    /// his live ports), and it is not `pub` — no integration test can call it.
+    #[test]
+    fn the_cauldron_face_dials_only_through_a_resolved_endpoint() {
+        let live = include_str!("cauldron/live.rs");
+        let code: String = live
+            .lines()
+            .map(|l| if l.trim_start().starts_with("//") { "" } else { l })
+            .collect::<Vec<_>>()
+            .join("\n");
+        // SENTINEL: the pointed door is found, so the scan reads the right text.
+        assert!(code.contains("mirror::spawn_at("), "live.rs has no `mirror::spawn_at(` — the scan is reading the wrong text");
+        // Every reference to `mirror::spawn` that is not `spawn_at`/`spawn_dead`.
+        let needle = "mirror::spawn";
+        let bare: Vec<usize> = code
+            .match_indices(needle)
+            .map(|(i, _)| i)
+            .filter(|&i| !code[i + needle.len()..].starts_with(|c: char| c == '_' || c.is_alphanumeric()))
+            .collect();
+        assert!(!bare.is_empty(), "live.rs no longer references `mirror::spawn` unpointed; re-decide this guard");
+        // The one function allowed to hold it, and its signature.
+        let start = code.find("fn start(").expect("live.rs has a `fn start(`");
+        let sig_end = start + code[start..].find('{').expect("`fn start` has a body");
+        let sig = &code[start..sig_end];
+        assert!(sig.contains("&Endpoint"), "`fn start` must take a resolved `&Endpoint`, got `{sig}`");
+        let vis = code[..start].rsplit('\n').next().unwrap_or("");
+        assert!(
+            vis.trim() == "pub(crate)",
+            "`fn start` in live.rs is reachable from integration tests (`{}`): it must be `pub(crate)`",
+            vis.trim()
+        );
+        let body_end = sig_end + code[sig_end..].find("\n    }\n").expect("`fn start` closes");
+        for i in bare {
+            let line = code[..i].matches('\n').count() + 1;
+            assert!(
+                (sig_end..body_end).contains(&i),
+                "live.rs references `mirror::spawn` unpointed at line {line}, outside `fn start(&Endpoint)`: \
+                 that is a door to the environment's daemon (3653 for prod) that no isolation check guards"
+            );
+        }
     }
 }
 

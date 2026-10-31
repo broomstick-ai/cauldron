@@ -3844,9 +3844,37 @@ impl App {
             self.project();
             return;
         };
+        self.restart_in(r);
+    }
+
+    /// [`Self::restart_daemon`] in the environment `r` (a test names one).
+    fn restart_in(&mut self, r: &crate::cauldron_env::Resolved) {
+        // REL-6a5 (REL-6a3-I F1): the installed `cauldron` does not read the
+        // marker, so the face decides: an isolated process restarts a daemon
+        // only in a scratch root, never his real ~/.cauldron.
+        if let Err(refusal) = env::egress::admit_daemon_control(
+            "the down page's restart (`cauldron start threads`)",
+            Some(&r.root),
+            crate::cauldron::live::isolation(false).as_deref(),
+        ) {
+            self.restart_note = Some(refusal);
+            self.project();
+            return;
+        }
+        // REL-6a6: and the binary it runs is not his installed CLI — under
+        // isolation it must be an absolute path outside his login home.
+        let bin = crate::cauldron_env::cauldron_bin();
+        if let Err(refusal) = env::egress::admit_daemon_path(
+            "the down page's restart binary (CAULDRON_BIN)",
+            &bin,
+            crate::cauldron::live::isolation(false).as_deref(),
+        ) {
+            self.restart_note = Some(refusal);
+            self.project();
+            return;
+        }
         self.restarting = true;
         self.project();
-        let bin = crate::cauldron_env::cauldron_bin();
         let args = crate::cauldron_env::restart_args(&r.env);
         let root = r.root.clone();
         let tx = self.tx.clone();
@@ -9245,6 +9273,57 @@ mod tests {
         assert_eq!(a.vs.composer.buf.text(), "x", "the composer stopped taking text");
     }
 
+    /// The process-wide `CAULDRON_BIN` lever: every test that points it
+    /// holds this, so one test's fake never runs (or misses) another's
+    /// restart — and an unset lever never falls through to his `cauldron`.
+    static CAULDRON_BIN_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    /// **REL-6a5 (REL-6a3-I F1): IN AN ISOLATED PROCESS, `r` NEVER
+    /// RESTARTS A DAEMON IN HIS REAL `~/.cauldron`.** A unit test is
+    /// isolated (`cfg!(test)`). Pointed at his real cauldron home, the
+    /// restart is refused SYNCHRONOUSLY (no period to outlast: `restarting`
+    /// is set before anything is spawned) and the fake `cauldron` — never his
+    /// — records nothing. Opposed in the same test: a scratch root runs it.
+    #[tokio::test]
+    async fn rel6a5_an_isolated_restart_never_acts_on_his_real_cauldron_home() {
+        let _bin = CAULDRON_BIN_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let dir = std::env::temp_dir().join(format!("tui-rel6a5-restart-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let record = dir.join("argv");
+        let _ = std::fs::remove_file(&record);
+        let fake = dir.join("cauldron");
+        std::fs::write(&fake, format!("#!/bin/sh\necho \"$@\" >> {}\n", record.display())).unwrap();
+        assert!(std::process::Command::new("/bin/chmod").arg("+x").arg(&fake).status().unwrap().success());
+        std::env::set_var("CAULDRON_BIN", &fake);
+        // His real root, through the census's sanctioned Protect helper
+        // (its first entry is his passwd home), not a raw lookup (MERGE-15,
+        // REL-6a4b-I F3).
+        let real = crate::cauldron::live::protected_homes().into_iter().next().expect("his passwd home").join(".cauldron");
+        let at = |root: std::path::PathBuf| crate::cauldron_env::Resolved {
+            env: "prod".into(),
+            root,
+            addr: "127.0.0.1:1".into(),
+            port: 1,
+            source: crate::cauldron_env::Source::Override,
+            auto_restart: Some(true),
+        };
+        let (handle, _rx) = mirror::spawn_dead();
+        let (tx, mut erx) = mpsc::channel::<Ev>(16);
+        let mut a = App::new(handle, tx, "ws://127.0.0.1:1/ws".into(), "/Users/x".into(), 0);
+        a.restart_in(&at(real.clone()));
+        assert!(!a.restarting, "an isolated restart in his real home {} was started", real.display());
+        let note = a.restart_note.clone().unwrap_or_default();
+        assert!(note.contains("refused") && note.contains("isolated"), "no refusal drawn: {note:?}");
+        // Opposition: a scratch root is admitted and the fake runs.
+        a.restart_in(&at(dir.join("scratch-root")));
+        assert!(a.restarting, "a scratch-root restart was refused: {:?}", a.restart_note);
+        let _ = tokio::time::timeout(Duration::from_secs(10), erx.recv()).await;
+        std::env::remove_var("CAULDRON_BIN");
+        let argv = std::fs::read_to_string(&record).unwrap_or_default();
+        let _ = std::fs::remove_dir_all(&dir);
+        assert_eq!(argv.lines().count(), 1, "exactly the scratch restart ran: {argv:?}");
+    }
+
     /// **`r` IS THE RESTART BUTTON: IT RUNS `cauldron --env <name> start
     /// threads` AND THE PAGE SAYS WHAT CAME BACK.** A fake `cauldron` records
     /// its argv, so what is asserted is the command that actually ran.
@@ -9256,6 +9335,7 @@ mod tests {
     /// `r` arm not call `restart_daemon`.
     #[tokio::test]
     async fn r_on_the_down_page_runs_cauldron_start_threads_in_its_environment() {
+        let _bin = CAULDRON_BIN_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let dir = std::env::temp_dir().join(format!("tui-restart-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let record = dir.join("argv");

@@ -69,6 +69,13 @@ pub struct Conn {
     pub refusals: HashMap<String, (String, String)>,
     /// Frames pushed unprompted the moment the client has learned the surface.
     pub push: Vec<String>,
+    /// REL-6: on a `threads/{id}/send`, push the daemon's own record of it —
+    /// a `threads/log` transition carrying a `user_message` with the sent
+    /// text — after the ack, as the real daemon logs an accepted message.
+    pub echo_sends: bool,
+    /// REL-6: leaves this connection never answers (a body the daemon is
+    /// slow to serve), while everything else is answered.
+    pub hang: Vec<String>,
 }
 
 impl Default for Conn {
@@ -79,6 +86,8 @@ impl Default for Conn {
             responses: HashMap::new(),
             refusals: HashMap::new(),
             push: Vec::new(),
+            echo_sends: false,
+            hang: Vec::new(),
         }
     }
 }
@@ -114,6 +123,18 @@ impl Conn {
 
     pub fn push(mut self, frame: Value) -> Self {
         self.push.push(frame.to_string());
+        self
+    }
+
+    /// Echo every accepted send as a `threads/log` event. See [`Conn::echo_sends`].
+    pub fn echo_sends(mut self) -> Self {
+        self.echo_sends = true;
+        self
+    }
+
+    /// Never answer `leaf`. See [`Conn::hang`].
+    pub fn hang(mut self, leaf: &str) -> Self {
+        self.hang.push(leaf.to_string());
         self
     }
 }
@@ -156,6 +177,8 @@ pub fn split_path(method: &str) -> (&str, Option<&str>, &str) {
 
 #[derive(Default)]
 struct Shared {
+    /// The next seq an echoed send is logged at.
+    echo_seq: u64,
     scripts: Vec<Conn>,
     conns: usize,
     log: Vec<Req>,
@@ -170,12 +193,21 @@ pub struct Fake {
     pub port: u16,
     shared: Arc<Mutex<Shared>>,
     close_now: Arc<Notify>,
+    accept: tokio::task::JoinHandle<()>,
 }
 
 impl Fake {
     pub async fn start(scripts: Vec<Conn>) -> Fake {
-        let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
+        Self::start_on(0, scripts).await
+    }
+
+    /// The same, on `port` (0: the kernel's choice) — REL-6's restart of a
+    /// daemon on the port a face is already dialling.
+    pub async fn start_on(port: u16, scripts: Vec<Conn>) -> Fake {
+        let listener = TcpListener::bind(("127.0.0.1", port)).await.expect("bind");
         let port = listener.local_addr().unwrap().port();
+        // REL-6a6: an isolated dial reaches only a port it was given.
+        env::egress::grant_addr(listener.local_addr().unwrap()).expect("grant the fake's port");
         let shared = Arc::new(Mutex::new(Shared {
             scripts,
             ..Default::default()
@@ -184,7 +216,7 @@ impl Fake {
 
         let s = shared.clone();
         let c = close_now.clone();
-        tokio::spawn(async move {
+        let accept = tokio::spawn(async move {
             loop {
                 let Ok((sock, _)) = listener.accept().await else {
                     return;
@@ -211,7 +243,16 @@ impl Fake {
             port,
             shared,
             close_now,
+            accept,
         }
+    }
+
+    /// **THE DAEMON GOES DOWN**: no new connection is accepted (the listener
+    /// is dropped, so the port is free to be bound again) and the current
+    /// one is closed.
+    pub fn stop(&self) {
+        self.accept.abort();
+        self.close_now.notify_waiters();
     }
 
     pub fn close_current(&self) {
@@ -368,6 +409,8 @@ async fn serve(
                 } else if !script.answers {
                     // Everything but the learn is left hanging, deliberately.
                     None
+                } else if script.hang.iter().any(|h| h == leaf) {
+                    None
                 } else if let Some((code, message)) = script.refusals.get(leaf) {
                     Some(json!({"type": "error", "code": code, "error": message}))
                 } else if leaf == "subscribe" || leaf == "unsubscribe" {
@@ -387,6 +430,12 @@ async fn serve(
                 if sink.send(Message::Text(reply.to_string())).await.is_err() {
                     return;
                 }
+                if script.echo_sends && leaf == "send" && !doubled {
+                    let echo = echo_of(subject.unwrap_or_default(), &params, &shared);
+                    if sink.send(Message::Text(echo.to_string())).await.is_err() {
+                        return;
+                    }
+                }
                 if method == "shapes/list" {
                     shared.lock().unwrap().learned += 1;
                     for f in &script.push {
@@ -398,4 +447,24 @@ async fn serve(
             }
         }
     }
+}
+
+/// **THE DAEMON'S RECORD OF A SEND** — one `threads/log` live transition, a
+/// `user_message` carrying the sent text, at the next seq from 1000.
+fn echo_of(thread: &str, params: &Value, shared: &Arc<Mutex<Shared>>) -> Value {
+    let seq = {
+        let mut g = shared.lock().unwrap();
+        g.echo_seq = g.echo_seq.max(1000) + 1;
+        g.echo_seq
+    };
+    let text = params.get("text").and_then(Value::as_str).unwrap_or_default();
+    json!({
+        "type": "shape", "shape": "threads/log", "key": thread, "op": "live",
+        "at": "2026-10-30T12:00:00Z",
+        "epoch": {"reinit": 0, "lost": 0, "state": "known"},
+        "event": {"kind": "transition", "cell": "events", "item": {
+            "seq": seq, "kind": "user_message", "ts": "2026-10-30T12:00:00Z",
+            "payload": {"here": {"kind": "user_message", "text": text}},
+        }},
+    })
 }

@@ -201,6 +201,8 @@ sha2 = { workspace = true }
 # R7.S2: `tests/pool_daemon.rs` drives the pool board against a THROWAWAY
 # threads daemon (ephemeral port, tempdir data dir, fake claude binary).
 [dev-dependencies]
+# REL-6a3 rule B: every test binary's children inherit CAULDRON_ISOLATED=1.
+test-isolation = { path = "../../testkit/test-isolation" }
 threads = { path = "../../services/threads" }
 tempfile = "3"
 

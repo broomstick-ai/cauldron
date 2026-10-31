@@ -84,7 +84,7 @@ DRIVE_PY="$CRATE_DIR/pty_drive.py"
 # against the face rather than assumed — an unmeasured descent is a suite that
 # tests the root menu and reports on the thread.
 DESCEND='(b"\x1b[B", 0.8), (b"\x1b[C", 3.0),'
-into()  { python3 "$DRIVE_PY" "${2:-97}" "${3:-35}" "$BIN" "$FAKEHOME" \
+into()  { TUI_FAKE_PID="$DAEMON_PID" python3 "$DRIVE_PY" "${2:-97}" "${3:-35}" "$BIN" "$FAKEHOME" \
               "[$DESCEND $1]" "ws://127.0.0.1:$PORT/ws"; }
 screen() { printf '%s' "$1" | sed -n 's/^SCREEN //p'; }
 has()   { printf '%s' "$1" | grep -qF -- "$2"; }

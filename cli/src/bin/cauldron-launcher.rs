@@ -63,6 +63,13 @@ fn run() -> anyhow::Result<ExitCode> {
         return Ok(ExitCode::SUCCESS);
     }
 
+    // REL-6a6 (REL-6a5-I B2): the launcher forwards EVERY verb to a CLI
+    // build — by default his installed one, which predates the egress gate
+    // and does not read the marker. Under isolation it forwards only from a
+    // scratch root to a binary that is itself outside his login home.
+    if let Some(why) = env::egress::process_isolation() {
+        admit_forward(&root, &i.binary, &why).map_err(anyhow::Error::msg)?;
+    }
     let err = Command::new(&i.binary).args(std::env::args_os().skip(1)).exec();
     anyhow::bail!(
         "exec {} (from {} in {}) failed: {err}",
@@ -70,4 +77,55 @@ fn run() -> anyhow::Result<ExitCode> {
         cli_config::KEY,
         i.config.display()
     )
+}
+
+/// **REL-6a6: AN ISOLATED LAUNCHER FORWARDS ONLY INSIDE A SCRATCH WORLD.**
+/// Both the root it read its config from and the binary it would exec must be
+/// scratch (`env::egress::scratch_root_refusal`: by (dev, ino) identity, canonical, case-folded,
+/// outside his login home), so it can never hand a verb to his installed CLI
+/// or act on his real root.
+fn admit_forward(root: &std::path::Path, binary: &std::path::Path, why: &str) -> Result<(), String> {
+    // REL-6a8: against EVERY login home (the passwd entry AND `$HOME`,
+    // `env::egress::protected_homes`); none readable refuses.
+    let homes = env::egress::protected_homes();
+    if homes.is_empty() {
+        return admit_forward_with(root, binary, None, why);
+    }
+    for h in &homes {
+        admit_forward_with(root, binary, Some(h), why)?;
+    }
+    Ok(())
+}
+
+fn admit_forward_with(root: &std::path::Path, binary: &std::path::Path, login: Option<&std::path::Path>, why: &str) -> Result<(), String> {
+    let refuse = |d: String| {
+        Err(format!(
+            "refused: cauldron-launcher forwards every verb to a cauldron CLI, and this process is isolated ({why}); {d}"
+        ))
+    };
+    if let Some(d) = env::egress::scratch_root_refusal(root, login) {
+        return refuse(format!("its root: {d}"));
+    }
+    if let Some(d) = env::egress::scratch_root_refusal(binary, login) {
+        return refuse(format!("the binary it would run: {d}"));
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::path::Path;
+
+    #[test]
+    fn rel6a6_an_isolated_launcher_forwards_only_from_a_scratch_root_to_a_scratch_binary() {
+        let login = Path::new("/Users/someone");
+        let w = |r: &str, b: &str| admit_forward_with(Path::new(r), Path::new(b), Some(login), "a test");
+        assert!(w("/Users/someone/.cauldron", "/Users/someone/.cauldron/bin/cauldron").is_err(), "his root, his CLI");
+        assert!(w("/private/tmp/s/.cauldron", "/Users/someone/.cauldron/bin/cauldron").is_err(), "scratch root, his CLI");
+        assert!(w("/private/tmp/s/.cauldron", "/Users/someone/bin/cauldron").is_err(), "scratch root, his PATH CLI");
+        assert!(w("/Users/someone/.CAULDRON", "/private/tmp/s/fake").is_err(), "his root, another case");
+        assert!(w("/private/tmp/s/.cauldron", "/private/tmp/s/fake").is_ok(), "scratch root, scratch binary");
+        assert!(admit_forward_with(Path::new("/private/tmp/s"), Path::new("/private/tmp/s/f"), None, "t").is_err(), "unknown login");
+    }
 }

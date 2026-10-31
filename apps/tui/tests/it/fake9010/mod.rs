@@ -145,6 +145,8 @@ impl Fake9010 {
         // live listener.
         let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
         let port = listener.local_addr().expect("addr").port();
+        // REL-6a6: an isolated dial reaches only a port it was given.
+        env::egress::grant_addr(listener.local_addr().expect("addr")).expect("grant the fake's port");
         let shared = Arc::new(Mutex::new(Shared {
             scripts,
             ..Default::default()

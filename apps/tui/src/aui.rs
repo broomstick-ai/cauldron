@@ -425,6 +425,16 @@ pub fn test_handle_up() -> (Handle, mpsc::Receiver<Job>) {
 }
 
 pub fn spawn(cfg: Config) -> (Handle, mpsc::Receiver<AuiEvent>) {
+    // **REL-6a3 F1: THE 9010 CONSTRUCTOR REFUSES UNDER ISOLATION, like every
+    // other connection constructor in this crate.** Unpointed, the AUI is
+    // 9010 — his live ui-server — so an isolated process (a test, a harness,
+    // a drive, a non-interactive launch) that forgot `AUI_V2_URL` is refused
+    // here, loudly, before a task or socket exists. The endpoint is re-read
+    // on every attempt, so [`session`] refuses again before each dial.
+    let endpoint = cfg.endpoint.clone().unwrap_or_else(resolve_endpoint);
+    if let Some(refusal) = crate::cauldron::live::refuse_isolated_url("AUI", &endpoint) {
+        panic!("{refusal}");
+    }
     let (out_tx, out_rx) = mpsc::channel::<Job>(64);
     let (ev_tx, ev_rx) = mpsc::channel::<AuiEvent>(256);
     let handle = Handle {
@@ -541,8 +551,18 @@ async fn session(
     ev_tx: &mpsc::Sender<AuiEvent>,
     h: &Handle,
 ) -> Result<(), DownCause> {
-    let ws = match tokio_tungstenite::connect_async(endpoint).await {
-        Ok((ws, _)) => ws,
+    // REL-6a3 F1: the per-attempt half of `spawn`'s refusal (AUI_V2_URL may
+    // change between attempts). Never dialled; drawn as a shut door.
+    if let Some(refusal) = crate::cauldron::live::refuse_isolated_url("AUI", endpoint) {
+        tracing::warn!(%endpoint, "{refusal}");
+        return Err(DownCause::DoorShut);
+    }
+    let ws = match crate::cauldron::live::dial_ws("AUI", endpoint).await {
+        Ok(ws) => ws,
+        Err(crate::cauldron::live::DialError::Refused(refusal)) => {
+            tracing::warn!(%endpoint, "{refusal}");
+            return Err(DownCause::DoorShut);
+        }
         Err(e) => {
             let cause = DownCause::of_connect_error(&e.to_string());
             tracing::info!(%endpoint, error = %e, cause = ?cause, "9010 is not reachable — this is a normal state");

@@ -8,7 +8,7 @@
 
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
-use std::process::{Child, ChildStdin, Stdio};
+use std::process::{ChildStdin, Stdio};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -93,7 +93,7 @@ fn face_args(at: usize) -> Vec<String> {
 /// The face under a pty: `script -q /dev/null` gives it a terminal, `stty`
 /// gives that terminal a size. Its screen is collected as it is written.
 struct Pty {
-    child: Child,
+    child: crate::face::FaceChild,
     stdin: ChildStdin,
     screen: Arc<Mutex<Vec<u8>>>,
 }
@@ -261,6 +261,7 @@ fn a_dump_with_keys_o_never_execs_though_the_same_keys_live_do() {
     let out = crate::face::Face::new(&face_scratch(&root))
         .args(&args)
         .arg("--dump")
+        .env("CAULDRON_ISOLATED", "1")
         .env("CAULDRON_HOME", &root)
         .env("CAULDRON_TYPE_ONE", "off")
         .env("CAULDRON_OPENER", &script)

@@ -82,7 +82,8 @@ fn every_screen(a: &mut App, mut f: impl FnMut(&str, &mut App)) {
         a.sttab = st;
         f(&format!("Status {st:?}"), a);
     }
-    a.set_ctab(CTab::Agents);
+    a.set_ctab(CTab::Threads);
+    crate::live_fixture::feed(a);
     f("Threads", a);
     a.set_ctab(CTab::Config);
     f("Config", a);

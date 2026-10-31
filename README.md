@@ -25,8 +25,8 @@ release](#what-is-in-this-release) has the details.
 - **The soup is a knowledge graph.** Everything an environment knows goes
   into one typed graph, with structure, regions and discoverability, so
   agents can find context without having it pasted in again. (The soup
-  engine arrives with ripples in V1, the next release; it is not in 0.1.0.
-  See [What is in this release](#what-is-in-this-release).)
+  engine arrives with ripples in V1, the next release; it is not in this
+  release. See [What is in this release](#what-is-in-this-release).)
 - **The surface is your view into the cauldron.** You dump ideas, feedback
   and half-formed thoughts into it. You collect text, pastes and references in the
   **bucket** and **dump** it onto the surface. Every dump is recorded in the
@@ -37,8 +37,8 @@ release](#what-is-in-this-release) has the details.
   constraints, objectives and milestones. Clusters can be nested: a cluster
   can sit inside another.
 - **Ripples are short-lived agents that ripple out from your brain dumps,
-  curate the soup and complete your tasks.** (Not in 0.1.0. Ripples arrive in
-  V1, the next release; see [ROADMAP.md](ROADMAP.md).)
+  curate the soup and complete your tasks.** (Not in this release. Ripples
+  arrive in V1, the next release; see [ROADMAP.md](ROADMAP.md).)
 
 ## Why
 
@@ -67,7 +67,7 @@ the focus is design and intent, not the agents' output.
 - **The Ledger shows what happened beneath the surface:** every dump, and the
   chain of actions that resulted from it.
 
-In 0.1.0, questions and actions already appear at their cluster and every dump
+In this release, questions and actions already appear at their cluster and every dump
 is recorded in the Ledger. V1, the next release, makes the Ledger a
 time-ordered list of dumps that each expand into the chain of work they set
 off. Agents raising questions and actions, and tasks resuming when they are
@@ -116,9 +116,11 @@ runs on **macOS only** for now, and it is licensed under **Apache-2.0**.
 
 **Working now:** environments; the cluster sidebar, with cluster creation from a
 boundary you write; cluster tabs for questions, actions, tasks, nodes, status
-and details; the bucket, and dumps, each of which is saved; and the threads
-face, with persistent Claude Code conversations on the account pool; and the
-`cauldron-build` demo environment (see below).
+and details; the bucket, and dumps, each of which is saved; the Threads tab
+(new in 0.1.1), which shows each environment's threads pinned or recent, read
+live from its threads daemon; the threads face, with persistent Claude Code
+conversations on the account pool; and the `cauldron-build` demo environment
+(see below).
 
 **Not yet:** the engine that acts on a dump. In the design, a dump sets off
 **ripples**: agents that read it, update the soup, and turn it into tasks,
@@ -213,7 +215,10 @@ environment already holds.
 
 **Talking to an agent directly.** `cauldron tui --chat` opens the threads face
 on the threads daemon. Start a thread, give it a task, close the terminal, and
-it is still there, in the same place, when you come back.
+it is still there, in the same place, when you come back. The Threads tab in
+`cauldron` shows the same threads, pinned or recent, for the environment you
+are in: open one to read it, send it a message, or look inside a tool call or
+a subagent. Starting a new thread is done from the threads face for now.
 
 ## The `cauldron-build` demo environment
 
@@ -237,7 +242,7 @@ cauldron --env cauldron-build
 
 ## Known limitations
 
-This is the first public release. These are known:
+This is an early release. These are known:
 
 - **macOS only.**
 - **Nothing acts on a dump yet.** Ripples and the soup engine arrive in V1, the
@@ -247,9 +252,10 @@ This is the first public release. These are known:
 - **A new environment, `prod` included, opens empty**, with one cluster named
   after the environment. There is no "create your first environment" screen
   yet, and a new environment has no "create your first cluster" screen.
-- **Parts of the UI read sample files, not the daemon.** These are the Agents
-  tab in the Cauldron face and some Status and Config views. The threads face
-  (`cauldron tui --chat`) is the one wired to the live threads daemon.
+- **Parts of the UI read sample files, not the daemon.** These are some Status
+  and Config views. The Threads tab and the threads face
+  (`cauldron tui --chat`) are wired to the live threads daemon. The Threads
+  tab cannot start a new thread yet.
 - **Cluster seeding runs a local stand-in.** The model-backed seeding call needs
   a `type-one` tool that this release does not include. Without it, cauldron
   seeds a new cluster by matching words between your boundary and the

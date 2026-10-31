@@ -99,6 +99,41 @@ fn main() -> Result<()> {
         anyhow::bail!("tui: {why}");
     }
 
+    // **RULE A (REL-6a3): A NON-INTERACTIVE MODE IS GIVEN ITS ENDPOINT.** Before
+    // the environment resolution below SETS the chassis lever, so what is
+    // judged is what the launch set: `--headless`, `pool --dump`, and any
+    // chat or pool face with no terminal on stdin/stdout must be pointed
+    // (TUI_THREADS_CHASSIS_PORT, never one of his live ports), or exit
+    // non-zero having dialled nothing. Marked, so every constructor in this
+    // process refuses his ports and every child inherits the marker (rule B).
+    {
+        use std::io::IsTerminal;
+        let no_tty = !std::io::stdin().is_terminal() || !std::io::stdout().is_terminal();
+        let help = pool_argv.iter().any(|a| a == "-h" || a == "--help");
+        let mode = if pool && help {
+            None
+        } else if pool && pool_argv.iter().any(|a| a == "--dump") {
+            Some("tui pool --dump")
+        } else if pool && no_tty {
+            Some("tui pool (no terminal)")
+        } else if pool {
+            None
+        } else if args.headless.is_some() {
+            Some("tui --headless")
+        } else if no_tty && !args.resolve_only {
+            Some("tui (no terminal)")
+        } else {
+            None
+        };
+        if let Some(mode) = mode {
+            let explicit = std::env::var("TUI_THREADS_CHASSIS_PORT").ok();
+            if let Err(why) = tui::cauldron::live::require_explicit_endpoint(mode, explicit.as_deref()) {
+                anyhow::bail!("tui: {why}");
+            }
+            tui::cauldron::live::mark_non_interactive(mode);
+        }
+    }
+
     // **WHICH THREADS, ASKED OF THE CAULDRON ENVIRONMENT** (R7.S1c). The seam
     // reads one variable, `TUI_THREADS_CHASSIS_PORT`, and its default is
     // production's 3653. So the environment's answer is handed to the seam
@@ -141,19 +176,23 @@ async fn run(args: Args) -> Result<()> {
     // afterwards would answer "not the first run" on the first run, forever.
     // `tui::first_run` carries the whole argument, including why this needs no
     // marker file of its own.
-    let home_dir = dirs::home_dir();
-    let first_run = first_run::is_first_run(home_dir.as_deref());
+    // EVERY home this face uses is `face_home` (REL-6a4, REL-6a4b B1): the
+    // logs, the first-run question, and the `App` home handed to `app::run`
+    // below — which is NOT read-only: `index::apply_registry` writes
+    // `<home>/.cauldron/projects.json` on register / reorder. Under isolation
+    // it is the isolated home, never `dirs::home_dir()`.
+    let face_home = tui::cauldron::live::face_home();
+    let first_run = first_run::is_first_run(face_home.as_deref());
 
-    let _log = init_logging(if args.headless.is_some() { "headless.log" } else { "log" })?;
+    let _log = init_logging(first_run::log_name(args.headless.is_some()))?;
     tracing::info!(endpoint = %tui::seam::link::ws_url(), "tui starting");
 
     // **THE FLIGHT RECORDER** — `tui::diag`. On by default, to a file of its
     // own; `TUI_DIAG=<path>` moves it and `TUI_DIAG=off` stops it. A headless
     // run writes a different default file so it never interleaves with the
     // operator's live face.
-    if let Some(home) = dirs::home_dir() {
-        let name = if args.headless.is_some() { "diag-headless.log" } else { "diag.log" };
-        if let Some(p) = tui::diag::path_for(home.join(".tui").join(name)) {
+    if let Some(default) = first_run::diag_default(args.headless.is_some()) {
+        if let Some(p) = tui::diag::path_for(default) {
             tui::diag::init(&p);
         }
     }
@@ -176,9 +215,7 @@ async fn run(args: Args) -> Result<()> {
     // **HEADLESS: NO TERMINAL IS CLAIMED AT ALL.** See `app::run_headless`.
     if let Some(h) = args.headless.clone() {
         let tz = chrono::Local::now().offset().local_minus_utc() / 60;
-        let home = home_dir
-            .map(|p| p.to_string_lossy().into_owned())
-            .unwrap_or_default();
+        let home = tui::cauldron::live::face_home_string();
         let r = app::run_headless(h, home, tz).await;
         tui::diag::flush_now();
         return r;
@@ -200,14 +237,13 @@ async fn run(args: Args) -> Result<()> {
     // cannot fix.
     let tz_offset_minutes = chrono::Local::now().offset().local_minus_utc() / 60;
 
-    // `$HOME`, resolved ONCE and here, for shortening a cwd to `~`. Same
-    // reasoning as the timezone: the render crate has no filesystem and no
-    // environment, and a path shortened inside it would be ambient state a
-    // golden test cannot fix. An empty string means "do not shorten", which is
-    // the honest degradation when there is no home to shorten against.
-    let home = home_dir
-        .map(|p| p.to_string_lossy().into_owned())
-        .unwrap_or_default();
+    // The home, resolved ONCE and here (`face_home`), for shortening a cwd to
+    // `~` AND for the registry write. Same reasoning as the timezone: the
+    // render crate has no filesystem and no environment, and a path shortened
+    // inside it would be ambient state a golden test cannot fix. An empty
+    // string means "do not shorten" (and every registry write is refused),
+    // the honest degradation when there is no home.
+    let home = tui::cauldron::live::face_home_string();
 
     let outcome = app::run(
         &mut terminal,
@@ -354,7 +390,7 @@ impl Args {
 /// The returned guard must stay alive for the process: dropping it flushes and
 /// stops the writer thread.
 fn init_logging(name: &str) -> Result<tracing_appender::non_blocking::WorkerGuard> {
-    let dir = dirs::home_dir().context("no home directory")?.join(".tui");
+    let dir = first_run::state_dir().context("no home directory")?;
     std::fs::create_dir_all(&dir).with_context(|| format!("create {}", dir.display()))?;
     let file = tracing_appender::rolling::never(&dir, name);
     let (writer, guard) = tracing_appender::non_blocking(file);

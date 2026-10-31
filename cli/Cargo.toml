@@ -41,5 +41,11 @@ sha2 = { workspace = true }
 # R9.C7: reads a declaration's `[quiet]` section out of its text.
 toml = { workspace = true }
 
+# REL-6a5: the `it` binary exports CAULDRON_ISOLATED=1 at load, so every
+# `cauldron` child a test spawns is isolated and refuses his real root, his
+# launchd domain and his live ports (env::egress).
+[dev-dependencies]
+test-isolation = { path = "../testkit/test-isolation" }
+
 [lints.rust]
 unsafe_code = "forbid"

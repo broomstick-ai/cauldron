@@ -151,6 +151,10 @@ pub fn resolve() -> Result<Resolved, String> {
 /// longer touch it at all: the value under test is an argument.
 pub fn resolve_with(override_raw: Option<String>) -> Result<Resolved, String> {
     let env = Environment::resolve().map_err(|e| format!("{e:#}"))?;
+    // REL-6a4: an isolated process never takes his store as its root.
+    if let Some(why) = crate::cauldron::live::isolated_root_refusal(&env.root) {
+        return Err(why);
+    }
     if let Some(port) = override_port(override_raw)? {
         return Ok(Resolved {
             env: env.name.clone(),

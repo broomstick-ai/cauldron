@@ -7,10 +7,14 @@
 //! stay separate binaries because each sets process environment other
 //! modules would read.
 
+// REL-6a3 rule B: every child this test binary spawns inherits CAULDRON_ISOLATED=1.
+test_isolation::install!();
+
 // Shared fixtures, used by more than one module through `crate::<name>`.
 mod face;
 mod fake;
 mod fake9010;
+mod live_fixture;
 mod own_seed_fixture;
 
 mod adversarial_0215;
@@ -26,6 +30,7 @@ mod d1_untouched_0209;
 mod design_cauldron_186;
 mod designs_165;
 mod drive_isolation;
+mod egress_guard;
 mod feedback_audit;
 mod gap_sweep;
 mod lib_surface;
@@ -50,6 +55,7 @@ mod seed_live;
 mod settings;
 mod structure_186;
 mod threads_186;
+mod threads_live;
 mod tree_subject_mark;
 mod visual_186;
 mod reaudit4_0223;
@@ -62,4 +68,6 @@ mod msg457_0310;
 mod reaudit8_0303;
 mod reaudit9_k_0310;
 mod opener_guard_0327;
+mod rel6a4;
+mod rel6a4b;
 mod fix_rv10_b;

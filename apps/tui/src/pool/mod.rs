@@ -64,6 +64,11 @@ pub async fn perform(h: &client::Handle, a: &Action) -> Outcome {
             Err(e) => Outcome::Done(format!("{method} refused: {e}"), Tone::Bad),
         },
         Command::Local { argv } => {
+            // ONE refusal path (MERGE-15): env::egress::admit_login_tool,
+            // whose first arm is REL-6a5's "not pointed at a stand-in" rule.
+            if let Some(why) = action::isolated_set_live_refusal(std::path::Path::new(&argv[0])) {
+                return Outcome::Done(why, Tone::Bad);
+            }
             if let Some(why) = action::config_dir_refusal() {
                 return Outcome::Done(why, Tone::Bad);
             }

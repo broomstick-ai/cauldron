@@ -29,7 +29,7 @@
 //!    inside it.
 
 use std::io::{Read, Write};
-use std::net::{TcpStream, ToSocketAddrs};
+use std::net::ToSocketAddrs;
 use std::path::Path;
 use std::time::Duration;
 
@@ -331,7 +331,7 @@ impl HealthAnswer {
 /// but returns the real code and, on a non-200, the body's `status`.
 pub fn health_answer(url: &str, timeout: Duration) -> Result<HealthAnswer> {
     health_answer_over(url, timeout, |sa, timeout| {
-        let s = TcpStream::connect_timeout(sa, timeout)?;
+        let s = crate::egress::connect_tcp("health", sa, timeout)?;
         s.set_read_timeout(Some(timeout))?;
         s.set_write_timeout(Some(timeout))?;
         Ok(s)
@@ -439,6 +439,7 @@ mod tests {
 
     fn serve_once(reply: &'static str) -> String {
         let l = TcpListener::bind("127.0.0.1:0").unwrap();
+        crate::egress::grant_addr(l.local_addr().unwrap()).unwrap(); // REL-6a6: given
         let addr = l.local_addr().unwrap().to_string();
         std::thread::spawn(move || {
             if let Ok((mut c, _)) = l.accept() {
@@ -504,6 +505,7 @@ mod tests {
     /// path answers 503, so it is not a constant 200.
     fn serve_once_strict(path: &'static str) -> String {
         let l = TcpListener::bind("127.0.0.1:0").unwrap();
+        crate::egress::grant_addr(l.local_addr().unwrap()).unwrap(); // REL-6a6: given
         let addr = l.local_addr().unwrap().to_string();
         std::thread::spawn(move || {
             if let Ok((mut c, _)) = l.accept() {
@@ -579,7 +581,9 @@ mod tests {
 
     #[test]
     fn nothing_listening_is_an_error() {
-        let a = TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().to_string();
+        let a = TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap();
+        crate::egress::grant_addr(a).unwrap(); // REL-6a6: given
+        let a = a.to_string();
         assert!(http_health(&format!("http://{a}/"), Duration::from_millis(300)).is_err());
     }
 

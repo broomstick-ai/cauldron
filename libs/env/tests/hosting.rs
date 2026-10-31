@@ -88,6 +88,7 @@ fn hosted(addr: &str, probe: &str) -> Seam {
 /// A listener that answers one line to whatever it is asked.
 fn answering(reply: String) -> String {
     let l = TcpListener::bind("127.0.0.1:0").unwrap();
+    env::egress::grant_addr(l.local_addr().unwrap()).unwrap(); // REL-6a6: given
     let addr = l.local_addr().unwrap().to_string();
     std::thread::spawn(move || {
         while let Ok((s, _)) = l.accept() {
@@ -107,6 +108,7 @@ fn answering(reply: String) -> String {
 /// cannot.
 fn silent() -> String {
     let l = TcpListener::bind("127.0.0.1:0").unwrap();
+    env::egress::grant_addr(l.local_addr().unwrap()).unwrap(); // REL-6a6: given
     let addr = l.local_addr().unwrap().to_string();
     std::thread::spawn(move || {
         let mut held = Vec::new();

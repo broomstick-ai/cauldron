@@ -12,6 +12,9 @@ toml = { workspace = true }
 # sha256 of a build directory's declaration snapshot, checked at every launch
 # (`decl::snapshot`). Already in the lock at 0.10 for `services/tts`.
 sha2 = "0.10"
+# REL-6a5: the egress choke point parses every dial target with a real URL
+# parser (already in the lockfile through tungstenite).
+url = "2"
 
 [lints.rust]
 unsafe_code = "forbid"

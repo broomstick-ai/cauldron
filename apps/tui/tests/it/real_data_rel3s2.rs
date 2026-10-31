@@ -65,7 +65,10 @@ fn shown(a: &App) -> Shown {
         actions: f.clusters.iter().map(|c| c.human_actions.len()).sum(),
         artifacts: a.arts.artifacts.len(),
         ledger: a.ledger.dumps.len(),
-        threads: a.threads.seed.threads.len(),
+        // MERGE-15: REL-6's Threads tab reads the DAEMON, never a seed, so
+        // this counts the rows it projects (no daemon in an App a test
+        // builds: none).
+        threads: a.threads.rows.len(),
         dumps: a.sends.sends.len(),
         accounts: a.dash.threads.accounts.len(),
     }
@@ -95,7 +98,14 @@ fn a_fresh_environment_shows_nothing_seeded_and_the_fixture_still_shows_when_nam
     assert_eq!(fresh.rstore.seed_policy.file, fx.rstore.seed_policy.file, "the default policy is the catalog");
     assert!(fresh.rstore.seed.runs.is_empty() && fresh.rstore.seed.bus.is_empty() && fresh.rstore.seed.stats.is_empty(), "and nothing ran");
     assert!(!fx.rstore.seed.runs.is_empty() && !fx.rstore.seed.bus.is_empty(), "the fixture's runs are visible when named");
-    assert!(s.clusters.iter().any(|c| c == "Cauldron") && s.questions > 0 && s.artifacts > 0 && s.ledger > 0 && s.threads > 0 && s.accounts > 0, "the fixture is visible when named: {s:?}");
+    assert!(s.clusters.iter().any(|c| c == "Cauldron") && s.questions > 0 && s.artifacts > 0 && s.ledger > 0 && s.accounts > 0, "the fixture is visible when named: {s:?}");
+    // MERGE-15 (REL-6 x REL-3.S2): the fixture still carries threads.json,
+    // and the Threads tab must NOT show it — threads come only from the
+    // daemon. Sentinel first: the seed has threads, so a tab that read it
+    // would count them here.
+    let seed: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(store::seed_dir().join("threads.json")).expect("sentinel: the fixture's threads.json")).expect("json");
+    assert!(seed["threads"].as_array().is_some_and(|t| !t.is_empty()), "sentinel: the fixture's threads.json has threads in it");
+    assert_eq!(s.threads, 0, "the Threads tab showed seed threads; REL-6 reads only the daemon");
 }
 
 /// Behaviour 1, end to end: the BUILT face, launched with no `--seeds`, shows

@@ -87,7 +87,7 @@
 
 use std::collections::BTreeMap;
 use std::io::{BufRead, BufReader, Write};
-use std::net::{SocketAddr, TcpStream, ToSocketAddrs};
+use std::net::{SocketAddr, ToSocketAddrs};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -680,7 +680,7 @@ pub fn probe(seam: &Seam) -> Verdict {
             }
         }
     };
-    let stream = match TcpStream::connect_timeout(&sa, PROBE_TIMEOUT) {
+    let stream = match crate::egress::connect_tcp("seam probe", &sa, PROBE_TIMEOUT) {
         Ok(s) => s,
         Err(e) => {
             return Verdict {
@@ -1254,7 +1254,7 @@ pub fn record_hosted(
     // place a lie is expensive, and a row written the instant after a fork,
     // before the child has bound, would be a lie for as long as the boot took.
     let sa = resolve(&h.addr)?;
-    if let Err(e) = TcpStream::connect_timeout(&sa, PROBE_TIMEOUT) {
+    if let Err(e) = crate::egress::connect_tcp("hosted row", &sa, PROBE_TIMEOUT) {
         bail!(
             "REFUSED to write a hosted row for `{}`: nothing is listening on {} ({e}). The \
              process was forked, but a row is a statement that a consumer can reach the service \

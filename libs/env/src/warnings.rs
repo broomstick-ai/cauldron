@@ -80,7 +80,7 @@
 //! restraint and not about absence.
 
 use std::io::{BufRead, BufReader, Write};
-use std::net::{SocketAddr, TcpStream, ToSocketAddrs};
+use std::net::{SocketAddr, ToSocketAddrs};
 use std::time::Duration;
 
 use anyhow::{bail, Context, Result};
@@ -824,7 +824,7 @@ fn resolve(addr: &str) -> Result<SocketAddr> {
 /// is why the supervisor can be a CLI and not a daemon.
 pub fn ask(addr: &str, shape: &str) -> Result<Export> {
     let sa = resolve(addr)?;
-    let stream = TcpStream::connect_timeout(&sa, ASK_TIMEOUT)
+    let stream = crate::egress::connect_tcp("warnings", &sa, ASK_TIMEOUT)
         .with_context(|| format!("connecting to {addr} to ask for its warnings shape"))?;
     let _ = stream.set_read_timeout(Some(ASK_TIMEOUT));
     let _ = stream.set_write_timeout(Some(ASK_TIMEOUT));

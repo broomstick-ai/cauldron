@@ -33,7 +33,7 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
     draw_top(frame, app, top);
     match app.ctab {
         CTab::Cauldron => draw_surface(frame, app, body),
-        CTab::Agents => draw_threads(frame, app, body),
+        CTab::Threads => draw_threads(frame, app, body),
         CTab::Status | CTab::Config => draw_dash(frame, app, body),
     }
     if app.dropdown.is_some() {
@@ -519,7 +519,7 @@ fn draw_dash(frame: &mut Frame, app: &mut App, area: Rect) {
             }
             (l, r, z)
         }
-        CTab::Cauldron | CTab::Agents => unreachable!("drawn by draw_surface and draw_threads"),
+        CTab::Cauldron | CTab::Threads => unreachable!("drawn by draw_surface and draw_threads"),
     };
     debug_assert_eq!(ranges.len(), app.dash_rows().len(), "drawn rows and App::dash_rows disagree");
     let h = inner.height as usize;
@@ -1611,18 +1611,24 @@ mod tests {
     }
 
     /// Re-audit 10 D8: at 40 columns the root strip is whole, prod and
-    /// design, and the environment still leads it, whole.
+    /// design, and the environment still leads it — whole where the strip
+    /// leaves room, else its NAME crops and never a tab (`draw_top`'s rule).
+    /// REL-6's `Threads` is a column wider than `Agents` was, so `design`
+    /// is whole from 41 columns.
     #[test]
     fn d8_the_root_tabs_never_crop_at_40_columns() {
         for env in ["prod", "design"] {
             let mut a = app(env);
             let (row, whole) = top(&mut a, 40);
             assert!(whole, "{env}: {row:?}");
-            assert!(row.ends_with("Cauldron|Agents|Status|Config"), "{env}: {row:?}");
-            assert!(row.contains(&format!(" {env} ")), "{env}: the environment whole: {row:?}");
+            assert!(row.ends_with("Cauldron|Threads|Status|Config"), "{env}: {row:?}");
+            assert!(row.trim_start().starts_with(&env[..3]), "{env}: the environment leads: {row:?}");
+            let w = if env == "prod" { 40 } else { 41 };
+            let (row, _) = top(&mut a, w);
+            assert!(row.contains(&format!(" {env} ")), "{env}: the environment whole at {w}: {row:?}");
             // Wide, the roomy strip it always had.
             let (row, whole) = top(&mut a, 120);
-            assert!(whole && row.ends_with("Cauldron | Agents | Status | Config"), "{env}: {row:?}");
+            assert!(whole && row.ends_with("Cauldron | Threads | Status | Config"), "{env}: {row:?}");
         }
     }
 

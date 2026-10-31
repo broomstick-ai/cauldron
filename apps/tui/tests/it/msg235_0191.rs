@@ -262,9 +262,10 @@ fn v7_no_titled_rule_anywhere() {
         let s = render_to_text(&mut a, W, 200).unwrap().join("\n");
         check(&format!("Config › {t:?}"), &s);
     }
-    a.set_ctab(CTab::Agents);
-    for i in 0..a.threads.seed.threads.len() {
-        a.threads.open_thread(i);
+    a.set_ctab(CTab::Threads);
+    crate::live_fixture::feed(&mut a);
+    for i in crate::live_fixture::LISTED {
+        crate::live_fixture::open(&mut a, i);
         a.threads.chat_scroll = 1000;
         let s = render_to_text(&mut a, W, 120).unwrap().join("\n");
         assert!(!s.contains("── compacted") && !s.lines().any(|l| l.contains("Message ·") && l.contains("─")), "Threads #{i}:\n{s}");

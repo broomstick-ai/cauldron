@@ -83,8 +83,8 @@ fn item1_every_strip_parts_its_items_with_a_bar_and_every_label_still_clicks() {
     let mut a = app();
     let r = rows(&mut a);
     // The top tabs.
-    let (_, top) = row_with(&r, " | Agents ");
-    assert!(top.contains("Cauldron | Agents | Status | Config"), "{top}");
+    let (_, top) = row_with(&r, " | Threads ");
+    assert!(top.contains("Cauldron | Threads | Status | Config"), "{top}");
     // The cluster tabs.
     let (_, kt) = row_with(&r, " | Actions ");
     assert!(kt.contains(" | Details"), "{kt}");

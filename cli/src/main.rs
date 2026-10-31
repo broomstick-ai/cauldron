@@ -285,6 +285,12 @@ fn main() {
 fn run() -> Result<i32> {
     let argv: Vec<String> = std::env::args().skip(1).collect();
     let argv = take_env_flag(argv)?;
+    if let Some(verb) = argv.first() {
+        if let Err(refusal) = admit_control_verb(verb) {
+            eprintln!("cauldron: {refusal}");
+            return Ok(3);
+        }
+    }
     match argv.first().map(|s| s.as_str()) {
         // Bare `cauldron`, or leading flags, go to the TUI. A leading flag is
         // the TUI's, because the TUI is the default face and `cauldron --dump`
@@ -350,6 +356,62 @@ fn run() -> Result<i32> {
                  not, because a typo must not look like success."
             );
             Ok(2)
+        }
+    }
+}
+
+/// The verbs that start, stop, restart, drain, pin or otherwise control a
+/// daemon or its launchd job (REL-6a5, REL-6a3-I F1).
+const CONTROL_VERBS: &[&str] =
+    &["daemon", "install", "uninstall", "promote", "restart", "start", "stop", "down", "pin", "rollback", "env", "test"];
+
+/// **REL-6a5: A DAEMON-CONTROL VERB IN AN ISOLATED PROCESS ACTS ONLY ON A
+/// SCRATCH ROOT.** Isolated (`env::egress::process_isolation`: the marker,
+/// which every test binary and drive exports to its children, or a test
+/// harness), a control verb whose resolved root is his real
+/// `~/.cauldron` is refused before it reads or signals anything. His own
+/// shell is not isolated, and nothing changes for it.
+///
+/// A root that does not RESOLVE is admitted here: every control verb resolves
+/// it first and fails with its own (more specific) error before acting.
+fn admit_control_verb(verb: &str) -> std::result::Result<(), String> {
+    let Some(why) = env::egress::process_isolation() else { return Ok(()) };
+    let Ok(e) = Environment::resolve() else { return Ok(()) };
+    // REL-6a8: against EVERY login home (the passwd entry AND `$HOME`).
+    let homes = env::egress::protected_homes();
+    if homes.is_empty() {
+        return admit_control_verb_with(verb, &e.root, None, &why);
+    }
+    for h in &homes {
+        admit_control_verb_with(verb, &e.root, Some(&h.join(".cauldron")), &why)?;
+    }
+    Ok(())
+}
+
+/// [`admit_control_verb`] over explicit inputs.
+fn admit_control_verb_with(verb: &str, root: &Path, real: Option<&Path>, why: &str) -> std::result::Result<(), String> {
+    if !CONTROL_VERBS.contains(&verb) {
+        return Ok(());
+    }
+    env::egress::admit_daemon_control_with(&format!("`cauldron {verb}`"), Some(root), real, why)
+}
+
+#[cfg(test)]
+mod rel6a5_control_verbs {
+    use super::*;
+
+    /// Every control verb is refused on his real root and admitted on a
+    /// scratch one; a read verb is admitted on either (opposition).
+    #[test]
+    fn rel6a5_a_control_verb_in_an_isolated_process_acts_only_on_a_scratch_root() {
+        let real = Path::new("/Users/someone/.cauldron");
+        for v in ["start", "stop", "restart", "daemon", "install", "uninstall", "promote", "down", "pin", "rollback", "env", "test"] {
+            assert!(admit_control_verb_with(v, real, Some(real), "a test").is_err(), "`{v}` admitted on his real root");
+            assert!(admit_control_verb_with(v, &real.join("x"), Some(real), "a test").is_err(), "`{v}` admitted inside it");
+            assert!(admit_control_verb_with(v, Path::new("/tmp/scratch/.cauldron"), Some(real), "a test").is_ok(), "`{v}` refused on scratch");
+        }
+        for v in ["status", "envs", "versions", "build", "tui"] {
+            assert!(admit_control_verb_with(v, real, Some(real), "a test").is_ok(), "read verb `{v}` refused");
         }
     }
 }
@@ -833,7 +895,7 @@ fn outside_state(d: &Declaration) -> (String, String) {
         .addr
         .parse::<std::net::SocketAddr>()
         .ok()
-        .map(|sa| std::net::TcpStream::connect_timeout(&sa, Duration::from_millis(300)).is_ok())
+        .map(|sa| env::egress::connect_tcp("outside service", &sa, Duration::from_millis(300)).is_ok())
         .unwrap_or(false);
     (
         if up { "outside:up" } else { "outside:down" }.into(),
@@ -3041,11 +3103,19 @@ fn launch_hosted(env: &Environment, l: &Launchable) -> Result<Seam> {
     // source says so in as many words ("no pidfile, no advisory lock on
     // threads.db, no daemons table"). So a listener here means do not fork,
     // whatever the registry says.
-    if std::net::TcpStream::connect_timeout(
+    // REL-6a5: a REFUSED probe is not "nothing is listening" — an isolated
+    // process never forks a service onto an address it may not even dial.
+    let probe = env::egress::connect_tcp(
+        "hosted listener",
         &launch.addr.parse().with_context(|| format!("`{}` is not a socket address", launch.addr))?,
         Duration::from_millis(500),
-    )
-    .is_ok()
+    );
+    if let Err(e) = &probe {
+        if e.kind() == std::io::ErrorKind::PermissionDenied {
+            bail!("{e}");
+        }
+    }
+    if probe.is_ok()
     {
         bail!(
             "REFUSED to launch `{}`: something is ALREADY listening on {}, which is the address \
@@ -3382,7 +3452,7 @@ fn held_by_a_daemon(env: &Environment) -> Result<Option<String>> {
 fn ask_supervisor(addr: &str, line: &str) -> Result<String> {
     use std::io::BufRead;
     let sa: std::net::SocketAddr = addr.parse()?;
-    let s = std::net::TcpStream::connect_timeout(&sa, Duration::from_secs(2))?;
+    let s = env::egress::connect_tcp("supervisor", &sa, Duration::from_secs(2))?;
     s.set_read_timeout(Some(Duration::from_secs(5)))?;
     let mut w = s.try_clone()?;
     w.write_all(format!("{line}\n").as_bytes())?;

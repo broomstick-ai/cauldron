@@ -171,8 +171,8 @@ fn four_cauldron_tabs_with_no_numbers() {
     let (mut a, _r) = open();
     let top = screen_at(&mut a, 120, 30)[0].clone();
     // msg 186: "Let's change the work tab to be called contents".
-    // msg 235, renamed by 8e4fca10 msg 457: Cauldron · Agents · Status · Config.
-    assert!(top.ends_with("Cauldron | Agents | Status | Config"), "{top}");
+    // msg 235, renamed by 8e4fca10 msg 457: Cauldron · Threads · Status · Config.
+    assert!(top.ends_with("Cauldron | Threads | Status | Config"), "{top}");
     let tabs = &top[top.find("Cauldron |").unwrap()..];
     assert!(!tabs.chars().any(|c| c.is_ascii_digit()), "{tabs}");
     for (i, t) in CTab::ALL.into_iter().enumerate() {

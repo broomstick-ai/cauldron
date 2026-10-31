@@ -2630,8 +2630,5 @@ pub fn preserve_key(tab: &str) -> &'static str {
 
 /// A path under the home directory, written from `~`.
 fn tilde(path: &str) -> String {
-    match std::env::var("HOME") {
-        Ok(h) if !h.is_empty() && path.starts_with(&h) => format!("~{}", &path[h.len()..]),
-        _ => path.to_string(),
-    }
+    crate::cauldron::artpage::tilde(path)
 }

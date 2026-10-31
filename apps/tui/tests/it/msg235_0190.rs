@@ -131,12 +131,12 @@ fn n10_a_double_click_on_a_title_renames_it_on_screen_for_the_developer() {
     let mut b = open(&root);
     assert!(screen(&mut b).lines().nth(1).unwrap().contains(" pot "));
     // A root tab, and the sidebar's title, too.
-    double_click(&mut a, Hit::CTab(CTab::Agents));
-    assert!(matches!(&a.modal, Some(Modal::DevRename { key, .. }) if key == "Agents"), "{:?}", a.modal);
+    double_click(&mut a, Hit::CTab(CTab::Threads));
+    assert!(matches!(&a.modal, Some(Modal::DevRename { key, .. }) if key == "Threads"), "{:?}", a.modal);
     a.handle(key(KeyCode::Esc));
     assert!(a.modal.is_none(), "Esc keeps it as it was");
     // (Its first click picked the tab, as one click on a tab does.)
-    assert_eq!(a.ctab, CTab::Agents);
+    assert_eq!(a.ctab, CTab::Threads);
     a.set_ctab(CTab::Cauldron);
     double_click(&mut a, Hit::Title(Title::Sidebar));
     assert!(matches!(&a.modal, Some(Modal::DevRename { key, .. }) if key == "Clusters"), "{:?}", a.modal);

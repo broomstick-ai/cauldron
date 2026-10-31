@@ -80,12 +80,61 @@ pub struct TypeOneCli {
     pub bin: PathBuf,
     pub adapter: Adapter,
     pub timeout: Duration,
+    /// REL-6a7: the fresh directory [`TypeOneCli::local_stand_in`] wrote its
+    /// script into. Exists only in this crate's unit-test build; no other
+    /// build has a way to set it, so no other build has a path past the gate.
+    #[cfg(test)]
+    stand_in_dir: Option<PathBuf>,
 }
 
 impl TypeOneCli {
     pub fn new(bin: PathBuf, adapter: Adapter) -> Self {
         let s = std::env::var(TIMEOUT_ENV).ok().and_then(|v| v.trim().parse().ok()).filter(|s| *s > 0).unwrap_or(DEFAULT_TIMEOUT_S);
-        TypeOneCli { bin, adapter, timeout: Duration::from_secs(s) }
+        TypeOneCli {
+            bin,
+            adapter,
+            timeout: Duration::from_secs(s),
+            #[cfg(test)]
+            stand_in_dir: None,
+        }
+    }
+
+    /// **THE TEST SEAM** (REL-6a7, unit-test builds only): a CLI whose
+    /// program is `script`, written by THIS call as `type-one` in a fresh
+    /// temp directory it creates. It takes a script, never a path, so it
+    /// cannot be pointed at the real type-one; and the gate is skipped only
+    /// while `bin` is still that file ([`Self::is_local_stand_in`]) — repoint
+    /// `bin` and the external-API gate is back.
+    #[cfg(all(test, unix))]
+    pub(crate) fn local_stand_in(script: &str, adapter: Adapter) -> Self {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = std::env::temp_dir().join(format!("cauldron-type-one-stand-in-{}", uuid::Uuid::new_v4().simple()));
+        std::fs::create_dir(&dir).expect("a fresh stand-in dir");
+        let bin = dir.join("type-one");
+        std::fs::write(&bin, script).expect("the stand-in script");
+        std::fs::set_permissions(&bin, std::fs::Permissions::from_mode(0o755)).expect("chmod the stand-in");
+        let mut cli = TypeOneCli::new(bin, adapter);
+        cli.stand_in_dir = Some(dir);
+        cli
+    }
+
+    /// Whether `bin` is the script [`Self::local_stand_in`] wrote. Always
+    /// `false` outside this crate's unit-test build.
+    fn is_local_stand_in(&self) -> bool {
+        #[cfg(test)]
+        if let Some(d) = &self.stand_in_dir {
+            return self.bin == d.join("type-one");
+        }
+        false
+    }
+}
+
+#[cfg(test)]
+impl Drop for TypeOneCli {
+    fn drop(&mut self) {
+        if let Some(d) = &self.stand_in_dir {
+            let _ = std::fs::remove_dir_all(d);
+        }
     }
 }
 
@@ -159,7 +208,15 @@ pub fn parse_decision(out: &Value, key: &str, n: usize, adapter: Adapter) -> Res
 }
 
 /// Run `bin args…` to completion within `timeout`; `Ok(stdout)` on exit 0.
-fn run(bin: &Path, args: &[&str], timeout: Duration) -> Result<String, String> {
+/// `local_stand_in` is [`TypeOneCli::is_local_stand_in`]: `false` in every
+/// build but this crate's unit tests.
+fn run(bin: &Path, args: &[&str], timeout: Duration, local_stand_in: bool) -> Result<String, String> {
+    // REL-6a5: the spawn half of `seeding::real_call`'s refusal — every
+    // type-one run is an external API call, refused under isolation. REL-6a7:
+    // except a unit test's own scripted stand-in, which reaches nothing.
+    if !local_stand_in {
+        env::egress::admit_external_api("type-one", crate::cauldron::live::isolation(false).as_deref())?;
+    }
     let mut child = Command::new(bin)
         .args(args)
         .stdin(Stdio::null())
@@ -219,7 +276,7 @@ impl TypeOneCall for TypeOneCli {
         let file = std::env::temp_dir().join(format!("cauldron-type-one-{}.json", uuid::Uuid::new_v4().simple()));
         std::fs::write(&file, serde_json::to_vec(&ask).map_err(|e| e.to_string())?).map_err(|e| format!("writing {}: {e}", file.display()))?;
         let f = file.to_string_lossy().into_owned();
-        let r = run(&self.bin, &["ask", "--ask-file", &f, "--adapters", self.adapter.name(), "--json"], self.timeout);
+        let r = run(&self.bin, &["ask", "--ask-file", &f, "--adapters", self.adapter.name(), "--json"], self.timeout, self.is_local_stand_in());
         let _ = std::fs::remove_file(&file);
         let out = r?;
         let v: Value = serde_json::from_str(out.trim()).map_err(|e| format!("type-one printed no decision JSON: {e}"))?;

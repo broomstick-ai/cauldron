@@ -64,12 +64,68 @@ pub const FLUSH_EVERY: std::time::Duration = std::time::Duration::from_millis(25
 
 /// Where the recorder writes, resolved from `$TUI_DIAG` and a fallback.
 /// `None` means it is turned off.
+///
+/// **UNDER ISOLATION, `TUI_DIAG=<path>` IS HONOURED ONLY UNDER THE ISOLATED
+/// HOME** (REL-6a4b, REL-6a4-I N1): an isolated process (a test, a headless
+/// run, the marker) given a path anywhere else — his home, inside it, a
+/// relative path, a sibling scratch dir — refuses it: the recorder is OFF,
+/// and the refusal is printed to stderr. `off` / `0` / unset are unchanged.
 pub fn path_for(fallback: PathBuf) -> Option<PathBuf> {
-    match std::env::var("TUI_DIAG") {
-        Ok(v) if v == "off" || v == "0" => None,
-        Ok(v) if !v.is_empty() => Some(PathBuf::from(v)),
-        _ => Some(fallback),
+    let var = std::env::var("TUI_DIAG").ok();
+    let iso = crate::cauldron::live::isolation(false).map(|why| (why, crate::cauldron::live::face_home()));
+    match path_for_from(var.as_deref(), fallback, iso.as_ref().map(|(w, h)| (w.as_str(), h.as_deref()))) {
+        Ok(p) => p,
+        Err(why) => {
+            eprintln!("tui: {why}");
+            tracing::warn!("{why}");
+            None
+        }
     }
+}
+
+/// [`path_for`] over explicit inputs. `isolated` is `Some((why, isolated
+/// home))` in an isolated process. `Err` is the refusal (recorder off).
+pub fn path_for_from(var: Option<&str>, fallback: PathBuf, isolated: Option<(&str, Option<&std::path::Path>)>) -> Result<Option<PathBuf>, String> {
+    let explicit = match var {
+        Some(v) if v == "off" || v == "0" => return Ok(None),
+        Some(v) if !v.is_empty() => PathBuf::from(v),
+        _ => return Ok(Some(fallback)),
+    };
+    let Some((why, home)) = isolated else { return Ok(Some(explicit)) };
+    match home {
+        Some(h) if explicit.is_absolute() && under(&explicit, h) => Ok(Some(explicit)),
+        _ => Err(format!(
+            "refused: TUI_DIAG={} is not under this isolated process's home ({}), and this process is isolated ({why}); \
+             the flight recorder is off",
+            explicit.display(),
+            home.map(|h| h.display().to_string()).unwrap_or_else(|| "none".into())
+        )),
+    }
+}
+
+/// `p` is `home` or inside it, with no `..`, judged through the symlinks of
+/// the nearest existing ancestor of each (`/var` is `/private/var`).
+fn under(p: &std::path::Path, home: &std::path::Path) -> bool {
+    if p.components().any(|c| matches!(c, std::path::Component::ParentDir)) {
+        return false;
+    }
+    let canon = |x: &std::path::Path| {
+        let mut tail = Vec::new();
+        let mut at = x;
+        loop {
+            if let Ok(c) = at.canonicalize() {
+                return tail.iter().rev().fold(c, |acc: PathBuf, t| acc.join(t));
+            }
+            match (at.parent(), at.file_name()) {
+                (Some(parent), Some(name)) => {
+                    tail.push(name.to_os_string());
+                    at = parent;
+                }
+                _ => return x.to_path_buf(),
+            }
+        }
+    };
+    canon(p).starts_with(canon(home))
 }
 
 /// Open the file (append) and start recording. Idempotent; a second call is

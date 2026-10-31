@@ -119,3 +119,29 @@ fn key_naming_the_launcher_itself_is_refused_not_looped() {
     assert_eq!(o.status.code(), Some(125), "{err}");
     assert!(err.contains("the launcher itself") && err.contains("[cli] interface"), "{err}");
 }
+
+/// **REL-6a6 (REL-6a5-I B2): AN ISOLATED LAUNCHER NEVER FORWARDS TO A CLI
+/// UNDER HIS LOGIN HOME** — his installed `cauldron` lives there, and it
+/// predates the gate. The stand-in is a RECORDER under this worktree's
+/// `CARGO_TARGET_TMPDIR` (inside his login home, harmless): pointed at it from
+/// a scratch root, the launcher refuses and the recorder never runs. Opposed by
+/// `set_key_execs_that_binary_with_the_same_argv_and_its_exit_code`, where a
+/// scratch binary IS run. (The `it` binary exports CAULDRON_ISOLATED, so the
+/// launcher child is isolated.)
+#[test]
+fn rel6a6_an_isolated_launcher_refuses_a_binary_under_his_login_home() {
+    assert_eq!(std::env::var("CAULDRON_ISOLATED").as_deref(), Ok("1"), "sentinel: the launcher child is isolated");
+    let root = scratch("rel6a6");
+    let home_side = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join(format!("rel6a6-launcher-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&home_side);
+    std::fs::create_dir_all(&home_side).unwrap();
+    let rec = fake_interface(&home_side);
+    set_key(&root, rec.to_str().unwrap());
+    let o = launch(&root, &["status"], false);
+    let ran = home_side.join("argv.out").exists();
+    let _ = std::fs::remove_dir_all(&home_side);
+    let err = String::from_utf8_lossy(&o.stderr);
+    assert!(!ran, "the launcher FORWARDED to a binary under his login home: {err}");
+    assert_eq!(o.status.code(), Some(125), "{err}");
+    assert!(err.contains("refused") && err.contains("login home"), "{err}");
+}

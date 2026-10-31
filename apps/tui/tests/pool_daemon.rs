@@ -4,6 +4,9 @@
 //! started). Proves the board reads the daemon's own shape surface, and that
 //! `d` changes the daemon's state, which comes back on the shape.
 
+// REL-6a3 rule B: every child this test binary spawns inherits CAULDRON_ISOLATED=1.
+test_isolation::install!();
+
 use std::collections::BTreeMap;
 use std::time::Duration;
 

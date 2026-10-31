@@ -75,6 +75,7 @@ run() {
         -e "HOME=$FAKEHOME" \
         -e "TUI_THREADS_CHASSIS_PORT=1" -e "TUI_THREADS_PORT=1" \
         -e "AUI_V2_URL=ws://127.0.0.1:1/" -e "CAULDRON_BIN=/usr/bin/false" \
+        -e "CAULDRON_ISOLATED=1" \
         -e "CAULDRON_OPENER=none" -e "CAULDRON_TYPE_ONE=off" \
         -e "CAULDRON_HOME=$WORK/chome" \
         "$BIN" 2>/dev/null || return 1

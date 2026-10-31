@@ -30,6 +30,9 @@ members = [
     # Fixtures. Structurally never deployed: nothing under testkit/ is a
     # service, so a reference service cannot be shipped by mistaking it for one.
     "testkit/seam-probe",
+    # REL-6a3 rule B: a dev-dependency only; exports CAULDRON_ISOLATED=1 at a
+    # test binary's load so every child a test spawns is isolated.
+    "testkit/test-isolation",
     # Services whose code lives here. `tts` is the first, rewritten from
     # substrate `lib/tts`; `threads` follows.
     "services/tts",
@@ -45,7 +48,7 @@ members = [
 # discovered by filename, so a service directory is not mistaken for one.
 
 [workspace.package]
-version = "0.1.0"
+version = "0.1.1"
 edition = "2021"
 
 [workspace.dependencies]

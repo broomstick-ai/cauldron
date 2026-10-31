@@ -70,6 +70,12 @@
 //! minted (`X-3`), an item's id is the soup's (`[Q-7]`, no cluster in it);
 //! every paste is a chip and there is no dictation.
 //!
+//! REL-6 (the release plan, R-MVP): the tab is THREADS again and it is REAL
+//! — `live` is the face's one connection to the threads daemon (the chat
+//! face's seam, mirror and store), and `threads` projects that store:
+//! Pinned, Recent and Archived, no Projects band, a send through the seam.
+//! `data/threads.json` is no longer read.
+//!
 //! `model` loads the cluster tree and computes every status; `dash` is the fake
 //! data behind the Status tab; `settings` is the settings taxonomy, its
 //! inheritance, its explanations and its files; `menu` the Config bands;
@@ -107,6 +113,7 @@ pub mod ripples;
 pub mod seeding;
 pub mod status;
 pub mod supervise;
+pub mod live;
 pub mod threads;
 pub mod tickets;
 pub mod view;

@@ -134,6 +134,8 @@ pub struct Fixture {
 pub async fn serve() -> Fixture {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
+    // REL-6a6: an isolated dial reaches only a port it was given.
+    env::egress::grant_addr(addr).expect("grant the fixture's port");
     let requests = Arc::new(Mutex::new(Vec::new()));
     let rec = requests.clone();
     tokio::spawn(async move {

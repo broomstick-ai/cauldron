@@ -40,6 +40,7 @@ fn row(addr: &str, pid: u32, pid_source: &str, started_at: u64) -> Seam {
 /// An address nothing listens on: bind, read the port, drop.
 fn quiet_addr() -> String {
     let l = TcpListener::bind("127.0.0.1:0").unwrap();
+    env::egress::grant_addr(l.local_addr().unwrap()).unwrap(); // REL-6a6: given
     let a = l.local_addr().unwrap().to_string();
     drop(l);
     a

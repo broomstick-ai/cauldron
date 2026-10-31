@@ -159,9 +159,9 @@ fn contents_splash_and_bucket_are_the_words_on_screen() {
     let (mut a, _r) = open();
     let s = screen(&mut a);
     // msg 235: the root tabs are Surface · Threads · Status · Config;
-    // 8e4fca10 msg 457 renamed them Cauldron · Agents · Status · Config.
+    // 8e4fca10 msg 457 renamed them Cauldron · Threads · Status · Config.
     // b964d571 msg 23: a `|` parts the menu items.
-    assert!(s.lines().next().unwrap().ends_with("Cauldron | Agents | Status | Config"), "N1");
+    assert!(s.lines().next().unwrap().ends_with("Cauldron | Threads | Status | Config"), "N1");
     assert!(!s.contains("Contents ·") && !s.contains("System"));
     assert_eq!(CTab::parse("cauldron"), Some(CTab::Cauldron));
     assert_eq!(CTab::parse("surface"), None, "renamed at the source (msg 457), no alias");

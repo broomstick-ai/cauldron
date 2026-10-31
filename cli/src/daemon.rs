@@ -2271,7 +2271,7 @@ pub fn wait_for_listener(addr: &str, child: &mut std::process::Child, budget: Du
                  kernel-assigned."
             );
         }
-        if TcpStream::connect_timeout(&sa, Duration::from_millis(500)).is_ok() {
+        if env::egress::connect_tcp("hosted listener", &sa, Duration::from_millis(500)).is_ok() {
             // (3) AND IT HAS TO BE OURS.
             match listening_pid(&sa) {
                 Some(owner) if owner == pid => return Ok(()),
@@ -2585,7 +2585,7 @@ fn http_get_body(addr: &str, path: &str, timeout: Duration, ok: &[u16]) -> Resul
         .with_context(|| format!("resolving `{addr}`"))?
         .next()
         .with_context(|| format!("`{addr}` resolved to nothing"))?;
-    let mut s = TcpStream::connect_timeout(&sa, timeout).with_context(|| format!("nothing answered at {addr}"))?;
+    let mut s = env::egress::connect_tcp("gate", &sa, timeout).with_context(|| format!("nothing answered at {addr}"))?;
     s.set_read_timeout(Some(timeout))?;
     s.set_write_timeout(Some(timeout))?;
     s.write_all(format!("GET {path} HTTP/1.1\r\nHost: {addr}\r\nConnection: close\r\n\r\n").as_bytes())?;

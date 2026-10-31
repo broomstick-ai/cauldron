@@ -261,7 +261,8 @@ fn every_band_header_counts_with_a_noun() {
         let s = render_to_text(&mut a, 150, 430).unwrap().join("\n");
         band_metas(&s, &mut out, &format!("Config {t:?}"));
     }
-    a.set_ctab(CTab::Agents);
+    a.set_ctab(CTab::Threads);
+    crate::live_fixture::feed(&mut a);
     let s = render_to_text(&mut a, 200, 300).unwrap().join("\n");
     band_metas(&s, &mut out, "Threads");
     assert!(out.len() > 150, "the sweep saw {} band headers", out.len());

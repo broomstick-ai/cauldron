@@ -366,6 +366,16 @@ pub(crate) trait JobControl {
     fn bootstrap(&self) -> Result<std::process::ExitStatus>;
 }
 
+/// **THE ONE MUTATING `launchctl`** (REL-6a5). `bootstrap` and `bootout`
+/// act on his real launchd domain whatever `CAULDRON_HOME` says, so an
+/// isolated process (`env::egress::process_isolation`) is refused them
+/// outright. The read-only `print`/`list` queries are not daemon control.
+fn launchctl_control(what: &str) -> Result<std::process::Command> {
+    env::egress::admit_daemon_control(&format!("`launchctl {what}`"), None, env::egress::process_isolation().as_deref())
+        .map_err(anyhow::Error::msg)?;
+    Ok(std::process::Command::new("/bin/launchctl"))
+}
+
 struct Launchctl {
     dom: String,
     target: String,
@@ -383,14 +393,15 @@ impl JobControl for Launchctl {
             .unwrap_or(false)
     }
     fn bootout(&self) {
-        let _ = std::process::Command::new("/bin/launchctl")
+        let Ok(mut c) = launchctl_control("bootout") else { return };
+        let _ = c
             .args(["bootout", &self.target])
             .stdout(std::process::Stdio::null())
             .stderr(std::process::Stdio::null())
             .status();
     }
     fn bootstrap(&self) -> Result<std::process::ExitStatus> {
-        std::process::Command::new("/bin/launchctl")
+        launchctl_control("bootstrap")?
             .args(["bootstrap", &self.dom, &self.plist_file.display().to_string()])
             .status()
             .context("running launchctl bootstrap")
@@ -991,7 +1002,7 @@ pub fn verb_uninstall(args: &[String]) -> Result<i32> {
         }
     }
     let dom = format!("gui/{}", unsafe_uid());
-    let st = std::process::Command::new("/bin/launchctl")
+    let st = launchctl_control("bootout")?
         .args(["bootout", &format!("{dom}/{}", label(&env))])
         .status();
     match st {
@@ -1272,6 +1283,10 @@ pub fn hold_from_own_launch_path(env: &Environment) -> Result<()> {
         me.display(),
         env.name
     );
+    // REL-6a6: this forwards every verb to another binary; under isolation
+    // only to one in a scratch world, never his installed CLI.
+    env::egress::admit_daemon_path("re-exec'ing an environment's own launch path", &own, env::egress::process_isolation().as_deref())
+        .map_err(anyhow::Error::msg)?;
     use std::os::unix::process::CommandExt;
     let err = std::process::Command::new(&own)
         .args(std::env::args_os().skip(1))
@@ -1628,6 +1643,20 @@ mod install_tui_tests {
             "an under-bound launchd log was rotated"
         );
         assert_eq!(std::fs::metadata(&log).unwrap().len(), 100);
+    }
+}
+
+#[cfg(test)]
+mod rel6a5_launchctl {
+    /// A cargo test harness is isolated, so the mutating launchctl is
+    /// refused before a `Command` exists — nothing here can run it.
+    #[test]
+    fn rel6a5_mutating_launchctl_is_refused_in_an_isolated_process() {
+        assert!(env::egress::process_isolation().is_some(), "sentinel: this test binary is isolated");
+        for verb in ["bootstrap", "bootout"] {
+            let e = super::launchctl_control(verb).expect_err("a launchctl Command was handed out under isolation");
+            assert!(e.to_string().contains("refused"), "{e}");
+        }
     }
 }
 

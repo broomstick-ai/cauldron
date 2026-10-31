@@ -122,6 +122,7 @@ start() {
         -e "HOME=$FAKEHOME" \
         -e "TUI_THREADS_CHASSIS_PORT=$FAKE_PORT" -e "TUI_THREADS_PORT=$FAKE_PORT" \
         -e "AUI_V2_URL=ws://127.0.0.1:1/" -e "CAULDRON_BIN=/usr/bin/false" \
+        -e "CAULDRON_ISOLATED=1" -e "CAULDRON_ISOLATED_PORTS=127.0.0.1:$FAKE_PORT@$FAKE_PID" \
         -e "CAULDRON_OPENER=none" -e "CAULDRON_TYPE_ONE=off" \
         -e "CAULDRON_HOME=$WORK/chome" \
         "$BIN"

@@ -141,6 +141,11 @@ env["TUI_THREADS_CHASSIS_PORT"] = str(PORT)
 env["TUI_THREADS_PORT"] = str(PORT)
 env["AUI_V2_URL"] = "ws://127.0.0.1:1/"
 env["CAULDRON_BIN"] = "/usr/bin/false"
+env["CAULDRON_ISOLATED"] = "1"
+# REL-6a6: an isolated face dials only the scratch ports it is GIVEN.
+# REL-6a8: a caller whose fake is not the face's child names the fake's pid
+# (TUI_FAKE_PID), so the face accepts that listener and no other holder.
+env["CAULDRON_ISOLATED_PORTS"] = f"127.0.0.1:{PORT}@{os.environ['TUI_FAKE_PID']}" if os.environ.get("TUI_FAKE_PID") else str(PORT)
 env["CAULDRON_OPENER"] = "none"
 env["CAULDRON_TYPE_ONE"] = "off"
 env["CAULDRON_HOME"] = os.path.join(HOME, "chome")

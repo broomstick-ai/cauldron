@@ -34,6 +34,9 @@
 //! more than one writer is exactly the thing that has to be arbitrated rather
 //! than hoped about.
 
+// REL-6a3 rule B: every child this test binary spawns inherits CAULDRON_ISOLATED=1.
+test_isolation::install!();
+
 #[path = "it/fake/mod.rs"]
 mod fake;
 

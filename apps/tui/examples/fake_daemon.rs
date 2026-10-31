@@ -74,7 +74,19 @@
 //! ```text
 //!   cargo run -p tui --example fake_daemon -- 8799
 //!   TUI_THREADS_CHASSIS_PORT=8799 cargo run -p tui
+//!   cargo run -p tui --example fake_daemon -- 0 --demo     # two made-up threads
 //! ```
+//!
+//! # `--demo` (REL-6): two made-up threads, exported
+//!
+//! With `--demo` the fake pushes real export frames the moment a face has
+//! learned the surface — the producer's own frame shapes, as
+//! `src/mirror/fixtures.rs` records them: `threads/recent-updates` naming two
+//! threads, their `threads` rows (named, his app's, idle), and one thread's
+//! `threads/log`. So the cauldron face's Threads tab can be proved headless
+//! against rows that are visibly not his (`tui --cauldron --dump --tab
+//! threads`). The threads are invented here and nowhere else; REL-3's demo
+//! dataset is where the teaser's will come from (release question Q-T2).
 //!
 //! (`TUI_THREADS_PORT`, the legacy `/health` door, is unrelated and is left
 //! alone — setting only `TUI_THREADS_CHASSIS_PORT` is not refused; see
@@ -94,6 +106,7 @@ async fn main() {
         .nth(1)
         .and_then(|s| s.parse().ok())
         .unwrap_or(0);
+    let demo = std::env::args().any(|a| a == "--demo");
     let listener = TcpListener::bind(("127.0.0.1", port)).await.expect("bind");
     let port = listener.local_addr().unwrap().port();
     println!("fake threads chassis on ws://127.0.0.1:{port}/ws");
@@ -151,6 +164,13 @@ async fn main() {
                 });
                 if tx.send(Message::Text(resp.to_string())).await.is_err() {
                     return;
+                }
+                if demo && method == "shapes/list" {
+                    for f in demo_frames() {
+                        if tx.send(Message::Text(f.to_string())).await.is_err() {
+                            return;
+                        }
+                    }
                 }
             }
             println!("· the face left");
@@ -222,7 +242,7 @@ fn answer(method: &str, leaf: &str, seq: &AtomicU64) -> Value {
         "send" => {
             let id = seq.fetch_add(1, Ordering::SeqCst);
             json!({
-                "promise_id": id, "visible": false,
+                "accepted": true, "promise_id": id, "visible": false,
                 "message_id": id, "header_warnings": [],
             })
         }
@@ -236,4 +256,43 @@ fn answer(method: &str, leaf: &str, seq: &AtomicU64) -> Value {
         }
         _ => json!({}),
     }
+}
+
+/// **`--demo`'s frames** — two invented threads, exported in the producer's
+/// frame shapes (`src/mirror/fixtures.rs`), with the wire's `type: shape`.
+fn demo_frames() -> Vec<Value> {
+    const AT: &str = "2026-10-30T11:00:00Z";
+    let known = || json!({"state": "known", "complete": true, "folded_at": AT});
+    let export = |shape: &str, key: &str, row: Value, cells: Value| {
+        json!({"type": "shape", "shape": shape, "key": key, "op": "read", "as_of": AT,
+            "epoch": {"init_at": AT, "reinit": 0, "lost": 0, "state": "known"}, "cells": cells, "row": row})
+    };
+    let thread = |id: &str, name: &str| {
+        let cells: serde_json::Map<String, Value> = ["header", "settings", "account", "status", "status_transitions", "queued", "last_message_id", "seen_seq", "unread", "newest", "liveness", "app"]
+            .iter()
+            .map(|c| (c.to_string(), known()))
+            .collect();
+        export("threads", id, json!({
+            "thread_id": id,
+            "header": {"cwd": "/Users/demo/projects/potion", "model": "sonnet", "created_at": AT, "updated_at": AT},
+            "settings": {"app_id": "tui"}, "account": null,
+            "status": {"state": "idle", "executing": false, "detail": null}, "status_transitions": [],
+            "queued": 0, "last_message_id": null, "seen_seq": 0, "unread": 0,
+            "newest": {"seq": 2, "message_id": null, "kind": "assistant_text", "ts": AT},
+            "body": null, "compaction": null,
+            "liveness": {"busy": false, "parent_running": false, "running_subagents": []},
+            "app": {"summary_updated": {"summary": name, "by": "tui", "ts": AT}},
+        }), Value::Object(cells))
+    };
+    let item = |seq: u64, kind: &str, text: &str| json!({"seq": seq, "kind": kind, "ts": AT, "payload": {"here": {"kind": kind, "text": text}}});
+    vec![
+        export("threads/recent-updates", "fleet", json!({"pool": "fleet", "threads": [
+            {"id": "demo-thread-1", "at": AT, "unread": 0, "seen_seq": 0},
+            {"id": "demo-thread-2", "at": AT, "unread": 0, "seen_seq": 0}]}), json!({"threads": known()})),
+        thread("demo-thread-1", "Demo: brew the first potion"),
+        thread("demo-thread-2", "Demo: label the cauldron shelf"),
+        export("threads/log", "demo-thread-1", json!({"thread_id": "demo-thread-1", "events": [
+            item(1, "user_message", "what goes in first?"),
+            item(2, "assistant_text", "Water, then the herbs, then patience.")], "retained": 0}), json!({"events": known()})),
+    ]
 }

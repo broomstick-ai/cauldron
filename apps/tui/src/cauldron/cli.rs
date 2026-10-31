@@ -1,4 +1,6 @@
-//! `tui --cauldron` — the Cauldron face (Cauldron, Agents, Status, Config), on fake data.
+//! `tui --cauldron` — the Cauldron face (Cauldron, Threads, Status, Config). The
+//! Threads tab reads the real threads daemon through the face's one connection
+//! (`live`, REL-6); the other tabs are still on fake data.
 //!
 //! `--cauldron` is stripped by `main.rs` and every other argument arrives here.
 //! The environment is resolved by the `env` crate exactly as every `cauldron`
@@ -16,7 +18,7 @@ use super::app::{resolve_env, App, CTab, Focus, KTab, Modal, Outbox, KEYMAP};
 use super::{render_to_text, view};
 
 const USAGE: &str = "\
-tui --cauldron — the Cauldron face (fake data); `cauldron tui` opens it
+tui --cauldron — the Cauldron face (Threads is live; the rest is fake data); `cauldron tui` opens it
 
     tui --cauldron [--env <name> | <name>] [--seeds <dir>]
     tui --cauldron --dump [--env <name>] [--tab <tab>] [--cluster <id>] [--cluster-tab <tab>]
@@ -29,19 +31,21 @@ tui --cauldron — the Cauldron face (fake data); `cauldron tui` opens it
                        [--parent <id>] [--boundaries <text>]
                        [--settings <path>] [--bus <page>]
                        [--keys <keys>] [--size <W>x<H>] [--scroll <n>]
-                       [--thread <id>] [--agent <id>]
+                       [--thread <id>] [--agent <id>] [--settle <ms>]
 
   --env          the cauldron environment (default: $CAULDRON_ENV, $ENV, else prod)
   --seeds        a fixture seed directory (tests only; default: none — an
                  environment shows only its own data)
   --dump         render ONE frame headlessly and print it; nothing is written to disk
-  --tab          cauldron | agents | status | config
+  --tab          cauldron | threads | status | config
   --cluster      the cluster to focus, by its minted id (`X-2`; default: the first)
   --cluster-tab  questions | actions | tasks | nodes | status | details (tasks: the execution graph)
   --status-tab   ledger | tokens | mesh | soup | bus (implies --tab status)
   --config-tab   cauldron (this cauldron) | tui | devices | providers | permissions (implies --tab config)
-  --thread       open this thread on the Agents tab (its id or name; implies --tab agents)
-  --agent        with --thread: show this subagent's transcript
+  --thread       open this thread on the Threads tab (its id or name; implies --tab threads)
+  --agent        with --thread: show this subagent's transcript (its thread id)
+  --settle       with --dump on the Threads tab: wait at most this long (ms, default 3000) for
+                 the threads daemon to answer before the frame is drawn
   --aggregate    include descendants' items on the page
   --search       search the cluster's nodes (implies --cluster-tab nodes)
   --region       open this region on the cluster's Nodes tab
@@ -73,6 +77,8 @@ tui --cauldron — the Cauldron face (fake data); `cauldron tui` opens it
   --scroll       page scroll offset for --dump
 
 environment
+  TUI_THREADS_CHASSIS_PORT  the threads daemon the Threads tab reads (default: the one this
+                   environment resolves to, as `tui` resolves it)
   CAULDRON_OPENER  what `o` hands a path to: unset or empty = the system `open`; `none` = nothing
                    is run and the notice says `open (suppressed): <path>`; anything else = that
                    program, run with the path as its one argument. Every test, audit and pty check
@@ -123,6 +129,7 @@ struct Args {
     dump_collapsed: bool,
     thread: Option<String>,
     agent: Option<String>,
+    settle: Duration,
 }
 
 #[derive(Debug, Clone)]
@@ -163,6 +170,7 @@ fn parse(argv: Vec<String>) -> anyhow::Result<Args> {
         dump_collapsed: false,
         thread: None,
         agent: None,
+        settle: Duration::from_millis(3000),
     };
     let mut it = argv.into_iter();
     while let Some(arg) = it.next() {
@@ -174,7 +182,7 @@ fn parse(argv: Vec<String>) -> anyhow::Result<Args> {
             "--tab" => {
                 let v = val("--tab")?;
                 if let Some(now) = CTab::renamed(&v) {
-                    bail!("`--tab {v}`: that tab is called {} now (8e4fca10 msg 457)", now.label().to_lowercase());
+                    bail!("`--tab {v}`: that tab is called {} now (msg 457, REL-6)", now.label().to_lowercase());
                 }
                 a.tab = Some(CTab::parse(&v).with_context(|| format!("no cauldron tab `{v}`"))?);
             }
@@ -206,6 +214,7 @@ fn parse(argv: Vec<String>) -> anyhow::Result<Args> {
             "--dump-collapsed" => a.dump_collapsed = true,
             "--thread" => a.thread = Some(val("--thread")?),
             "--agent" => a.agent = Some(val("--agent")?),
+            "--settle" => a.settle = Duration::from_millis(val("--settle")?.parse().context("--settle")?),
             "--input" => a.inputs.push(val("--input")?),
             "--settings" => a.settings = Some(val("--settings")?),
             "--parent" => a.parent = Some(val("--parent")?),
@@ -268,6 +277,10 @@ fn key_event(k: &str) -> anyhow::Result<event::Event> {
         "space" => (C::Char(' '), M::NONE),
         "opt-up" => (C::Up, M::ALT),
         "opt-down" => (C::Down, M::ALT),
+        // `f1`..`f12`: the cauldron bar's tabs (REL-6d).
+        s if s.len() >= 2 && s.starts_with('f') && s[1..].parse::<u8>().is_ok_and(|n| (1..=12).contains(&n)) => (C::F(s[1..].parse().expect("checked")), M::NONE),
+        // `ctrl-e`: a control chord (REL-6d: ^E opens the cauldrons dropdown).
+        s if s.starts_with("ctrl-") && s.chars().count() == 6 => (C::Char(s.chars().nth(5).expect("one char")), M::CONTROL),
         s if s.chars().count() == 1 => (C::Char(s.chars().next().expect("one char")), M::NONE),
         other => bail!("--keys: no key `{other}`"),
     };
@@ -305,6 +318,20 @@ fn confirm_environment(env: &env::Environment, named: bool, dump: bool) -> anyho
 /// Run the soup face with `argv` (the process arguments, `--cauldron` removed).
 pub fn main(argv: Vec<String>) -> anyhow::Result<()> {
     let args = parse(argv)?;
+    // **RULE A + B (REL-6a3).** A `--dump`, or a face with no terminal on
+    // stdin/stdout, is not his interactive face: the whole process is marked
+    // non-interactive (every connection constructor then refuses his ports,
+    // and every child inherits CAULDRON_ISOLATED=1), and its launch door is
+    // the headless one, which never falls back to the environment's daemon —
+    // its Threads tab needs TUI_THREADS_CHASSIS_PORT, or the dump exits
+    // non-zero having dialled nothing (below).
+    let scripted = {
+        use std::io::IsTerminal;
+        args.dump || !std::io::stdin().is_terminal() || !std::io::stdout().is_terminal()
+    };
+    if scripted {
+        super::live::mark_non_interactive(if args.dump { "tui --cauldron --dump" } else { "tui --cauldron (no terminal)" });
+    }
     let env = resolve_env(args.env.as_deref())?;
     let named = args.env.is_some() || env::Environment::resolve().is_ok_and(|e| e.name_source != env::paths::Source::Default);
     confirm_environment(&env, named, args.dump)?;
@@ -352,22 +379,64 @@ pub fn main(argv: Vec<String>) -> anyhow::Result<()> {
             CTab::Cauldron => app.item = i,
             CTab::Status => app.rows[0] = i,
             CTab::Config => app.rows[super::menu::SETTINGS_ROW] = i,
-            CTab::Agents => app.threads.list_item = i,
+            CTab::Threads => app.threads.list_item = i,
         }
         app.focus = Focus::Content;
         app.reveal = true;
     }
+    // **THE ONE CONNECTION** (REL-6), started the first time the Threads tab
+    // is shown — here, or by the live loop when he goes to it — and never
+    // again. A face (or a dump) that never shows the tab dials nothing, so a
+    // test driving another tab cannot reach a daemon through it. A dump
+    // waits for the daemon's first answer.
+    if args.thread.is_some() {
+        app.set_ctab(CTab::Threads);
+    }
+    // The launch's door (REL-6a): an interactive face resolves the
+    // environment's daemon; a `--dump` (or any isolated launch) only the port
+    // it is pointed at, never one of his live ports.
+    // REL-6d: the door keeps the lever AS THE LAUNCH SET IT (nothing has
+    // pointed it yet), and the environment it opened.
+    app.live_door = Some(super::live::Door::of_launch(scripted, &app.env, std::env::var("TUI_THREADS_CHASSIS_PORT").ok()));
+    if app.ctab == CTab::Threads {
+        app.start_live();
+        // A headless Threads dump with no daemon to read is an error, not a
+        // frame of empty bands (REL-6-I F2).
+        if scripted && !app.live.is_started() {
+            bail!("{}", app.live.why_not.as_deref().unwrap_or(super::live::NO_DOOR));
+        }
+    }
+    if args.dump && app.ctab == CTab::Threads {
+        settle_dump(&mut app, args.settle, |a| a.live.is_up() && !a.threads.rows.is_empty());
+    }
     if let Some(t) = &args.thread {
-        app.set_ctab(CTab::Agents);
-        let i = app.threads.seed.threads.iter().position(|x| &x.id == t || x.name.eq_ignore_ascii_case(t)).with_context(|| format!("--thread: no thread `{t}`"))?;
-        app.threads.open_thread(i);
+        let id = app.threads.rows.iter().find(|x| &x.id == t || x.name.eq_ignore_ascii_case(t)).map(|x| x.id.clone()).unwrap_or_else(|| t.clone());
+        app.threads.open_thread(&id);
+        super::threads::settle(&mut app);
+        if args.dump {
+            settle_dump(&mut app, args.settle, |a| a.threads.transcript.first().is_some_and(|b| !matches!(b, super::threads::Block::Note { text } if text.starts_with("loading"))));
+        }
         if let Some(a) = &args.agent {
             app.threads.agent(a).with_context(|| format!("--agent: no subagent `{a}` in that thread"))?;
             app.threads.set_subject(Some(a.clone()));
+            super::threads::settle(&mut app);
         }
     }
     for k in &args.keys {
         app.handle(k.clone());
+    }
+    // REL-6d: keys that switched cauldron (`App::switch_env` tore the old
+    // connection down) or went to a tab that reads the daemon start the
+    // shown environment's connection through the launch's door — what the
+    // live loop does on its next tick — and a Threads dump waits for its
+    // answer as it waited for the launch's.
+    if !args.keys.is_empty() && args.dump {
+        if app.ctab == CTab::Threads && !app.live.is_started() {
+            app.start_live();
+        }
+        if app.ctab == CTab::Threads && app.live.is_started() {
+            settle_dump(&mut app, args.settle, |a| a.live.is_up() && !a.threads.rows.is_empty());
+        }
     }
     for text in &args.inputs {
         app.dump(text);
@@ -532,6 +601,14 @@ impl Opener {
     pub fn open(&self, path: &str) -> std::io::Result<bool> {
         let program: &std::ffi::OsStr = match self {
             Opener::Suppressed => return Ok(false),
+            // REL-6a5: the real macOS `open` acts on his desktop; an isolated
+            // process runs it only when CAULDRON_OPENER points somewhere.
+            Opener::System if crate::cauldron::live::isolation(false).is_some() => {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::PermissionDenied,
+                    "refused: the real `open` from an isolated process; set CAULDRON_OPENER (none, or a recorder)",
+                ))
+            }
             Opener::System => "open".as_ref(),
             Opener::Program(p) => p,
         };
@@ -541,11 +618,35 @@ impl Opener {
     }
 }
 
+/// The quiet tick: how often a face with nothing arriving re-reads what other
+/// faces on its environment wrote, and repaints.
+const QUIET_TICK: Duration = Duration::from_millis(200);
+
+/// **WAIT FOR THE DAEMON'S ANSWER, FOR A DUMP ONLY** — up to `most`, until
+/// `done` holds and nothing has arrived for one frame. The live face never
+/// waits: it draws loading rows first and fills them in.
+fn settle_dump(app: &mut App, most: Duration, done: impl Fn(&App) -> bool) {
+    let t0 = std::time::Instant::now();
+    let mut quiet_since = std::time::Instant::now();
+    while t0.elapsed() < most {
+        if super::threads::tick(app) > 0 {
+            quiet_since = std::time::Instant::now();
+        } else if done(app) && quiet_since.elapsed() >= crate::app::FRAME_INTERVAL * 4 {
+            return;
+        }
+        std::thread::sleep(crate::app::FRAME_INTERVAL);
+    }
+}
+
 fn run(term: &mut term_shell::Tui, app: &mut App) -> anyhow::Result<()> {
     let opener = Opener::from_env();
+    let mut dirty = true;
+    let mut last_sync = std::time::Instant::now();
     while !app.quit {
         // What the face asked of the terminal: a copy (OSC 52), an `open`.
-        for job in std::mem::take(&mut app.outbox) {
+        let jobs = std::mem::take(&mut app.outbox);
+        dirty |= !jobs.is_empty();
+        for job in jobs {
             match job {
                 Outbox::Copy(text) => match term_shell::copy_to_clipboard(&text) {
                     Ok(c) if c.is_warning() => app.error = Some(c.notice()),
@@ -554,25 +655,42 @@ fn run(term: &mut term_shell::Tui, app: &mut App) -> anyhow::Result<()> {
                 },
                 Outbox::Open(path) => match opener.open(&path) {
                     Ok(true) => {}
-                    Ok(false) => app.notice = Some(format!("open (suppressed): {}", match std::env::var("HOME") {
-                        Ok(h) if !h.is_empty() => path.replace(&h, "~"),
-                        _ => path.clone(),
-                    })),
+                    Ok(false) => app.notice = Some(format!("open (suppressed): {}", crate::cauldron::artpage::tilde(&path))),
                     Err(e) => app.error = Some(format!("open {path}: {e}")),
                 },
             }
         }
-        term.draw(|f| view::draw(f, app))?;
-        if event::poll(Duration::from_millis(200))? {
+        if app.ctab == CTab::Threads && !app.live.is_started() {
+            app.start_live();
+            dirty = true;
+        }
+        if dirty {
+            term.draw(|f| view::draw(f, app))?;
+            dirty = false;
+        }
+        // **NEVER WAIT ON THE DAEMON.** The connection's events are drained
+        // with `try_recv` (`threads::tick`); while they arrive the loop wakes
+        // on the chat face's 16 ms frame grammar, and a quiet face keeps the
+        // 200 ms tick it always had.
+        let wait = if app.live.is_started() { crate::app::FRAME_INTERVAL } else { QUIET_TICK };
+        if event::poll(wait)? {
             app.handle(event::read()?);
             // Drain a burst (a paste, a fast typist) before the next frame.
             while event::poll(Duration::ZERO)? {
                 app.handle(event::read()?);
             }
-        } else {
+            dirty = true;
+        }
+        if super::threads::tick(app) > 0 {
+            dirty = true;
+        }
+        if last_sync.elapsed() >= QUIET_TICK {
             // A quiet tick: pick up what other faces on this environment wrote.
             app.sync();
+            last_sync = std::time::Instant::now();
+            dirty = true;
         }
     }
+    super::threads::flush_draft(app, true);
     Ok(())
 }

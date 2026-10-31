@@ -1,15 +1,12 @@
 # Roadmap
 
-This is the plan after the 0.1.0 release. It is a plan, not a promise: items
+This is the plan after the 0.1.1 release. It is a plan, not a promise: items
 can move between releases, and this file changes as they do. After V1,
 releases come out weekly. What each release actually contains is recorded in
 [CHANGELOG.md](CHANGELOG.md).
 
 ## V1 — next
 
-- **The Threads tab:** threads pinned or recent per environment, inside the
-  terminal UI. (In 0.1.0, threads are reached through the threads face,
-  `cauldron tui --chat`.)
 - **Two tab bars:** a global bar for configuration (the UI, devices, providers,
   accounts), and an environment bar for Cauldron, Threads, Status and
   Permissions.
@@ -25,7 +22,7 @@ releases come out weekly. What each release actually contains is recorded in
   node, the macOS keychain or an env file, and never into the soup.
 - **Ripples live:** dumps set off ripples, and ripples write to the soup. The
   soup engine is hardened, and the Ledger shows real ripple events. (Not in
-  0.1.0.)
+  0.1.0 or 0.1.1.)
 
 ## Weekly releases
 

@@ -148,6 +148,11 @@ pub fn wanted_adapter(ripple: &RippleDef, live: &Live) -> Result<Adapter, String
 
 /// The real call for `ripple`, or why there is none.
 pub fn real_call(ripple: &RippleDef, live: &Live) -> Result<TypeOneCli, String> {
+    // REL-6a5 (REL-6a3-I B1): type-one reaches his threads daemon (haiku) or
+    // OpenRouter (jev, billed) and does not read the marker itself, so an
+    // isolated process never makes the real call — whatever SWITCH_ENV says.
+    // REL-6a7: checked FIRST, so the refusal does not depend on SWITCH_ENV.
+    env::egress::admit_external_api("the type-one seeding call", crate::cauldron::live::isolation(false).as_deref())?;
     if std::env::var(SWITCH_ENV).is_ok_and(|v| v.trim() == "off") {
         return Err(format!("the real call is off ({SWITCH_ENV}=off)"));
     }
@@ -572,37 +577,61 @@ mod tests {
         assert!(type_one::parse_decision(&d, "inside", 1, Adapter::Haiku).is_err());
     }
 
-    /// The CLI adapter end to end against a scripted `type-one`: the args it
-    /// is run with, the decision it parses, and a failing exit named.
+    /// The CLI adapter end to end against a LOCAL STAND-IN `type-one`
+    /// (REL-6a7): the args it is run with, the decision it parses, and a
+    /// failing exit named. The stand-in is a script the seam writes itself;
+    /// the real type-one (his threads daemon :3653, or OpenRouter, billed) is
+    /// never run by a unit test — the second half proves the gate still
+    /// refuses it here, and that the refusal comes BEFORE any spawn.
     #[cfg(unix)]
     #[test]
     fn the_cli_adapter_runs_type_one_ask_and_reads_its_decision() {
-        use std::os::unix::fs::PermissionsExt;
-        let dir = std::env::temp_dir().join(format!("seeding-cli-{}", uuid::Uuid::new_v4().simple()));
-        std::fs::create_dir_all(&dir).unwrap();
-        let bin = dir.join("type-one");
-        let args = dir.join("args");
-        std::fs::write(
-            &bin,
-            format!(
-                "#!/bin/sh\necho \"$@\" > {}\nif [ \"$5\" = haiku ]; then echo 'Error: threads: unknown method: threads.create' >&2; exit 1; fi\n\
-                 echo '{{\"ask_id\":\"a\",\"resolved\":{{\"inside_0\":{{\"true\":0.9,\"false\":0.1}},\"inside_1\":{{\"true\":0.2,\"false\":0.8}}}},\"per_adapter\":[{{\"adapter\":\"jev\",\"cost_usd\":0.00001,\"latency_ms\":321}}]}}'\n",
-                args.display()
-            ),
-        )
-        .unwrap();
-        std::fs::set_permissions(&bin, std::fs::Permissions::from_mode(0o755)).unwrap();
+        // Records its args beside itself, fails `haiku` like the CLI does when
+        // the daemon lacks the method, and answers `jev` with a decision.
+        const STAND_IN: &str = "#!/bin/sh\necho \"$@\" > \"$(dirname \"$0\")/args\"\n\
+            if [ \"$5\" = haiku ]; then echo 'Error: threads: unknown method: threads.create' >&2; exit 1; fi\n\
+            echo '{\"ask_id\":\"a\",\"resolved\":{\"inside_0\":{\"true\":0.9,\"false\":0.1},\"inside_1\":{\"true\":0.2,\"false\":0.8}},\"per_adapter\":[{\"adapter\":\"jev\",\"cost_usd\":0.00001,\"latency_ms\":321}]}'\n";
         let p = policy();
         let r = p.get(SEED_RIPPLE).unwrap();
         let q = p.fragment("q_seed_inside", 1).unwrap();
         let two = &items()[..2];
-        let a = TypeOneCli::new(bin.clone(), Adapter::Jev).ask(r, q, "dreaming", two, "r-1", "c@x").unwrap();
+
+        // 1. The adapter runs `ask` on the stand-in and reads its decision.
+        let jev = TypeOneCli::local_stand_in(STAND_IN, Adapter::Jev);
+        let args = jev.bin.parent().unwrap().join("args");
+        let a = jev.ask(r, q, "dreaming", two, "r-1", "c@x").unwrap();
         assert_eq!(a.p, vec![0.9, 0.2]);
         assert_eq!(a.latency_ms, Some(321));
         let said = std::fs::read_to_string(&args).unwrap();
         assert!(said.starts_with("ask --ask-file ") && said.trim_end().ends_with("--adapters jev --json"), "{said}");
-        let e = TypeOneCli::new(bin, Adapter::Haiku).ask(r, q, "dreaming", two, "r-1", "c@x").unwrap_err();
+
+        // 2. A failing exit is named, with the CLI's own `Error:` line.
+        let haiku = TypeOneCli::local_stand_in(STAND_IN, Adapter::Haiku);
+        let e = haiku.ask(r, q, "dreaming", two, "r-1", "c@x").unwrap_err();
         assert!(e.contains("exited 1") && e.contains("unknown method: threads.create"), "{e}");
-        let _ = std::fs::remove_dir_all(&dir);
+
+        // 3. THE GATE STILL HOLDS under a unit test. The same stand-in file,
+        //    reached the way the real type-one is (`TypeOneCli::new`), is
+        //    refused at the external-API choke point and is never spawned.
+        std::fs::remove_file(&args).unwrap();
+        let real = TypeOneCli::new(jev.bin.clone(), Adapter::Jev);
+        let e = real.ask(r, q, "dreaming", two, "r-1", "c@x").unwrap_err();
+        assert!(e.starts_with("refused: type-one reaches an external API") && e.contains("a unit test"), "{e}");
+        assert!(!args.exists(), "the gated type-one was SPAWNED under a unit test");
+
+        // 4. A stand-in whose `bin` is repointed (at another file, say the
+        //    real type-one) loses the seam: gated again, nothing spawned.
+        let mut moved = TypeOneCli::local_stand_in(STAND_IN, Adapter::Jev);
+        let other = jev.bin.parent().unwrap().join("not-the-stand-in");
+        std::fs::copy(&jev.bin, &other).unwrap();
+        moved.bin = other;
+        let e = moved.ask(r, q, "dreaming", two, "r-1", "c@x").unwrap_err();
+        assert!(e.starts_with("refused: type-one reaches an external API"), "{e}");
+        assert!(!args.exists(), "a repointed stand-in was SPAWNED under a unit test");
+
+        // 5. And `real_call` — the only way production builds a TypeOneCli —
+        //    refuses before it even looks for the binary.
+        let e = real_call(r, &Live { primary: "jev".into(), secondary: "jev".into(), trusted: "primary".into() }).err().expect("real_call admitted the real type-one under a unit test");
+        assert!(e.contains("refused: the type-one seeding call reaches an external API"), "{e}");
     }
 }

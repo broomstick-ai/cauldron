@@ -79,6 +79,7 @@ const NOT_ENDPOINT: &[(&str, &str)] = &[
     // scratch root every name it can pick is a scratch dir; and for the chat
     // face TUI_THREADS_CHASSIS_PORT supersedes it (Source::Override).
     ("CAULDRON_ENV", "picks data/<name>/ under the root; harmless once CAULDRON_HOME is isolated; superseded by TUI_THREADS_CHASSIS_PORT for the seam"),
+    ("CAULDRON_ISOLATED", "the test-only isolation MARKER (REL-6a2, cauldron::live::ISOLATED_ENV): not an address, but required =1 on every launch (LAUNCH_ALSO)"),
     ("CARGO_PKG_VERSION", "compile time"),
     ("CARGO_MANIFEST_DIR", "compile time"),
     ("TUI_BUILD_COMMIT", "compile time"),
@@ -87,6 +88,7 @@ const NOT_ENDPOINT: &[(&str, &str)] = &[
     ("TUI_BUILD_DIRT_SCOPE", "compile time"),
     ("TUI_LOG", "log filter"),
     ("TUI_DIAG", "flight-recorder path"),
+    ("CAULDRON_PROTECTED_HOME", "REL-6a4b: ADDS a home an isolated process may not write under (cauldron::live::PROTECTED_HOME_ENV); can only protect more, points at nothing live"),
     ("TMUX", "terminal negotiation"),
     ("TUI_MIC_CAPTURE", "local capture command"),
     ("TUI_MIC_STT", "local transcription command"),
@@ -326,12 +328,20 @@ fn the_endpoint_set_is_what_src_reads() {
 /// named here and the source's use of it is asserted below rather than
 /// assumed. (The `--cauldron` face also reads `env::var("HOME")` by name, only
 /// to write paths as `~`; part 1 counts LAUNCH_ALSO as classified.)
-const LAUNCH_ALSO: &[(&str, &str)] = &[(
-    "HOME",
-    "dirs::home_dir(): under it the face reads ~/.cauldron (the registry that a registry act \
-     REWRITES — projects.json, read by the live ui-server) and writes ~/.tui/log + diag.log \
-     beside his live face's (R7.S5-inspect finding 1)",
-)];
+const LAUNCH_ALSO: &[(&str, &str)] = &[
+    (
+        "HOME",
+        "dirs::home_dir(): under it the face reads ~/.cauldron (the registry that a registry act \
+         REWRITES — projects.json, read by the live ui-server) and writes ~/.tui/log + diag.log \
+         beside his live face's (R7.S5-inspect finding 1)",
+    ),
+    (
+        "CAULDRON_ISOLATED",
+        "the test-only isolation marker (REL-6a2): with it =1 every connection the face makes \
+         refuses his live ports and every unpointed fallback, and every child it spawns inherits \
+         it (REL-6a3 rule B); =1 is the only non-live value",
+    ),
+];
 
 /// Python spawns whose target is not the face, by (file, first argument), with
 /// the reason. A spawn whose target this file cannot place is RED until it is
@@ -414,6 +424,8 @@ fn live_home(v: &str) -> bool {
 fn is_live(var: &str, v: &str) -> bool {
     match var {
         "HOME" => live_home(v),
+        // The marker is "live" (absent in effect) unless it is exactly 1.
+        "CAULDRON_ISOLATED" => v.trim() != "1",
         // Only `off` stops the real model call; any other value leaves it on.
         "CAULDRON_TYPE_ONE" => v.trim() != "off",
         // REL-1.S1c (REL-1.S1b-I F-B): exactly pty_drive.py's rule — only
@@ -1119,23 +1131,24 @@ fn every_launch_of_the_face_carries_the_whole_isolation_set() {
 fn the_launch_detector_judges_each_launch_on_its_own_words() {
     const ISO_E: &str = "-e \"HOME=$WORK/home\" -e TUI_THREADS_CHASSIS_PORT=1 -e TUI_THREADS_PORT=1 \
                          -e \"AUI_V2_URL=ws://127.0.0.1:1/\" -e CAULDRON_BIN=/usr/bin/false \
-                         -e CAULDRON_OPENER=none -e CAULDRON_TYPE_ONE=off -e \"CAULDRON_HOME=$WORK/chome\"";
+                         -e CAULDRON_OPENER=none -e CAULDRON_TYPE_ONE=off -e \"CAULDRON_HOME=$WORK/chome\" -e CAULDRON_ISOLATED=1";
     const ISO_ENV: &str = "env -u TMUX HOME=\"$WORK/home\" TUI_THREADS_CHASSIS_PORT=1 TUI_THREADS_PORT=1 \
                            AUI_V2_URL=ws://127.0.0.1:1/ CAULDRON_BIN=/usr/bin/false \
-                           CAULDRON_OPENER=none CAULDRON_TYPE_ONE=off CAULDRON_HOME=\"$WORK/chome\"";
+                           CAULDRON_OPENER=none CAULDRON_TYPE_ONE=off CAULDRON_HOME=\"$WORK/chome\" CAULDRON_ISOLATED=1";
     let bin = "BIN=\"${CARGO_TARGET_DIR}/debug/tui\"\n";
     let py_ok = "import os, pty\nBIN = sys.argv[1]\npid, fd = pty.fork()\nif pid == 0:\n    env = dict(os.environ)\n    \
                  env[\"HOME\"] = H\n    env[\"TUI_THREADS_CHASSIS_PORT\"] = \"1\"; env[\"TUI_THREADS_PORT\"] = \"1\"\n    \
                  env[\"AUI_V2_URL\"] = \"ws://127.0.0.1:1/\"; env[\"CAULDRON_BIN\"] = \"/usr/bin/false\"\n    \
                  env[\"CAULDRON_OPENER\"] = \"none\"; env[\"CAULDRON_TYPE_ONE\"] = \"off\"\n    \
                  env[\"CAULDRON_HOME\"] = os.path.join(H, \"chome\")\n    \
+                 env[\"CAULDRON_ISOLATED\"] = \"1\"\n    \
                  env.pop(\"TMUX\", None)\n    os.execve(BIN, [BIN], env)\n";
     // A launch with NOTHING set misses every required var; a direct or python
     // one also keeps TMUX. Pinned at 8 so a shrunk set cannot pass quietly
     // (4 ENDPOINT before REL-1.S1b + 2 `--cauldron` levers + REL-1.S1c's
-    // CAULDRON_HOME + HOME).
+    // CAULDRON_HOME + HOME + REL-6a2's CAULDRON_ISOLATED marker).
     let r = required().len();
-    assert_eq!(r, 8, "required set changed: {:?}", required());
+    assert_eq!(r, 9, "required set changed: {:?}", required());
     let cases: Vec<(&str, String, usize)> = vec![
         // ── isolated: no problems, and the launch IS seen (count below) ──
         ("ok tmux", format!("{bin}$S new-session -d -s p {ISO_E} \"$BIN\"\n"), 0),
@@ -1156,11 +1169,11 @@ fn the_launch_detector_judges_each_launch_on_its_own_words() {
         ("no HOME", format!("{bin}$S new-session -d -e TUI_THREADS_CHASSIS_PORT=1 -e TUI_THREADS_PORT=1 \
                              -e AUI_V2_URL=ws://127.0.0.1:1/ -e CAULDRON_BIN=/usr/bin/false \
                              -e CAULDRON_OPENER=none -e CAULDRON_TYPE_ONE=off \
-                             -e CAULDRON_HOME=/tmp/w/chome \"$BIN\"\n"), 1),
+                             -e CAULDRON_HOME=/tmp/w/chome -e CAULDRON_ISOLATED=1 \"$BIN\"\n"), 1),
         ("real HOME", format!("{bin}$S new-session -d -e \"HOME=$HOME\" -e TUI_THREADS_CHASSIS_PORT=1 \
                                -e TUI_THREADS_PORT=1 -e AUI_V2_URL=ws://127.0.0.1:1/ \
                                -e CAULDRON_BIN=/usr/bin/false -e CAULDRON_OPENER=none \
-                               -e CAULDRON_TYPE_ONE=off -e CAULDRON_HOME=/tmp/w/chome \"$BIN\"\n"), 1),
+                               -e CAULDRON_TYPE_ONE=off -e CAULDRON_HOME=/tmp/w/chome -e CAULDRON_ISOLATED=1 \"$BIN\"\n"), 1),
         // ── REL-1.S1b: the --cauldron levers, live (one each) and missing ──
         ("live opener", format!("{bin}$S new-session -d -s p {} \"$BIN\"\n", ISO_E.replace("CAULDRON_OPENER=none", "CAULDRON_OPENER=/usr/bin/open")), 1),
         ("live type one", format!("{bin}$S new-session -d -s p {} \"$BIN\"\n", ISO_E.replace("CAULDRON_TYPE_ONE=off", "CAULDRON_TYPE_ONE=on")), 1),
@@ -1175,6 +1188,10 @@ fn the_launch_detector_judges_each_launch_on_its_own_words() {
         ("py second", format!("{py_ok}    os.execve(BIN, [BIN], env)\n"), r + 1),
         ("py inherits", "BIN = sys.argv[1]\nos.execv(BIN, [BIN])\n".to_string(), 1),
         ("py unplaced", "FACE = sys.argv[1]\nos.execve(FACE, [FACE], env)\n".to_string(), 1),
+        // ── REL-6a2: the isolation marker, absent or not 1 ──
+        ("no marker tmux", format!("{bin}$S new-session -d -s p {} \"$BIN\"\n", ISO_E.replace(" -e CAULDRON_ISOLATED=1", "")), 1),
+        ("marker 0 direct", format!("{bin}{} \"$BIN\" --headless\n", ISO_ENV.replace("CAULDRON_ISOLATED=1", "CAULDRON_ISOLATED=0")), 1),
+        ("py no marker", py_ok.replace("    env[\"CAULDRON_ISOLATED\"] = \"1\"\n", ""), 1),
         // ── direct with the set but TMUX kept ──
         ("direct TMUX", format!("{bin}{} \"$BIN\"\n", ISO_ENV.replace("env -u TMUX ", "env ")), 1),
     ];
@@ -1261,6 +1278,7 @@ fn pty_drive_overrides_a_hostile_parent_and_the_face_sees_no_live_endpoint() {
     let home = env.get("HOME").expect("HOME reached the face").clone();
     assert_eq!(env.get("CAULDRON_HOME").cloned(), Some(format!("{home}/chome")), "CAULDRON_HOME: {env:?}");
     assert!(!env.contains_key("TUI_THREADS_URL"), "the retired variable leaked through");
+    assert_eq!(env.get("CAULDRON_ISOLATED").map(String::as_str), Some("1"), "the face was driven without the isolation marker");
 
     // A fake daemon's URL reaches the face as its PORT, both halves.
     let r = drive(Some("ws://127.0.0.1:8823/ws"));
@@ -1346,16 +1364,20 @@ const FACE_SPAWN_ALLOWED: &[(&str, &str)] = &[
 /// comments: `CARGO_BIN_EXE_` (cargo's handle to any built bin of this
 /// crate), a path ending `debug/tui` / `release/tui` / `bin/tui`, or
 /// `Command::new("tui")` (which runs whatever `tui` is on PATH — his install).
-fn face_spawn_sites(text: &str) -> Vec<(usize, String)> {
+pub(crate) fn face_spawn_sites(text: &str) -> Vec<(usize, String)> {
     let exe = concat!("CARGO_BIN_", "EXE_");
     let bare = concat!("Command::new(\"", "tui\")");
+    // REL-6a3: the same binary installed as `cauldron` (his
+    // `~/.cauldron/bin/cauldron`, `~/bin/cauldron`) — by PATH or by path.
+    let bare_cauldron = concat!("Command::new(\"", "cauldron\")");
+    let cauldron_path = concat!("/bin/", "cauldron\"");
     let mut out = Vec::new();
     for (i, line) in text.lines().enumerate() {
         let t = line.trim_start();
         if t.starts_with("//") {
             continue;
         }
-        if line.contains(exe) || line.contains(bare) || names_tui_path(line) {
+        if line.contains(exe) || line.contains(bare) || line.contains(bare_cauldron) || line.contains(cauldron_path) || names_tui_path(line) {
             out.push((i + 1, t.chars().take(120).collect()));
         }
     }
@@ -1371,6 +1393,9 @@ fn every_rust_test_starts_the_face_through_the_helper() {
         ("raw exe", format!("let c = Command::new(env!(\"{exe}\"));\n"), 1),
         ("path", "let c = Command::new(\"target/debug/tui\");\n".to_string(), 1),
         ("PATH tui", format!("let c = {}tui\");\n", "Command::new(\""), 1),
+        ("PATH cauldron", format!("let c = {}cauldron\");\n", "Command::new(\""), 1),
+        ("his cauldron", format!("let c = Command::new(\"/Users/x/.cauldron{}\");\n", "/bin/cauldron"), 1),
+        ("a cauldron dir", "let p = home.join(\".cauldron\");\n".to_string(), 0),
         ("comment", format!("// was Command::new(env!(\"{exe}\"))\n/// target/debug/tui\n"), 0),
         ("helper", "let c = crate::face::Face::new(&dir);\n".to_string(), 0),
     ] {
@@ -1490,4 +1515,43 @@ fn the_face_helper_forces_the_isolation_set_and_refuses_a_live_override() {
         f.output()
     }));
     assert!(r.is_err(), "Face::output() ran with a live chassis port");
+}
+
+/// **REL-6a3 RULE B, the census: every test binary of this crate exports the
+/// marker to its children.** Each `[[test]]` target's root file (read from
+/// `Cargo.toml`, so a new target is in scope the day it is added) must invoke
+/// `test_isolation::install!()` (testkit/test-isolation) outside a comment. Opposed: the detector
+/// fires on the invocation and not on a comment naming it; and the census
+/// found the four targets this crate has, so an empty miss list is not an
+/// empty search.
+#[test]
+fn rel6a3_every_test_binary_exports_the_isolation_marker_to_its_children() {
+    let call = concat!("test_isolation::", "install!()");
+    let invokes = |text: &str| text.lines().any(|l| !l.trim_start().starts_with("//") && l.contains(call));
+    assert!(invokes(&format!("{call};\n")));
+    assert!(!invokes(&format!("// {call};\n/// {call}\n")));
+    let manifest = std::fs::read_to_string(crate_dir().join("Cargo.toml")).unwrap();
+    let mut roots = Vec::new();
+    let mut in_test = false;
+    for line in manifest.lines() {
+        let t = line.trim();
+        if t.starts_with('[') {
+            in_test = t == "[[test]]";
+        } else if in_test {
+            if let Some(v) = t.strip_prefix("path").map(|r| r.trim_start()).and_then(|r| r.strip_prefix('=')) {
+                roots.push(v.trim().trim_matches('"').to_string());
+            }
+        }
+    }
+    roots.sort();
+    assert_eq!(
+        roots,
+        ["tests/it/main.rs", "tests/mic.rs", "tests/pool_daemon.rs", "tests/pool_setlive.rs"],
+        "the [[test]] census changed; check each new root below"
+    );
+    let missing: Vec<&String> = roots
+        .iter()
+        .filter(|r| !invokes(&std::fs::read_to_string(crate_dir().join(r)).unwrap()))
+        .collect();
+    assert!(missing.is_empty(), "test binaries whose children would not inherit CAULDRON_ISOLATED=1: {missing:?}");
 }

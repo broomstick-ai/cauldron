@@ -725,7 +725,7 @@ fn services(b: &mut B, n: &crate::cauldron::dash::Node, device: &str) {
             b.line(l);
         }
         let (act, shown) = match &x.log {
-            Some(p) => (SAct::Copy(p.clone()), p.replace(&std::env::var("HOME").unwrap_or_default(), "~")),
+            Some(p) => (SAct::Copy(p.clone()), crate::cauldron::artpage::tilde(p)),
             None => (SAct::NoLog(x.name.clone()), "no log recorded".to_string()),
         };
         b.row(format!("log:{}/{}", n.node, x.name), &skey, vec![Span::raw("      "), Span::styled("copy log link", palette::code())], vec![muted(shown)], act, None);

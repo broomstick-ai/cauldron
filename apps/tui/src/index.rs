@@ -573,6 +573,14 @@ pub fn load_projects(home: &str) -> (Vec<Project>, Vec<Archived>, RegistryState)
 /// was refused.
 pub fn apply_registry(home: &str, w: &crate::acts::RegistryWrite) -> Result<(), String> {
     let home = Path::new(home);
+    // **AN ISOLATED PROCESS NEVER WRITES HIS REGISTRY** (REL-6a4b B1, the
+    // second layer). `main` hands `App` `face_home`, which is already the
+    // isolated home under isolation; this refuses a home that came from
+    // anywhere else (his, inside his, above his, relative or empty) BEFORE
+    // anything is read, locked, created or renamed.
+    if let Some(why) = crate::cauldron::live::isolated_write_refusal("the project registry", home) {
+        return Err(why);
+    }
     // ── THE GUARD THAT MATTERS MOST, AND IT IS NOT ABOUT LOCKING ──────────
     //
     // **`projects::Registry::update` ON AN ABSENT FILE STARTS FROM

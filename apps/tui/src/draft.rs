@@ -66,8 +66,10 @@ pub const MAX: usize = 256 * 1024;
 
 /// `~/.tui/draft`. `None` when there is no home directory to hang it off,
 /// which is a legal state: the composer then simply has no crash journal.
+/// `~` is [`crate::cauldron::live::face_home`], so an isolated process (a
+/// test) journals into its scratch home, never his (REL-6a4).
 pub fn dir() -> Option<PathBuf> {
-    dirs::home_dir().map(|h| h.join(".tui").join("draft"))
+    crate::cauldron::live::face_home().map(|h| h.join(".tui").join("draft"))
 }
 
 /// The file one thread's draft lives in.

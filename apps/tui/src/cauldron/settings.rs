@@ -387,10 +387,10 @@ pub fn renamed(key: &str) -> Option<String> {
 /// Values RENAMED at the source: a file holding the old value is read as the
 /// new one, for the reason [`RENAMED`] keeps a renamed key's value — what it
 /// chose still exists under another name (8e4fca10 msg 457: Surface is the
-/// Cauldron tab, Threads the Agents tab).
+/// Cauldron tab; REL-6 named the Agents tab Threads again).
 pub const RENAMED_VALUES: &[(&str, &str, &str)] = &[
     ("ui.default_tab", "surface", "cauldron"),
-    ("ui.default_tab", "threads", "agents"),
+    ("ui.default_tab", "agents", "threads"),
 ];
 
 /// Values a setting can no longer hold (a tab that is gone):
@@ -439,7 +439,7 @@ pub const EVICTION: &[&str] = &["lru", "oldest_created", "largest"];
 pub const PERMISSION_MODES: &[&str] = &["bypass", "default", "plan", "accept_edits"];
 pub const AUTODECIDE: &[&str] = &["ask_everything", "confirm", "three_ways", "three_ways_floor"];
 pub const INTERRUPT: &[&str] = &["never", "violations", "blocking_questions", "all"];
-pub const TABS: &[&str] = &["cauldron", "agents", "status", "config"];
+pub const TABS: &[&str] = &["cauldron", "threads", "status", "config"];
 /// The face's palettes (`tui_render::palette::Theme`), in their switch's order.
 pub const THEMES: &[&str] = &["dark", "light"];
 

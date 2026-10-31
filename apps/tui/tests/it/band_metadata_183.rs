@@ -152,17 +152,21 @@ fn every_screen(a: &mut App, f: &mut impl FnMut(&str, &mut App)) {
         f(&format!("Config {t:?}"), a);
     }
     // The Threads tab (msg 235): its list, every thread, every subagent.
-    a.set_ctab(CTab::Agents);
+    a.set_ctab(CTab::Threads);
+    crate::live_fixture::feed(a);
     f("Threads list", a);
-    for i in 0..a.threads.seed.threads.len() {
-        a.threads.open_thread(i);
+    for i in crate::live_fixture::LISTED {
+        crate::live_fixture::open(a, i);
         f(&format!("Threads #{i}"), a);
-        let agents: Vec<String> = a.threads.seed.threads[i].agents.iter().map(|x| x.id.clone()).collect();
+        let agents: Vec<String> = a.threads.agent_rows.iter().map(|x| x.id.clone()).collect();
         for id in agents {
             a.threads.set_subject(Some(id.clone()));
+            tui::cauldron::threads::settle(a);
+            crate::live_fixture::transcript(a);
             f(&format!("Threads #{i} agent {id}"), a);
         }
         a.threads.set_subject(None);
+        tui::cauldron::threads::settle(a);
     }
     a.set_ctab(CTab::Cauldron);
 }
@@ -190,7 +194,10 @@ fn v3_every_band_carries_metadata() {
         });
         // The design cauldron has two clusters and no System pages (msg 235).
         // An account is a table's row now, not a band (msg 235).
-        let floor = if env == "prod" { 400 } else { 120 };
+        // REL-6 took the Threads tab's Projects band and its per-project
+        // bands away (and its rows are the store's, not each environment's
+        // fake file), so the design floor is 100.
+        let floor = if env == "prod" { 400 } else { 100 };
         assert!(bands > floor, "{env}: only {bands} band lines seen");
         assert!(env == "design" || pages > 20, "{env}: only {pages} bus pages seen");
         assert!(bare.is_empty(), "{env}: {} bands with no metadata:\n{}", bare.len(), bare.into_iter().collect::<Vec<_>>().join("\n"));

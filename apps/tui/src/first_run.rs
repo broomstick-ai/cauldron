@@ -46,6 +46,25 @@ use std::path::Path;
 /// journal, the mic captures. Named once.
 pub const STATE_DIR: &str = ".tui";
 
+/// **`~/.tui`, WHERE EVERY LOG THE FACE WRITES LIVES** (REL-6a4, REL-6a3-I F2).
+/// `~` is [`crate::cauldron::live::face_home`], so a headless run, a dump or a
+/// test — any isolated process — writes its logs into its isolated home and
+/// never into his `~/.tui`. `None` when there is no home at all.
+pub fn state_dir() -> Option<std::path::PathBuf> {
+    crate::cauldron::live::face_home().map(|h| h.join(STATE_DIR))
+}
+
+/// The `tracing` log file name: `headless.log` for `--headless`, else `log`.
+pub fn log_name(headless: bool) -> &'static str {
+    if headless { "headless.log" } else { "log" }
+}
+
+/// The flight recorder's default file (`tui::diag`; `TUI_DIAG` may move it):
+/// `diag-headless.log` for `--headless`, else `diag.log`, in [`state_dir`].
+pub fn diag_default(headless: bool) -> Option<std::path::PathBuf> {
+    state_dir().map(|d| d.join(if headless { "diag-headless.log" } else { "diag.log" }))
+}
+
 /// **Has this face ever been started for this home directory?**
 ///
 /// `home` is the resolved home; `None` (no home at all) answers `false`,
