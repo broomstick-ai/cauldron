@@ -2,6 +2,8 @@
 
 ![cauldron](docs/images/cauldron.png)
 
+![cauldron teaser](docs/images/teaser.gif)
+
 cauldron is a workspace for building software with coding agents. You don't
 manage the agents one at a time. You dump what you know, what you want and what
 you think of the result into one place. The questions and actions that come back
