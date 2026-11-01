@@ -139,7 +139,7 @@ fn with_release_token_route(route_line: &str) -> String {
 /// refused and NOTHING is written (not even the seed directory).
 #[test]
 fn install_refuses_an_unroutable_action_and_writes_nothing() {
-    for (case, line) in [("secret-to-node", r"route: node\n"), ("unrouted", "")] {
+    for (case, line) in [("secret-to-node", r"route: node\n"), ("unrouted", ""), ("unknown-route", r"route: vault\n")] {
         let t = Tmp::new("install-refused");
         let soup_dir = t.0.join("tui").join("soup");
         let clusters = with_release_token_route(line);

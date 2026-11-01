@@ -198,6 +198,12 @@ toml_edit = "0.22"
 # JSON, as the ripple runtime's `Policy::hash` takes it.
 sha2 = { workspace = true }
 
+# V1.8: a human action's secret value into the macOS keychain through
+# Security.framework — never `security add-generic-password -w`, whose argv
+# any process can read. Already in the lock (transitive).
+[target.'cfg(target_os = "macos")'.dependencies]
+security-framework = "3.7"
+
 # R7.S2: `tests/pool_daemon.rs` drives the pool board against a THROWAWAY
 # threads daemon (ephemeral port, tempdir data dir, fake claude binary).
 [dev-dependencies]

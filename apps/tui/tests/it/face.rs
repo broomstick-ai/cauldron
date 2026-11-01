@@ -108,6 +108,30 @@ impl Face {
         Face::build(c, scratch)
     }
 
+    /// A COPY of `BIN`, placed at `<dir>/tui` the way an install places it
+    /// (V1.4.S2b: built, then copied elsewhere), and run from there — as
+    /// `program pre_args… <copy>` when `wrapper` names one (`sandbox-exec`),
+    /// else directly. Isolated under `scratch` exactly as [`Face::new`].
+    pub fn installed(scratch: &Path, dir: &Path, wrapper: Option<(&OsStr, &[&str])>) -> Face {
+        std::fs::create_dir_all(dir).unwrap_or_else(|e| panic!("install dir {}: {e}", dir.display()));
+        let copy = dir.join("tui");
+        // Copied to a fresh file and RENAMED over, so each install is a new
+        // inode, as an installer's atomic replace is (never a rewrite in place
+        // of an image that may already have been exec'd).
+        let tmp = dir.join(format!(".tui.{}.{}", std::process::id(), std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));
+        std::fs::copy(BIN, &tmp).unwrap_or_else(|e| panic!("copy the face to {}: {e}", tmp.display()));
+        std::fs::rename(&tmp, &copy).unwrap_or_else(|e| panic!("install the face at {}: {e}", copy.display()));
+        let c = match wrapper {
+            Some((program, pre_args)) => {
+                let mut c = Command::new(program);
+                c.args(pre_args).arg(&copy);
+                c
+            }
+            None => Command::new(&copy),
+        };
+        Face::build(c, scratch)
+    }
+
     fn build(mut cmd: Command, scratch: &Path) -> Face {
         // **ITS OWN PROCESS GROUP** (REL-6a4b, REL-6a4-I N6): the watchdog
         // kills the group, so a wrapper's face (a grandchild) dies with it.
@@ -199,6 +223,13 @@ impl Face {
         assert!(names().contains(&k), "{k} is not an isolation var");
         self.cmd.env_remove(k);
         self.unset.push(k);
+        self
+    }
+
+    /// The face's working directory (V1.4.S2b: an installed face run from
+    /// outside the source tree).
+    pub fn current_dir(&mut self, d: impl AsRef<Path>) -> &mut Face {
+        self.cmd.current_dir(d);
         self
     }
 

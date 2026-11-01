@@ -79,6 +79,12 @@ impl App {
         project(&self.accounts, &self.non_idle, &self.threads, &self.summary, self.now)
     }
 
+    /// What account `label` is drawn as on this board: the one masker, told
+    /// apart from a twin that masks the same (V1-ACCT).
+    pub fn shown(&self, label: &str) -> String {
+        crate::pool::model::shown_among(label, self.accounts.rows.keys().map(String::as_str))
+    }
+
     /// The keyed subscribes the roster now calls for and nobody has sent.
     /// Marks them asked, so the caller sends each once.
     pub fn take_wanted(&mut self) -> Vec<(&'static str, String)> {

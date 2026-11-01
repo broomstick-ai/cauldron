@@ -1,28 +1,37 @@
 # Roadmap
 
-This is the plan after the 0.1.1 release. It is a plan, not a promise: items
-can move between releases, and this file changes as they do. After V1,
-releases come out weekly. What each release actually contains is recorded in
-[CHANGELOG.md](CHANGELOG.md).
+This is the plan after the 0.1.2 release. It is a plan, not a promise: items
+can move between releases, and this file changes as they do. After
+0.2.0, releases come out weekly. What each release actually contains is
+recorded in [CHANGELOG.md](CHANGELOG.md).
 
-## V1 — next
+## V1
 
-- **Two tab bars:** a global bar for configuration (the UI, devices, providers,
-  accounts), and an environment bar for Cauldron, Threads, Status and
-  Permissions.
-- **First run:** "create your first environment", then "create your first
-  cluster".
+Shipped in 0.1.2 (see [CHANGELOG.md](CHANGELOG.md)):
+
+- **Two tab bars:** a global Config bar (TUI, devices, providers, accounts),
+  and an environment bar for Cauldron, Threads, Status, Permissions and
+  Settings.
+- **First run:** "+ create your first cauldron", then a cauldron with no
+  cluster opens ready to name its first one.
 - **Ledger, first version:** a time-ordered list of dumps, each expanding into
-  its phases and the chain of work it set off.
+  its phases and the work under it, read from the environment's own data.
 - **Tokens:** the real account pool and its usage pressure, under Status.
-- **Accounts:** log in once, then switch each account on or off per cauldron.
 - **Inference:** Claude Code only. Other endpoints are shown greyed out until
   their adapters exist.
-- **Secret human actions:** a masked input whose value is routed to a graph
-  node, the macOS keychain or an env file, and never into the soup.
+- **Secret human actions:** a masked input whose value is routed to the macOS
+  keychain or an env file, and never into the soup.
+- **Cleanup** of leftover names and states in the UI.
+- **`cauldron ctl`:** send a dump, print one frame of the face, or read one
+  soup node, from the command line.
+- **Accounts:** the threads daemon's accounts under Config, masked; log in
+  once from the face, then switch each account on or off per cauldron.
+
+Coming in 0.2.0. Ripples and the soup engine arrive in 0.2.0:
+
 - **Ripples live:** dumps set off ripples, and ripples write to the soup. The
   soup engine is hardened, and the Ledger shows real ripple events. (Not in
-  0.1.0 or 0.1.1.)
+  0.1.0, 0.1.1 or 0.1.2.)
 
 ## Weekly releases
 

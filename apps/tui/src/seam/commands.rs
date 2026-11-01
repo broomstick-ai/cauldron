@@ -92,6 +92,19 @@ pub mod methods {
     pub const EVENT: Method<1> = served::THREADS_EVENT;
     pub const CANCEL: Method<1> = served::THREADS_CANCEL;
 
+    // ── THE ACCOUNT VERBS (V1.6) ──────────────────────────────────────────
+    //
+    // The machine-wide in-pool switch and the piped login: five methods the
+    // producer already serves (`inventory.json`'s `accounts/...` entries), so a
+    // face that logs an account in once, or takes one out of the pool, says it
+    // through this door and not a second connection. Vocabulary, as with the
+    // thread verbs: a face that never calls them pays nothing.
+    pub const LOGIN_BEGIN: Method<0> = served::ACCOUNTS_LOGIN_BEGIN;
+    pub const LOGIN_COMPLETE: Method<1> = served::ACCOUNTS_LOGIN_COMPLETE;
+    pub const LOGIN_CANCEL: Method<1> = served::ACCOUNTS_LOGIN_CANCEL;
+    pub const ACCOUNT_ENABLE: Method<1> = served::ACCOUNTS_ENABLE;
+    pub const ACCOUNT_DISABLE: Method<1> = served::ACCOUNTS_DISABLE;
+
     /// **WHAT THE GUARD'S SECOND WITNESS WALKS**, in the producer's own spelling.
     ///
     /// It is still literals, deliberately: `tools/seamdiff --inventory` reads this
@@ -107,6 +120,11 @@ pub mod methods {
         "threads/{thread_id}/seen",
         "threads/{thread_id}/event",
         "threads/{thread_id}/cancel",
+        "accounts/login/begin",
+        "accounts/login/{session_id}/complete",
+        "accounts/login/{session_id}/cancel",
+        "accounts/{account}/enable",
+        "accounts/{account}/disable",
     ];
 
     // Literal messages, no braces: `assert!` reads its second argument as a
@@ -144,12 +162,37 @@ pub mod methods {
         "the `cancel` method token's template is not in TEMPLATES. WHAT IS MISSING: this \
          template in TEMPLATES, in the producer's own spelling.",
     );
-    /// **AND THE OTHER DIRECTION.** Six tokens, six templates: an entry in
+    const _: () = assert!(
+        lists(TEMPLATES, LOGIN_BEGIN.template()),
+        "the `login begin` method token's template is not in TEMPLATES. WHAT IS MISSING: \
+         this template in TEMPLATES, in the producer's own spelling.",
+    );
+    const _: () = assert!(
+        lists(TEMPLATES, LOGIN_COMPLETE.template()),
+        "the `login complete` method token's template is not in TEMPLATES. WHAT IS \
+         MISSING: this template in TEMPLATES, in the producer's own spelling.",
+    );
+    const _: () = assert!(
+        lists(TEMPLATES, LOGIN_CANCEL.template()),
+        "the `login cancel` method token's template is not in TEMPLATES. WHAT IS MISSING: \
+         this template in TEMPLATES, in the producer's own spelling.",
+    );
+    const _: () = assert!(
+        lists(TEMPLATES, ACCOUNT_ENABLE.template()),
+        "the `account enable` method token's template is not in TEMPLATES. WHAT IS \
+         MISSING: this template in TEMPLATES, in the producer's own spelling.",
+    );
+    const _: () = assert!(
+        lists(TEMPLATES, ACCOUNT_DISABLE.template()),
+        "the `account disable` method token's template is not in TEMPLATES. WHAT IS \
+         MISSING: this template in TEMPLATES, in the producer's own spelling.",
+    );
+    /// **AND THE OTHER DIRECTION.** Eleven tokens, eleven templates: an entry in
     /// `TEMPLATES` with no token above it would be a method the guard walks and
     /// the seam cannot send, which is a list describing a seam that does not
     /// exist.
     const _: () = assert!(
-        TEMPLATES.len() == 6,
+        TEMPLATES.len() == 11,
         "TEMPLATES has an entry with no method token beside it, or is missing one. The \
          list and the tokens are one fact: a template the seam cannot send is a method \
          nobody may read this list as evidence of. WHAT IS MISSING: either the token (a \
@@ -318,6 +361,50 @@ pub async fn event(
         )
         .await?;
     Ok(Ack::of("event", Some(thread.to_string()), payload, s))
+}
+
+// ── THE ACCOUNT VERBS (V1.6) ──────────────────────────────────────────────
+//
+// Rule 2.4 holds here as for the thread verbs: each answers an ack, and the
+// FACT — an account added by a login, a `disabled` cell flipped — arrives on
+// the `accounts` shape, which every face already holds as a standing entry
+// (`held::STANDING`), so there is nothing to hold first. `begin` is the one
+// whose ack carries an ADDRESS it minted: the `session_id` (and the URL the
+// person opens), as `create` mints a `thread_id`. The pasted code goes out in
+// the params of `complete` and nowhere else: never logged here, never kept.
+
+/// `accounts/login/begin`: start the daemon's piped login for `account` (a
+/// new slot's name, or an existing account's). The ack's payload carries
+/// `session_id` and `url`.
+pub async fn login_begin(s: &Seam, account: &str) -> Result<Ack, Refusal> {
+    let payload = s
+        .link
+        .request(methods::LOGIN_BEGIN.at(), json!({ "account": account }))
+        .await?;
+    Ok(Ack::of("login_begin", Some(account.to_string()), payload, s))
+}
+
+/// `accounts/login/{session_id}/complete`: hand back the code he pasted.
+pub async fn login_complete(s: &Seam, session_id: &str, code: &str) -> Result<Ack, Refusal> {
+    let payload = s
+        .link
+        .request(methods::LOGIN_COMPLETE.at(session_id), json!({ "code": code }))
+        .await?;
+    Ok(Ack::of("login_complete", None, payload, s))
+}
+
+/// `accounts/login/{session_id}/cancel`: he left the login half done.
+pub async fn login_cancel(s: &Seam, session_id: &str) -> Result<Ack, Refusal> {
+    let payload = s.link.request(methods::LOGIN_CANCEL.at(session_id), json!({})).await?;
+    Ok(Ack::of("login_cancel", None, payload, s))
+}
+
+/// `accounts/{account}/enable` or `/disable`: the MACHINE-WIDE in-pool
+/// switch, the `accounts` shape's `disabled` cell.
+pub async fn account_in_pool(s: &Seam, account: &str, on: bool) -> Result<Ack, Refusal> {
+    let m = if on { methods::ACCOUNT_ENABLE } else { methods::ACCOUNT_DISABLE };
+    let payload = s.link.request(m.at(account), json!({})).await?;
+    Ok(Ack::of(if on { "enable" } else { "disable" }, Some(account.to_string()), payload, s))
 }
 
 /// A refusal this face cannot do anything about but must be able to NAME. The

@@ -110,11 +110,11 @@ fn warnings(b: &Board) -> Vec<Line<'static>> {
     for c in b.cards.iter().filter(|c| !c.disabled()) {
         if let Some((w, t)) = c.slot.warning() {
             let mark = if t == Tone::Bad { "✕" } else { "⚠" };
-            out.push(Line::from(Span::styled(format!(" {mark} {} {w}", c.label), style(t))));
+            out.push(Line::from(Span::styled(format!(" {mark} {} {w}", c.title()), style(t))));
         }
         if let Some(why) = &c.not_answering {
             out.push(Line::from(Span::styled(
-                format!(" ✕ {} is NOT ANSWERING — {why}", c.label),
+                format!(" ✕ {} is NOT ANSWERING — {why}", c.title()),
                 style(Tone::Bad),
             )));
         }
@@ -130,15 +130,11 @@ fn gauge_line(g: &Gauge, label: &str, now: DateTime<Utc>, width: usize) -> Line<
             s.push(Span::styled(bar(p, width), style(bar_tone(p))));
             let approx = if g.confidence.is_some_and(|c| c < 0.9) { "~" } else { " " };
             s.push(Span::styled(format!(" {approx}{:>3.0}%", p), style(bar_tone(p))));
+            // A meter says when it resets, full or not. AT LIMIT is never read
+            // off a gauge (V1-CLEAN2, V1-CLEAN1-I B2): it is the daemon's
+            // `limit` cell, drawn on the card's own line (`Card.limit_until`).
             if let Some(r) = g.resets_at {
-                if p >= 100.0 {
-                    s.push(Span::styled(
-                        format!("  AT LIMIT — back in {}", countdown(r - now)),
-                        style(Tone::Bad),
-                    ));
-                } else {
-                    s.push(Span::styled(format!("  resets in {}", countdown(r - now)), palette::muted()));
-                }
+                s.push(Span::styled(format!("  resets in {}", countdown(r - now)), palette::muted()));
             }
         }
     }
@@ -151,7 +147,7 @@ fn card_lines(c: &Card, n: usize, selected: bool, now: DateTime<Utc>, wide: bool
     let mut title = vec![
         Span::styled(format!("{marker} {n} "), palette::muted()),
         // At least one space after the name, however long it is.
-        Span::styled(format!("{:<14} ", c.label), name_style),
+        Span::styled(format!("{:<14} ", c.title()), name_style),
     ];
     if let Standing::Disabled { at, note } = &c.standing {
         title.push(Span::styled("DISABLED", palette::amber().add_modifier(Modifier::BOLD)));
@@ -200,7 +196,7 @@ fn card_lines(c: &Card, n: usize, selected: bool, now: DateTime<Utc>, wide: bool
     if let Some(u) = c.limit_until {
         let prose = c.limit_prose.clone().map(|p| format!(" · {p}")).unwrap_or_default();
         out.push(Line::from(Span::styled(
-            format!("      rate-limited — back in {}{prose}", countdown(u - now)),
+            format!("      AT LIMIT — back in {}{prose}", countdown(u - now)),
             style(Tone::Bad),
         )));
     }
@@ -342,11 +338,11 @@ pub fn draw(f: &mut Frame, app: &App) {
 
     let status = match &app.prompt {
         Prompt::Confirm(a) => Line::from(vec![
-            Span::styled(format!(" {} ", a.question()), palette::amber()),
+            Span::styled(format!(" {} ", a.question_as(&app.shown(a.label()))), palette::amber()),
             Span::styled("y/enter yes · any other key no", palette::muted()),
         ]),
         Prompt::Share { label, buf } => Line::from(Span::styled(
-            format!(" {label} share %: {buf}▏ (enter to confirm, empty clears, esc cancels)"),
+            format!(" {} share %: {buf}▏ (enter to confirm, empty clears, esc cancels)", app.shown(label)),
             palette::amber(),
         )),
         Prompt::None => match &app.note {

@@ -24,9 +24,15 @@ use tui::cauldron::store::seed_dir;
 /// most 200 ms on `event::poll`. Every negative here waits well past it, AFTER
 /// the drain is witnessed.
 const LOOP_POLL: Duration = Duration::from_millis(200);
-/// How long a recorder that was spawned may take to write (the positive arm
-/// measures it; a few ms in practice).
+/// How long a NEGATIVE waits for a recorder that must not run, past the
+/// drain (a few ms in practice when one does run).
 const RECORDER_GRACE: Duration = Duration::from_secs(3);
+/// The deadline of a POSITIVE wait: for the recorder's file to appear.
+/// `wait_file` returns the moment it does, so this costs nothing on a pass;
+/// it only bounds a failure. V1.8.S3: it was `RECORDER_GRACE` (3 s), and a
+/// shell spawn under the full suite's load outlasted it ("the opener never
+/// ran"); the sibling tests already waited 20 s.
+const SPAWN_DEADLINE: Duration = Duration::from_secs(20);
 
 fn scratch_root() -> PathBuf {
     static N: AtomicUsize = AtomicUsize::new(0);
@@ -37,6 +43,9 @@ fn scratch_root() -> PathBuf {
         std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()
     ));
     std::fs::create_dir_all(&p).unwrap();
+    // The face opens on prod's seed: prod must EXIST, or an empty root is
+    // the first-run screen (V1.2).
+    std::fs::create_dir_all(p.join("data").join("prod")).unwrap();
     p
 }
 
@@ -222,7 +231,7 @@ fn o_under_a_pty_runs_the_cauldron_opener_with_the_artifacts_path() {
     face_up(&p);
     assert!(!log.exists(), "nothing ran before `o`");
     p.press("o");
-    let got = wait_file(&log, RECORDER_GRACE + Duration::from_secs(5));
+    let got = wait_file(&log, SPAWN_DEADLINE);
     p.quit();
     assert_eq!(got.as_deref(), Some(format!("{path}\n").as_str()), "the opener ran once, with the artifact's path as its one argument");
 }
@@ -278,7 +287,7 @@ fn a_dump_with_keys_o_never_execs_though_the_same_keys_live_do() {
     assert!(!log.exists(), "a --dump exec'd the opener");
     // The counterpart: the same args live, under a pty, do reach it.
     let p = Pty::spawn(&root, script.to_str().unwrap(), &args);
-    let got = wait_file(&log, Duration::from_secs(20));
+    let got = wait_file(&log, SPAWN_DEADLINE);
     p.quit();
     assert_eq!(got.as_deref(), Some(format!("{path}\n").as_str()));
 }
@@ -291,7 +300,7 @@ fn the_opener_takes_a_path_with_spaces_whole_and_a_leading_dash_never_as_an_opti
     for path in ["/tmp/a dir/with spaces.md", "-n", "--args evil", "/tmp/-plain.md"] {
         let _ = std::fs::remove_file(&log);
         assert_eq!(opener.open(path).unwrap(), true);
-        let got = wait_file(&log, RECORDER_GRACE).unwrap_or_else(|| panic!("{path}: the opener never ran"));
+        let got = wait_file(&log, SPAWN_DEADLINE).unwrap_or_else(|| panic!("{path}: the opener never ran"));
         let want = if path.starts_with('-') { format!("./{path}\n") } else { format!("{path}\n") };
         assert_eq!(got, want, "{path}: one argument, never an option");
     }

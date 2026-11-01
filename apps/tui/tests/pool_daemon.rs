@@ -7,6 +7,13 @@
 // REL-6a3 rule B: every child this test binary spawns inherits CAULDRON_ISOLATED=1.
 test_isolation::install!();
 
+// V1-POOLTEST: the throwaway daemon's `accounts` shape hydrates login slots,
+// which reaches the keychain reader; the threads crate's ONE shared fixture
+// (CON-28, R9.F2d) makes every store read as absent, so this test never reads
+// his real keychain (without it the CON-28 tripwire aborts the binary).
+#[path = "../../../services/threads/tests/it/support/keychain.rs"]
+mod keychain;
+
 use std::collections::BTreeMap;
 use std::time::Duration;
 
@@ -23,6 +30,7 @@ fn key(c: char) -> KeyEvent {
 }
 
 async fn throwaway_daemon() -> (String, tempfile::TempDir) {
+    keychain::install();
     let tmp = tempfile::tempdir().unwrap();
     std::env::set_var(
         "THREADS_CLAUDE_BIN",
@@ -49,7 +57,41 @@ async fn throwaway_daemon() -> (String, tempfile::TempDir) {
         .await
         .unwrap();
     std::mem::forget(h);
-    (format!("ws://{addr}/ws"), tmp)
+    let url = format!("ws://{addr}/ws");
+    // V1-POOLTEST (REL-6a6 egress allowlist): this daemon is a SCRATCH
+    // listener this process just bound in-process on 127.0.0.1:0, so the test
+    // grants exactly that bound listener — the same as the `tests/it` fixtures.
+    // Bound first, then granted from the listener's own `local_addr()` (never
+    // from config), which is the shape REL-6a8 keeps (`grant_addr(addr)`).
+    // Sentinel: before the grant the gate REFUSES this very port, so the grant
+    // — not a hole in the gate — is what admits the dial below.
+    let before = tui::cauldron::live::refuse_isolated_url("pool", &url);
+    assert!(before.is_some(), "the gate admitted an ungranted scratch port {url} — the test proves nothing");
+    env::egress::grant_addr(addr).expect("grant the throwaway daemon's bound port");
+    assert_eq!(tui::cauldron::live::refuse_isolated_url("pool", &url), None, "the granted scratch daemon is refused");
+    (url, tmp)
+}
+
+/// V1-POOLTEST: a grant widens the gate by THAT bound port only. A loopback port this process never bound (an ephemeral listener
+/// bound here and NOT granted) is still refused by the pool client's gate, and
+/// `client::spawn` panics on it rather than dialling.
+#[tokio::test(flavor = "multi_thread")]
+async fn the_gate_still_refuses_a_port_this_process_did_not_grant() {
+    // Its own listeners, not a second throwaway daemon: `throwaway_daemon`
+    // sets process-wide env, and the two tests here run in parallel.
+    let mine = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    env::egress::grant_addr(mine.local_addr().unwrap()).expect("grant");
+    let granted_url = format!("ws://{}/ws", mine.local_addr().unwrap());
+    let other = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = other.local_addr().unwrap().port();
+    let url = format!("ws://127.0.0.1:{port}/ws");
+    assert_ne!(Some(port), client::url_port(&granted_url), "sentinel: two different ports");
+    assert_eq!(tui::cauldron::live::refuse_isolated_url("pool", &granted_url), None, "the granted one is admitted");
+    let why = tui::cauldron::live::refuse_isolated_url("pool", &url).expect("an ungranted port was admitted");
+    assert!(why.contains("was not given"), "{why}");
+    let (tx, _rx) = mpsc::channel(8);
+    let spawned = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| client::spawn(url.clone(), tx)));
+    assert!(spawned.is_err(), "client::spawn dialled an ungranted port {url}");
 }
 
 async fn fold_until(app: &mut App, rx: &mut mpsc::Receiver<In>, what: &str, done: impl Fn(&App) -> bool) {

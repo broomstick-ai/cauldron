@@ -48,6 +48,16 @@ pub enum Outcome {
 /// Perform one confirmed act. A WebSocket act goes to the daemon over
 /// `h`; the set-live carve-out runs its preflight as a child process.
 pub async fn perform(h: &client::Handle, a: &Action) -> Outcome {
+    // Every note this returns is drawn: the daemon's refusal or a tool's
+    // stderr may quote the key (`accounts/<key>/disable`), so each passes the
+    // one masker on its way out (V1-CLEAN2).
+    match perform_unmasked(h, a).await {
+        Outcome::Done(n, t) => Outcome::Done(model::masked_in(&n, a.label()), t),
+        other => other,
+    }
+}
+
+async fn perform_unmasked(h: &client::Handle, a: &Action) -> Outcome {
     match a.command() {
         Command::Ws { method, params } => match h.request(&method, params).await {
             Ok(p) => {
@@ -59,7 +69,7 @@ pub async fn perform(h: &client::Handle, a: &Action) -> Outcome {
                     Action::SetLive(_) => unreachable!("set-live is local"),
                 };
                 let same = if p["changed"] == false { " (it already was)" } else { "" };
-                Outcome::Done(format!("{verb} {}{same}", a.label()), Tone::Good)
+                Outcome::Done(format!("{verb} {}{same}", model::shown_name(a.label())), Tone::Good)
             }
             Err(e) => Outcome::Done(format!("{method} refused: {e}"), Tone::Bad),
         },
@@ -82,7 +92,7 @@ pub async fn perform(h: &client::Handle, a: &Action) -> Outcome {
                 Preflight::AlreadyLive => {
                     match run_captured(&set_live_argv(&label, Mode::RecordAlreadyLive)).await {
                         Ok((true, out, _)) if out.contains(action::ALREADY_LIVE_MARKER) => Outcome::Done(
-                            format!("{label} already is this machine's login — name recorded"),
+                            format!("{} already is this machine's login — name recorded", model::shown_name(&label)),
                             Tone::Good,
                         ),
                         Ok(_) => Outcome::Done(

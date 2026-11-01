@@ -41,7 +41,7 @@ fn env_in(root: &Path, name: &str) -> Environment {
 
 fn open_env(root: &Path, name: &str) -> App {
     std::env::set_var("CAULDRON_TYPE_ONE", "off");
-    App::open(env_in(root, name), seed_dir(), true).expect("seed loads")
+    crate::live_pool::seeded(App::open(env_in(root, name), seed_dir(), true).expect("seed loads"))
 }
 
 fn open() -> (App, PathBuf) {
@@ -90,14 +90,14 @@ fn line_with<'a>(s: &'a str, needle: &str) -> &'a str {
 #[test]
 fn the_cauldrons_switch_is_its_tabs_first_row_enabled_or_disabled_and_asks_first() {
     let (mut a, root) = open_env_fresh();
-    let top = render_to_text(&mut a, 120, 30).unwrap()[0].clone();
+    let top = render_to_text(&mut a, 120, 30).unwrap()[1].clone();
     assert!(top.starts_with("  prod  ▾") && !top.contains('●') && !top.contains(" on "), "A1: {top}");
     assert!(!a.hits.iter().any(|(_, h)| matches!(h, Hit::Strip(_))), "no strip on Surface");
-    // THIS cauldron's tab (msg 235: named for it; b964d571 msg 23: the first), and its first
-    // row (under the strip) is the switch.
-    a.handle(key(KeyCode::F(4)));
-    a.set_cfg_tab(CfgTab::Cauldron);
-    let first = a.selectable().into_iter().nth(1).unwrap();
+    // THIS cauldron's tab (V1.1: Settings, F5), and its first row is the
+    // switch (no sub-tab strip above it now).
+    a.handle(key(KeyCode::F(5)));
+    assert_eq!(a.cfg_tab, CfgTab::Cauldron);
+    let first = a.selectable().into_iter().next().unwrap();
     assert!(matches!(&first, Entry::Set(b) if b.key == "cauldron.enabled"), "A2: {first:?}");
     assert!(a.enabled(), "A2: active by default");
     let s = screen(&mut a);
@@ -108,7 +108,7 @@ fn the_cauldrons_switch_is_its_tabs_first_row_enabled_or_disabled_and_asks_first
     assert_eq!(lit(&a), 0, "enabled in force");
     // Every way of flipping it asks.
     for k in [KeyCode::Char(' '), KeyCode::Enter, KeyCode::Right] {
-        a.rows[SETTINGS_ROW] = 1;
+        a.rows[SETTINGS_ROW] = 0;
         a.handle(key(k));
         let Some(Modal::Confirm { title, body, .. }) = a.modal.clone() else { panic!("{k:?}: {:?}", a.modal) };
         assert_eq!(title, "Disable the prod cauldron?", "A3 A4");
@@ -118,7 +118,7 @@ fn the_cauldrons_switch_is_its_tabs_first_row_enabled_or_disabled_and_asks_first
         assert!(a.enabled());
     }
     // Enter does it: disabled, and the cauldrons dropdown says so too.
-    a.rows[SETTINGS_ROW] = 1;
+    a.rows[SETTINGS_ROW] = 0;
     a.handle(key(KeyCode::Char(' ')));
     let s = screen(&mut a);
     assert!(s.contains("┏ Disable the prod cauldron? ") && s.contains("Are you sure you want to pause prod?"), "{s}");
@@ -152,8 +152,8 @@ fn file(root: &Path, rel: &str) -> String {
 // ── N1 N2 N3 ────────────────────────────────────────────────────────────────
 
 /// N1: the tabs are Contents · Status · System · Config, and `work` still
-/// parses as Contents. N2: an aggregate ripple is a SPLASH, wherever the UI
-/// names its kind. N3: the input area is the BUCKET.
+/// parses as Contents. N2: an aggregate ripple is a TYPE 3 (it was a SPLASH
+/// until V1.9), wherever the UI names its kind. N3: the input area is the BUCKET.
 #[test]
 fn contents_splash_and_bucket_are_the_words_on_screen() {
     let (mut a, _r) = open();
@@ -161,15 +161,16 @@ fn contents_splash_and_bucket_are_the_words_on_screen() {
     // msg 235: the root tabs are Surface · Threads · Status · Config;
     // 8e4fca10 msg 457 renamed them Cauldron · Threads · Status · Config.
     // b964d571 msg 23: a `|` parts the menu items.
-    assert!(s.lines().next().unwrap().ends_with("Cauldron | Threads | Status | Config"), "N1");
+    // V1.1: the environment bar, row 1, under the global bar.
+    assert!(s.lines().nth(1).unwrap().ends_with("Cauldron | Threads | Status | Permissions | Settings"), "N1");
     assert!(!s.contains("Contents ·") && !s.contains("System"));
     assert_eq!(CTab::parse("cauldron"), Some(CTab::Cauldron));
     assert_eq!(CTab::parse("surface"), None, "renamed at the source (msg 457), no alias");
     assert_eq!(CTab::parse("contents"), None, "renamed at the source, no alias");
     assert_eq!(CTab::Cauldron.label(), "Cauldron");
     // The Cauldron tab is two boxes: `surface` above (msg 457), `bucket` below.
-    assert!(s.lines().nth(1).unwrap().starts_with("╭") && s.lines().nth(1).unwrap().contains(" surface "), "{s}");
-    assert!(!s.lines().nth(1).unwrap().contains(" soup "), "{s}");
+    assert!(s.lines().nth(2).unwrap().starts_with("╭") && s.lines().nth(2).unwrap().contains(" surface "), "{s}");
+    assert!(!s.lines().nth(2).unwrap().contains(" soup "), "{s}");
     assert!(s.lines().any(|l| l.starts_with("╭") && l.contains(" bucket ")), "{s}");
     // Its copy at its bottom right (8e4fca10 msg 457).
     assert!(s.lines().last().unwrap().ends_with("┤ ⧉ copy ├╯"), "{s}");
@@ -179,16 +180,17 @@ fn contents_splash_and_bucket_are_the_words_on_screen() {
     typed(&mut a, "a thought");
     a.handle(key(KeyCode::Enter));
     assert!(a.notice.as_deref().unwrap_or("").starts_with("dump "), "{:?}", a.notice);
-    // N2: the Bus's ripples, read-only (msg 235), say splash.
+    // N2, as V1.9 renamed it: the Bus's ripples, read-only (msg 235), say
+    // `type 3` — never splash (product spec §7, RP#181).
     a.set_ctab(CTab::Status);
     a.set_sttab(StatusTab::Bus);
     a.stnav.insert("ripples".into());
     let s = screen(&mut a);
-    assert!(s.lines().any(|l| l.contains(" dump ") && l.contains("splash")), "{s}");
+    assert!(s.lines().any(|l| l.contains(" dump ") && l.contains("type 3")), "{s}");
+    assert!(!s.to_lowercase().contains("splash"), "a screen says splash: {s}");
     assert!(!s.lines().any(|l| l.contains(" today ") && l.contains(" shell ")), "no ripple's kind says shell: {s}");
-    assert_eq!(tui::cauldron::ripples::Kind::Shell.label(), "splash");
-    let k: tui::cauldron::ripples::Kind = serde_json::from_str("\"splash\"").unwrap();
-    assert_eq!(k, tui::cauldron::ripples::Kind::Shell, "the stored word may be splash too");
+    assert_eq!(tui::cauldron::ripples::Kind::TypeThree.label(), "type 3");
+    assert!(serde_json::from_str::<tui::cauldron::ripples::Kind>("\"splash\"").is_err(), "splash is refused, as ripple/v2 refuses it");
 }
 
 // ── B1 B2 ───────────────────────────────────────────────────────────────────
@@ -427,11 +429,11 @@ fn config_is_global_and_cauldron_and_the_token_sources_are_kept_once() {
     let g = std::fs::read_to_string(global_dir(&a.env).join("settings.toml")).unwrap();
     assert!(g.contains("[pools.claude_code.accounts.acct2]\nshare = 30"), "adopted: {g}");
     assert!(!std::fs::read_to_string(dir.join("settings.toml")).unwrap().contains("pools."), "and gone from the cauldron's file");
-    // THIS cauldron's tab: first (b964d571 msg 23), named for it (msg 235).
-    a.handle(key(KeyCode::F(4)));
-    a.set_cfg_tab(CfgTab::Cauldron);
+    // THIS cauldron's tab: Settings on the environment bar (V1.1).
+    a.handle(key(KeyCode::F(5)));
+    assert_eq!(a.cfg_tab, CfgTab::Cauldron);
     let s = screen(&mut a);
-    assert!(line_with(&s, " prod cauldron | TUI | Devices | Providers | Permissions ").contains("prod cauldron"), "{s}");
+    assert!(line_with(&s, "| Permissions | Settings").contains("prod  ▾"), "{s}");
     let labels: Vec<String> = a.selectable().iter().filter_map(|e| match e {
         Entry::Sub { label, .. } => Some(label.clone()),
         Entry::Set(b) => Some(b.key.to_string()),
@@ -448,9 +450,113 @@ fn config_is_global_and_cauldron_and_the_token_sources_are_kept_once() {
     assert_eq!(a.choices(&Bound::new("roles.{role}.endpoint", Ctx::role("type_one.secondary")))[0], "none");
     // The Providers tab: the sources, the endpoints, the defaults — no
     // OpenRouter source and nothing planned (design 0199).
+    // V1.1: the sources are on Accounts, the endpoints stay on Providers.
+    a.set_cfg_tab(CfgTab::Accounts);
+    let s = screen(&mut a);
+    for row in ["▸ Claude Code", "▸ Codex"] {
+        assert!(s.contains(row), "{row}: {s}");
+    }
     a.set_cfg_tab(CfgTab::Providers);
     let s = screen(&mut a);
-    for row in ["▸ Claude Code", "▸ Codex", "▸ Inference endpoints"] {
+    for row in ["▸ Inference endpoints"] {
+        assert!(s.contains(row), "{row}: {s}");
+    }
+    // The defaults flat at its head, no band of them (task 0209 D4).
+    assert!(!s.contains("▸ Defaults") && !s.contains("▾ Defaults") && s.contains("weekly threshold"), "{s}");
+    for gone in ["OpenRouter", "planned", "+ add token source"] {
+        assert!(!s.contains(gone), "{gone}: {s}");
+    }
+    assert!(!s.contains("▸ Directories") && !s.contains("▸ Roles"), "nothing of one cauldron's on Providers: {s}");
+    a.open_settings_path("providers/endpoints").unwrap();
+    let s = screen(&mut a);
+    assert!(s.contains("▾ Inference endpoints") && s.contains("general") && s.contains("+ add endpoint"), "{s}");
+    // Another cauldron reads the same global values, and its own switches.
+    std::fs::create_dir_all(root.join("data/dev")).unwrap();
+    let mut d = open_env(&root, "dev");
+    let share = Bound::new("pools.{pool}.accounts.{account}.share", Ctx::account("claude_code", "acct2"));
+    assert_eq!(d.sget(&share).val, Val::Int(30));
+    a.sset(&share, Val::Int(35)).unwrap();
+    d.sync();
+    assert_eq!(d.sget(&share).val, Val::Int(35));
+    // V1.7: an endpoint's use here is greyed — refused, nothing changes.
+    let mine = Bound::new("cauldron.use.{ep}.metered_cap_usd", Ctx::ep("ep-1"));
+    assert_eq!(a.sset(&mine, Val::Int(40)), Err(tui::cauldron::settings::GREYED.to_string()));
+    // V1.7b F2: the refusal wrote nothing, so the isolation of a cauldron's
+    // own `cauldron.use.*` is proved at the store layer: written in `a`,
+    // read back in `a` (the write happened), never seen by `d`.
+    a.settings.set(mine.def(), &mine.ctx, Val::Int(40)).unwrap();
+    assert_eq!(a.sget(&mine).val, Val::Int(40), "the write landed in this cauldron");
+    d.sync();
+    assert_eq!(d.sget(&mine).val, Val::Off, "a cauldron's metered cap is its own");
+    // Which accounts a cauldron uses: Status says so on an account not used here.
+    let use2 = Bound::new("cauldron.accounts.{pool}.{account}.allowed", Ctx::account("claude_code", "sam-broomstick"));
+    a.sset(&use2, Val::Bool(false)).unwrap();
+    a.set_ctab(CTab::Status);
+    a.set_sttab(StatusTab::Tokens);
+    assert!(line_with(&screen(&mut a), "• sam-broomstick").contains("NOT USED HERE"));
+    d.set_ctab(CTab::Status);
+    d.set_sttab(StatusTab::Tokens);
+    assert!(!line_with(&screen(&mut d), "• sam-broomstick").contains("NOT USED HERE"));
+}
+
+/// C4: Config is global tabs and THIS cauldron's. The global ones hold the
+/// token sources every cauldron shares (Claude Code accounts, Codex) and the
+/// inference endpoints (design 0199), kept ONCE under data/shared; the
+/// cauldron's holds the switch first, which accounts THIS cauldron uses,
+/// which endpoints it uses with each one's METERED CAP (C6), then its own
+/// settings, Directories among them. A cauldron file holding a global key
+/// hands it over once.
+///
+/// V1.7b F1: the body of `config_is_global_and_cauldron_and_the_token_sources_are_kept_once` at 59c5ec8f, verbatim — the positive
+/// spec the greyed endpoints lost (V1.7-I F1). Un-ignore when
+/// `inference_live` ungreys them; `config_is_global_and_cauldron_and_the_token_sources_are_kept_once` above is the refusal it pairs with.
+#[test]
+#[ignore = "endpoints greyed in V1.7; restore when un-greyed"]
+fn config_is_global_and_cauldron_and_the_token_sources_are_kept_once_ungreyed() {
+    let root = scratch_root();
+    // His prod file held token-source keys, as the real one does.
+    let dir = soup_dir(&env_in(&root, "prod")).unwrap();
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("settings.toml"), "[cauldron]\nenabled = true\n\n[pools.claude_code.accounts.acct2]\nshare = 30\n").unwrap();
+    let mut a = open_env(&root, "prod");
+    // Moved without a caption: nothing he wrote changes (0211 R2).
+    assert!(a.notice.is_none(), "{:?}", a.notice);
+    // On disk at his first change, never by the open (task 0209 D1).
+    assert!(!global_dir(&a.env).join("settings.toml").exists(), "the open writes nothing");
+    a.sset(&Bound::new("cauldron.opportunistic", Ctx::default()), Val::Bool(false)).unwrap();
+    let g = std::fs::read_to_string(global_dir(&a.env).join("settings.toml")).unwrap();
+    assert!(g.contains("[pools.claude_code.accounts.acct2]\nshare = 30"), "adopted: {g}");
+    assert!(!std::fs::read_to_string(dir.join("settings.toml")).unwrap().contains("pools."), "and gone from the cauldron's file");
+    // THIS cauldron's tab: Settings on the environment bar (V1.1).
+    a.handle(key(KeyCode::F(5)));
+    assert_eq!(a.cfg_tab, CfgTab::Cauldron);
+    let s = screen(&mut a);
+    assert!(line_with(&s, "| Permissions | Settings").contains("prod  ▾"), "{s}");
+    let labels: Vec<String> = a.selectable().iter().filter_map(|e| match e {
+        Entry::Sub { label, .. } => Some(label.clone()),
+        Entry::Set(b) => Some(b.key.to_string()),
+        _ => None,
+    }).collect();
+    // The sidebar is this cauldron's (its layout.json; 0214 A8).
+    assert_eq!(&labels[..6], ["cauldron.enabled", "cauldron.opportunistic", "ui.sidebar_ratio", "Accounts", "Inference endpoints", "Directories"], "{labels:?}");
+    a.open_settings_path("cauldron/endpoints").unwrap();
+    let s = screen(&mut a);
+    for row in ["metered cap", "use here", "jev", "scratch-vllm", "+ add endpoint"] {
+        assert!(s.contains(row), "C4 C6 {row}: {s}");
+    }
+    // A role is bound to one of the endpoints this cauldron uses.
+    assert_eq!(a.choices(&Bound::new("roles.{role}.endpoint", Ctx::role("type_one.secondary")))[0], "none");
+    // The Providers tab: the sources, the endpoints, the defaults — no
+    // OpenRouter source and nothing planned (design 0199).
+    // V1.1: the sources are on Accounts, the endpoints stay on Providers.
+    a.set_cfg_tab(CfgTab::Accounts);
+    let s = screen(&mut a);
+    for row in ["▸ Claude Code", "▸ Codex"] {
+        assert!(s.contains(row), "{row}: {s}");
+    }
+    a.set_cfg_tab(CfgTab::Providers);
+    let s = screen(&mut a);
+    for row in ["▸ Inference endpoints"] {
         assert!(s.contains(row), "{row}: {s}");
     }
     // The defaults flat at its head, no band of them (task 0209 D4).
@@ -513,7 +619,7 @@ fn no_row_grows_when_selected_on_the_new_pages() {
     // Config: every tab with every band open, and every row's modal — the
     // TEXT of every line, not only how many (msg 235: a table's row and a
     // button draw their own selection, as a background, never a shape).
-    a.set_ctab(CTab::Config);
+    a.set_ctab(CTab::Settings);
     let text = |l: Vec<ratatui::text::Line<'static>>| l.iter().map(|x| x.to_string()).collect::<Vec<_>>();
     for t in CfgTab::ALL {
         a.set_cfg_tab(t);

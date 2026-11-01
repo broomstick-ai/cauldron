@@ -194,3 +194,44 @@ fn an_infinite_pressure_account_reads_infinity_and_an_unranked_one_does_not() {
     assert!(alpha.contains("pressure 1.40×") && !alpha.contains('∞'), "a finite one keeps its number: {alpha}");
     assert!(delta.contains("unranked (no weekly reading)") && !delta.contains('∞'), "{delta}");
 }
+
+/// The lines of `label`'s card: its title line to the line before the next
+/// card's title (or the first blank line).
+fn card_block(s: &[String], label: &str) -> Vec<String> {
+    let title = line_of(s, label);
+    let at = s.iter().position(|l| l == title).unwrap();
+    let mut out = vec![s[at].clone()];
+    for l in &s[at + 1..] {
+        let w: Vec<&str> = l.split_whitespace().skip_while(|t| *t == "›").take(1).collect();
+        if l.trim().is_empty() || w.first().is_some_and(|t| t.parse::<usize>().is_ok()) {
+            break;
+        }
+        out.push(l.clone());
+    }
+    out
+}
+
+/// **V1-CLEAN2 (V1-CLEAN1-I B2): AT LIMIT is the daemon's `limit` cell, never
+/// a full gauge** — as F5 made it on Status › Tokens. `full` reads 100 % on
+/// its session meter with NO `limit` held: no line of its card says AT LIMIT.
+/// `held` reads 10 % with `limit.until` set: its card says AT LIMIT, with the
+/// daemon's countdown. A board deriving the state from `p >= 100` fails both.
+#[test]
+fn at_limit_is_the_daemons_limit_cell_never_a_full_gauge() {
+    use serde_json::json;
+    let mut a = App::new("ws://127.0.0.1:0/ws", now());
+    let full = row("full", "live", false, false, Some(100.0));
+    let mut held = row("held", "live", false, false, Some(10.0));
+    held["limit"] = json!({"until": (now() + chrono::Duration::minutes(65)).to_rfc3339()});
+    for f in [export("accounts", "full", full), export("accounts", "held", held), export("threads/non-idle", "fleet", json!({"pool": {}, "threads": []}))] {
+        assert!(a.on_frame(&f), "frame not folded: {f}");
+    }
+    a.link = LinkState::Live;
+    let s = screen(&a, 120, 30);
+    let full = card_block(&s, "full");
+    assert!(full.iter().any(|l| l.contains("session") && l.contains("100%")), "sentinel: full's meter reads 100 %:\n{}", full.join("\n"));
+    assert!(!full.iter().any(|l| l.contains("AT LIMIT")), "a full meter drawn as a limit:\n{}", full.join("\n"));
+    let held = card_block(&s, "held");
+    assert!(held.iter().any(|l| l.contains("session") && l.contains("10%")), "sentinel: held's meter reads 10 %:\n{}", held.join("\n"));
+    assert!(held.iter().any(|l| l.contains("AT LIMIT — back in 1h 05m")), "the daemon's limit not drawn:\n{}", held.join("\n"));
+}

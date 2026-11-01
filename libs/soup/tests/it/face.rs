@@ -70,9 +70,9 @@ fn the_face_reads_the_curated_ledger_from_the_own_seed() {
     let t = Tmp::new("ledger");
     let soup_dir = t.0.join("tui").join("soup");
     // Before the install: nothing (the empty repo seed dir serves nothing).
-    assert!(ledger::Seed::load(&t.0.join("seeds"), ENV, &soup_dir).unwrap().dumps.is_empty());
+    assert!(ledger::Seed::load(Some(&t.0.join("seeds")), ENV, &soup_dir).unwrap().dumps.is_empty());
     install(&soup_dir).unwrap();
-    let seed = ledger::Seed::load(&t.0.join("seeds"), ENV, &soup_dir).expect("the face parses the curated ledger");
+    let seed = ledger::Seed::load(Some(&t.0.join("seeds")), ENV, &soup_dir).expect("the face parses the curated ledger");
     assert_eq!(seed.dumps.len(), 6);
     assert!(seed.dumps.iter().any(|d| !d.thread.is_empty()), "a thread fold");
 }

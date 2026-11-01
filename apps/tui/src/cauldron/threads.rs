@@ -165,14 +165,14 @@ fn age(t: Option<DateTime<Utc>>) -> String {
 }
 
 /// The word a row shows: the daemon's `rolled.display` verbatim when it said
-/// one, else the store's shown word; never `absent` or `?` (consumer §8: a
-/// state the daemon has not said is blank).
+/// one, else the store's shown word; never `?` (consumer §8: a state the
+/// daemon has not said is blank, or `…` while it has not answered yet).
 fn word(store: &crate::store::Store, id: &str, shown: &str) -> String {
     if let Some(d) = store.fact(id).and_then(|f| f.rolled.as_ref()).map(|r| r.display.clone()).filter(|d| !d.is_empty()) {
         return d;
     }
     match shown {
-        "absent" | "?" => String::new(),
+        "?" => String::new(),
         w => w.to_string(),
     }
 }
@@ -245,6 +245,9 @@ pub struct Threads {
     /// listed. None lists every thread.
     pub root: Option<PathBuf>,
     pub link: Link,
+    /// Whether this connection's daemon EVER answered (REL-6e F3): a link
+    /// that went down before it was reached has said nothing to show.
+    pub reached: bool,
     /// Why there is no connection, when there is none.
     pub why_not: Option<String>,
     pub focus: Option<TFocus>,
@@ -350,6 +353,7 @@ impl Threads {
         } else {
             Link::None
         };
+        self.reached = live.was_reached();
         self.why_not = live.why_not.clone();
         let rows = project(store, self.root.as_deref());
         self.rows = rows;
@@ -564,7 +568,7 @@ impl Threads {
         // What the link is, above the bands, when it is not simply up.
         let said = match (&self.link, threads.is_empty()) {
             (Link::Up, _) => None,
-            (Link::Down, _) => Some(("threads is down · showing what it last said".to_string(), palette::amber())),
+            (Link::Down, _) => Some((self.down_words().to_string(), palette::amber())),
             (Link::Connecting, true) => Some(("loading threads from the daemon…".to_string(), palette::muted())),
             (Link::Connecting, false) => None,
             (Link::None, _) => Some((format!("no threads daemon · {}", self.why_not.as_deref().unwrap_or("not connected")), palette::muted())),
@@ -763,6 +767,17 @@ impl Threads {
         lines
     }
 
+    /// **WHAT "DOWN" SAYS** (REL-6e F3). Once the daemon answered, what is
+    /// drawn is what it last said; a daemon never reached said nothing, and
+    /// the line says so rather than claim an empty "last said".
+    pub fn down_words(&self) -> &'static str {
+        if self.reached {
+            "threads is down · showing what it last said"
+        } else {
+            "threads is down · it has not answered yet"
+        }
+    }
+
     // ── what the header says ──
 
     /// A thread's first line: its name (and whose transcript, under a
@@ -788,7 +803,7 @@ impl Threads {
                 }
                 if self.link == Link::Down {
                     s.push(sep());
-                    s.push(Span::styled("threads is down · showing what it last said", palette::amber()));
+                    s.push(Span::styled(self.down_words(), palette::amber()));
                 }
                 if elsewhere > 0 {
                     s.push(sep());
@@ -834,6 +849,9 @@ impl Threads {
 /// empties on an ACCEPTED send only, and a refusal keeps his words), and
 /// project the store once.
 pub fn settle(app: &mut App) {
+    // V1-ACCT: an account the connection just named may have settings under
+    // its old id; they move to its id now, once.
+    app.adopt_account_ids();
     for w in std::mem::take(&mut app.threads.wants) {
         match w {
             Want::Open(id) => {
@@ -893,7 +911,8 @@ pub fn tick(app: &mut App) -> usize {
     if n > 0 {
         settle(app);
     }
-    n
+    // V1.6: what the daemon answered an account verb (Config › Accounts).
+    n + app.account_tick()
 }
 
 /// Write the owed draft once it has waited [`DRAFT_DEBOUNCE`] (or `now`).
@@ -1610,5 +1629,24 @@ mod subagent_cache_tests {
         u.remember_direct("newer", Vec::new());
         assert!(u.direct_of.contains_key(&id(0)), "a read did not count as use: {:?}", u.direct_cached());
         assert!(!u.direct_of.contains_key(&id(1)), "the least recently used was kept: {:?}", u.direct_cached());
+    }
+}
+
+#[cfg(test)]
+mod down_words_tests {
+    use super::*;
+
+    /// **REL-6e F3: DOWN BEFORE IT EVER ANSWERED IS NOT "WHAT IT LAST
+    /// SAID".** The list's link line, both ways: never reached says it has
+    /// not answered; reached (opposition) keeps the stale-state words.
+    #[test]
+    fn rel6e_down_before_the_daemon_ever_answered_does_not_claim_what_it_last_said() {
+        let text = |t: &Threads| t.list(100).lines.iter().map(|l| l.spans.iter().map(|s| s.content.as_ref()).collect::<String>()).collect::<Vec<_>>().join("\n");
+        let mut t = Threads { link: Link::Down, ..Default::default() };
+        let never = text(&t);
+        assert!(never.contains("threads is down · it has not answered yet") && !never.contains("last said"), "{never}");
+        t.reached = true;
+        let was = text(&t);
+        assert!(was.contains("threads is down · showing what it last said") && !was.contains("not answered"), "{was}");
     }
 }

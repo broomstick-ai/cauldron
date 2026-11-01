@@ -9,7 +9,7 @@
   "ripple": [
    {
     "id": "dump",
-    "kind": "shell",
+    "kind": "type_three",
     "group": "user_input",
     "job": "processes ONE dump: fragments it into spans and groups, applies each group in parallel as its own transaction, and says what landed — it updates the soup and does no work of its own",
     "trigger": [
@@ -181,7 +181,7 @@
    },
    {
     "id": "apply",
-    "kind": "shell",
+    "kind": "type_three",
     "shell": "dump",
     "job": "ONE group of a dump: its spans, its read-only context spans, its anchors in full and the index of the cluster it writes to; it writes through ONE transaction and calls nothing that does work",
     "entry": {
@@ -234,7 +234,7 @@
    },
    {
     "id": "context_for",
-    "kind": "shell",
+    "kind": "type_three",
     "shell": "dump",
     "job": "finds what a unit touches: opens, selects, matches, and gates it",
     "entry": {
@@ -292,7 +292,7 @@
    },
    {
     "id": "open_context",
-    "kind": "shell",
+    "kind": "type_three",
     "shell": "dump",
     "job": "opens regions, then nodes, then edges, one tier at a time",
     "entry": {
@@ -948,7 +948,7 @@
    },
    {
     "id": "typed_unit",
-    "kind": "shell",
+    "kind": "type_three",
     "shell": "dump",
     "job": "a unit no judgment is needed for: typed, written, linked",
     "entry": {
@@ -1326,7 +1326,7 @@
    },
    {
     "id": "curation",
-    "kind": "shell",
+    "kind": "type_three",
     "group": "transaction_committed",
     "job": "re-ranks what needs his attention",
     "trigger": [
@@ -1588,7 +1588,7 @@
    },
    {
     "id": "proposals",
-    "kind": "shell",
+    "kind": "type_three",
     "group": "report_landed",
     "job": "disposes a worker report's proposals onto the cluster",
     "trigger": [
@@ -1652,7 +1652,7 @@
    },
    {
     "id": "proposal_unit",
-    "kind": "shell",
+    "kind": "type_three",
     "shell": "proposals",
     "job": "one proposal: its context, then judged or disposed",
     "entry": {
@@ -1774,7 +1774,7 @@
    },
    {
     "id": "task",
-    "kind": "shell",
+    "kind": "type_three",
     "group": "report_landed",
     "job": "a task run: worktree, worker, inspector, triage, route",
     "trigger": [
@@ -4457,7 +4457,7 @@
     },
     {
      "step": "apply",
-     "kind": "shell",
+     "kind": "type_three",
      "line": "",
      "ms": 0,
      "foreach": 2,
@@ -4518,7 +4518,7 @@
     },
     {
      "step": "apply",
-     "kind": "shell",
+     "kind": "type_three",
      "line": "",
      "ms": 31000,
      "foreach": 6,

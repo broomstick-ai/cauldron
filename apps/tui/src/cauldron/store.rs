@@ -55,7 +55,7 @@
 //! being written is never read half-way; every face tails the file and shows a
 //! new send in the logs of the clusters it tagged.
 //!
-//! **An environment reads only its OWN data (REL-3.S2, PRODUCT-SPEC §17).**
+//! **An environment reads only its OWN data (REL-3.S2, product spec §17).**
 //! Its soup is what was made in it, plus the OWN seed it carries under
 //! `seed/` in this directory, if any: `cauldron-build`'s is written by
 //! `soup::demo::install` when it is created (the CLI's `env create` and this
@@ -176,6 +176,15 @@ pub fn load_soup_rooted(seeds: &Path, name: &str, dir: &Path, whole: bool) -> Re
     crate::cauldron::supervise::apply(&mut soup.dash.mesh, &mut soup.dash.threads, &records);
     soup.dash.supervisions = records;
     Ok(soup)
+}
+
+/// **Whether cauldron `name` has no cluster of its own** (V1.2): no seed
+/// (its own, or the repo's) and no cluster made in it — exactly the branch of
+/// [`load_soup_rooted`] that builds [`Soup::empty_rooted`], whose one cluster,
+/// named after the cauldron, is the placeholder the face shows (`· <name>`)
+/// rather than a cluster he made.
+pub fn has_no_cluster(seeds: &Path, name: &str, dir: &Path) -> bool {
+    own_seed(dir, "clusters.json").is_none() && seed_path(seeds, name).is_none() && CreatedClusters::new(dir).specs().is_ok_and(|c| c.is_empty())
 }
 
 /// Write `value` to `path` whole and atomically, as JSON.
@@ -805,6 +814,41 @@ impl LayoutStore {
 /// listed here or switched to.
 pub fn list_envs(current: &Environment) -> Result<Vec<String>> {
     current.environments_including_self()
+}
+
+/// `<root>/data/shared/tui/last_env.json`: the environment this root's face
+/// last opened (V1.2). The face's own UI state, kept for the ROOT — every
+/// environment of it shares the answer — never domain content
+/// (shapewire-consumer 11). Written atomically.
+pub fn last_env_path(env: &Environment) -> PathBuf {
+    global_dir(env).join("last_env.json")
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct LastEnv {
+    env: String,
+}
+
+/// The environment last opened in `env`'s root, if one is recorded.
+pub fn read_last_env(env: &Environment) -> Result<Option<String>> {
+    Ok(read_json::<LastEnv>(&last_env_path(env))?.map(|l| l.env))
+}
+
+/// Record `env` as the environment last opened in its root.
+pub fn write_last_env(env: &Environment) -> Result<()> {
+    write_atomic(&last_env_path(env), &LastEnv { env: env.name.clone() })
+}
+
+/// **Which environment the face opens when nobody named one** (V1.2, Q-F1):
+/// the one last opened, while it still exists; else `prod`, if it exists;
+/// else the first that exists. `None` — no environment at all — is the
+/// first-run screen. Nothing is created by asking. The rule itself is
+/// `env::face::opens` (V1.2c), shared with the router.
+pub fn default_env(current: &Environment) -> Result<Option<String>> {
+    let there = current.environments()?;
+    // An unreadable record is not a reason not to open: it is passed over.
+    let last = read_last_env(current).ok().flatten();
+    Ok(env::face::opens(None, last, &there))
 }
 
 /// The cauldrons of `current`'s root whose clusters claim repo `repo` —

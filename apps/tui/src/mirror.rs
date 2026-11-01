@@ -348,6 +348,22 @@ impl Handle {
         }
     }
 
+    /// **SAY ONE ACCOUNT VERB** (V1.6): the in-pool switch or a step of the
+    /// piped login, through the seam's own commands. The ack's payload is the
+    /// answer (`begin`'s `session_id` and `url`, `complete`'s `ok`); the
+    /// account itself arrives on the `accounts` shape. Nothing here logs the
+    /// verb's parameters: `LoginComplete` carries the code he pasted.
+    pub async fn account(&self, v: crate::acts::AccountVerb) -> Result<seam::commands::Ack, String> {
+        use crate::acts::AccountVerb;
+        match v {
+            AccountVerb::LoginBegin { account } => seam::commands::login_begin(&self.seam, &account).await,
+            AccountVerb::LoginComplete { session_id, code } => seam::commands::login_complete(&self.seam, &session_id, &code).await,
+            AccountVerb::LoginCancel { session_id } => seam::commands::login_cancel(&self.seam, &session_id).await,
+            AccountVerb::InPool { account, on } => seam::commands::account_in_pool(&self.seam, &account, on).await,
+        }
+        .map_err(refusal)
+    }
+
     /// **THE `threads.queue` CELL, UNDER ONE OF ITS TWO LEGACY REPLY KEYS.**
     /// `leaf` must be in [`THE_ENVELOPED_QUEUE_READS`] or this panics, which is
     /// deliberate: the envelope is a list of two and this is the only door

@@ -32,7 +32,7 @@ fn scratch_root() -> PathBuf {
 fn open(root: &Path) -> App {
     std::env::set_var("CAULDRON_TYPE_ONE", "off");
     let env = Environment { root: root.to_path_buf(), root_source: Source::CauldronHome, name: "prod".into(), name_source: Source::Default, data_root: root.join("data").join("prod") };
-    App::open(env, seed_dir(), true).expect("opens")
+    crate::live_pool::seeded(App::open(env, seed_dir(), true).expect("opens"))
 }
 
 fn root_with(global: &str, prod: &str) -> (PathBuf, PathBuf, PathBuf) {
@@ -162,8 +162,8 @@ fn r11_a_release_over_a_card_is_not_a_click() {
 }
 
 fn config(a: &mut App, tab: tui::cauldron::menu::CfgTab, path: Option<&str>) {
-    a.set_ctab(tui::cauldron::app::CTab::Config);
-    a.cfg_tab = tab;
+    a.set_ctab(tui::cauldron::app::CTab::Settings);
+    a.set_cfg_tab(tab);
     a.snav = tui::cauldron::menu::Nav::cauldron();
     a.rows[tui::cauldron::menu::SETTINGS_ROW] = 0;
     if let Some(p) = path {
@@ -439,13 +439,25 @@ fn adversarial_every_config_control_changes_shows_and_persists() {
     let (root, _, _) = root_with(HIS_GLOBAL, HIS_PROD);
     let controls = every_control(&open(&root));
     assert!(controls.len() > 100, "only {} controls found", controls.len());
-    let (mut ok, mut skipped, mut refused, mut bad) = (0, Vec::new(), Vec::new(), Vec::new());
+    let (mut ok, mut skipped, mut refused, mut bad, mut greyed) = (0, Vec::new(), Vec::new(), Vec::new(), 0usize);
     for (page, bd) in controls {
         // Each on fresh copies of his files: no earlier write may mask it.
         let (root, g, c) = root_with(HIS_GLOBAL, HIS_PROD);
         let mut a = open(&root);
         let key = bd.concrete();
         let before = shown(&a, &bd);
+        // V1.7 (R-V1 item 7): a greyed source's control is refused, and his
+        // files stay byte-identical.
+        if a.entry_greyed(&Entry::Set(bd.clone())) {
+            let files = |g: &std::path::Path, c: &std::path::Path| (std::fs::read(g).unwrap_or_default(), std::fs::read(c).unwrap_or_default());
+            let disk0 = files(&g, &c);
+            let _ = change(&mut a, &bd);
+            if files(&g, &c) != disk0 || shown(&a, &bd) != before {
+                bad.push(format!("{key} ({page}): greyed, but the control changed it"));
+            }
+            greyed += 1;
+            continue;
+        }
         if let Err(why) = change(&mut a, &bd) {
             skipped.push(format!("{key} ({page}): {why}"));
             continue;
@@ -487,6 +499,7 @@ fn adversarial_every_config_control_changes_shows_and_persists() {
     }
     eprintln!("adversarial: {ok} controls proved; {} refused on their row: {refused:?}; {} skipped:\n  {}", refused.len(), skipped.len(), skipped.join("\n  "));
     assert!(bad.is_empty(), "{} controls failed:\n  {}", bad.len(), bad.join("\n  "));
+    assert!(greyed > 0 && ok > 100, "{greyed} greyed, {ok} proved");
 }
 
 /// The adversarial pass's other half: every BUTTON on every Config page

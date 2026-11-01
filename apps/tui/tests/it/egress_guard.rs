@@ -560,6 +560,13 @@ const SHIPPED_ALLOWED: &[(&str, &str, usize, &str, &str)] = &[
         "one is launchctl_control (bootstrap/bootout; refused under isolation); three are read-only print/list queries",
     ),
     ("apps/tui/src/app.rs", concat!("cauldron_", "bin()"), 1, "admit_daemon_control(", "restart_in: gated by admit_daemon_control"),
+    (
+        "cli/src/ctl.rs",
+        concat!("tungstenite::", "client("),
+        1,
+        "egress::connect_tcp(",
+        "RV1.S12a ctl node: a websocket HANDSHAKE over the TcpStream env::egress::connect_tcp already admitted; it dials nothing itself",
+    ),
     ("apps/tui/src/cauldron_env.rs", concat!("cauldron_", "bin()"), 1, "pub fn cauldron_bin", "the resolver's definition, not a spawn"),
 ];
 

@@ -45,7 +45,8 @@ fn env_in(root: &Path, name: &str) -> Environment {
 
 fn open_with(root: &Path, name: &str, persist: bool) -> App {
     std::env::set_var("CAULDRON_TYPE_ONE", "off");
-    App::open(env_in(root, name), seed_dir(), persist).expect("seed loads")
+    // V1.6: Claude Code's accounts are the daemon's; the fixture stands in.
+    crate::live_pool::seeded(App::open(env_in(root, name), seed_dir(), persist).expect("seed loads"))
 }
 
 fn open_in(root: &Path, name: &str) -> App {
@@ -66,7 +67,7 @@ const W: u16 = 120;
 const H: u16 = 80;
 
 fn config(a: &mut App, path: &str) {
-    a.set_ctab(CTab::Config);
+    a.set_ctab(CTab::Settings);
     a.focus = Focus::Content;
     a.snav = tui::cauldron::menu::Nav::cauldron();
     a.rows[SETTINGS_ROW] = 0;
@@ -130,7 +131,7 @@ fn c1_a_light_frame_is_drawn_in_the_light_palette_everywhere() {
         frames.push((format!("status {st:?}"), colours(&mut a)));
     }
     for t in CfgTab::ALL {
-        a.set_ctab(CTab::Config);
+        a.set_ctab(CTab::Settings);
         a.set_cfg_tab(t);
         frames.push((format!("config {t:?}"), colours(&mut a)));
     }

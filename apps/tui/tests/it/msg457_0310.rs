@@ -134,26 +134,34 @@ fn item1_a_long_notice_never_covers_the_copy_at_any_width() {
     assert_eq!(a.composer.text(), "kept");
 }
 
-// ── 2: Cauldron | Threads | Status | Config ─────────────────────────────────
+// ── 2: the environment bar's Cauldron | Threads | Status ───────────────────
 
 /// REL-6 named the second tab Threads again (the release plan's environment
-/// bar); msg 457's `Agents` is now the old name, as `Surface` is.
+/// bar); msg 457's `Agents` is now the old name, as `Surface` is. V1.1 made
+/// Config the global bar over it (two_bars.rs holds that): the environment
+/// bar is row 1.
 #[test]
 fn item2_the_root_tabs_are_cauldron_threads_status_config_everywhere() {
-    assert_eq!(CTab::ALL.map(CTab::label), ["Cauldron", "Threads", "Status", "Config"]);
+    assert_eq!(CTab::ENV.map(CTab::label), ["Cauldron", "Threads", "Status", "Permissions", "Settings"]);
     let mut a = app();
+    // Every tab, Threads included (V1-CLEAN1, V1.1-I §3: V1.1 had dropped
+    // it from the sweep; this face has no daemon behind it, so its Threads
+    // page draws without dialling).
+    let mut swept = Vec::new();
     for t in CTab::ALL {
+        swept.push(t);
         a.set_ctab(t);
         let s = screen(&mut a);
-        let top = s.lines().next().unwrap();
-        assert!(top.ends_with("Cauldron | Threads | Status | Config"), "{t:?}: {top}");
+        let env_bar = s.lines().nth(1).unwrap();
+        assert!(env_bar.ends_with("Cauldron | Threads | Status | Permissions | Settings"), "{t:?}: {env_bar}");
         for old in ["Surface", "Agents"] {
             assert!(!s.contains(old), "{t:?}: `{old}` is on screen:\n{s}");
         }
     }
+    assert!(swept.contains(&CTab::Threads) && swept.len() == 9, "{swept:?}");
     // The help palette names them by their new names, and only so.
     let help: String = KEYMAP.iter().map(|(k, w)| format!("{k} {w}\n")).collect();
-    assert!(help.contains("Cauldron · Threads · Status · Config"), "{help}");
+    assert!(help.contains("⇧Tab · F1 … F9 next tab: the environment bar's, then the global bar's"), "{help}");
     for old in ["Surface", "Agents"] {
         assert!(!help.contains(old), "`{old}` in the palette:\n{help}");
     }
@@ -190,15 +198,18 @@ fn item2_old_names_are_refused_on_the_flag_and_kept_in_his_data() {
 #[test]
 fn item3_the_top_left_is_the_environment_and_no_product_name() {
     let mut a = app();
-    for w in [50u16, 80, 130, 200] {
-        let top = render_to_text(&mut a, w, 30).unwrap()[0].clone();
-        let tabs_at = top.find("Cauldron |").unwrap_or(top.len());
+    // V1.1: the environment bar holds five tabs now, so its name is whole
+    // from 60 columns (V1.1 spec item 7); narrower, the name crops, never a
+    // tab (view.rs's d8 sweep holds that).
+    for w in [60u16, 80, 130, 200] {
+        let top = render_to_text(&mut a, w, 30).unwrap()[1].clone();
+        let tabs_at = top.find("Cauldron |").or_else(|| top.find("Cauldron|")).unwrap_or(top.len());
         assert!(!top[..tabs_at].contains("Cauldron"), "{w}: no product name: {top:?}");
         assert!(top.trim_start().starts_with("prod  ▾"), "{w}: the environment leads: {top:?}");
         // Its dropdown is where it is drawn, and still opens.
         let env = a.hits.iter().find(|(_, h)| *h == Hit::Env).map(|(r, _)| *r).unwrap();
         assert_eq!(env.x, col(&top, " prod"), "{w}: {top:?}");
-        click(&mut a, env.x + 2, 0);
+        click(&mut a, env.x + 2, env.y);
         assert!(a.dropdown.is_some(), "{w}: the cauldrons dropdown opens");
         a.dropdown = None;
     }
@@ -210,7 +221,7 @@ fn item3_the_top_left_is_the_environment_and_no_product_name() {
 fn item4_the_top_box_says_surface_and_the_bottom_bucket() {
     let mut a = app();
     let r = rows(&mut a);
-    assert!(r[1].starts_with('╭') && r[1].trim_end().ends_with(" surface ╮"), "{:?}", r[1]);
+    assert!(r[2].starts_with('╭') && r[2].trim_end().ends_with(" surface ╮"), "{:?}", r[2]);
     assert!(!r.join("\n").contains(" soup ╮"), "no legend says soup");
     assert!(r.iter().any(|l| l.starts_with('╭') && l.trim_end().ends_with(" bucket ╮")));
     // Its DEV rename reaches it by its new word.
@@ -244,35 +255,44 @@ fn item5_the_ledger_is_the_first_status_tab_and_status_opens_on_it() {
     a.set_ctab(CTab::Status);
     assert_eq!(a.sttab, StatusTab::Ledger);
     let r = rows(&mut a);
-    assert!(r[2].trim_start_matches(['│', ' ']).starts_with("Ledger | Tokens | Mesh | Soup | Bus"), "{:?}", r[2]);
+    assert!(r[3].trim_start_matches(['│', ' ']).starts_with("Ledger | Tokens | Mesh | Soup | Bus"), "{:?}", r[3]);
     assert_eq!(StatusTab::parse("ledger"), Some(StatusTab::Ledger));
 }
 
-/// Every dump a band, newest first, a noun count on its header; the newest
-/// open, the rest shut; inside, the ripples it ran nested as the Tasks graph
-/// draws, each with its type in a circle, its state, start and duration.
+/// Every dump an EVENT BLOCK (V1.4: "styled as an event flow like a Claude
+/// Code thread ... NOT the expandable bands"), newest first, a noun count on
+/// its first line and its words under it; the newest open, the rest shut;
+/// under `⎿`, the dump ripple, its PHASES, and the ripples each phase ran,
+/// nested as the Tasks graph draws, each with its type in a circle, its
+/// state, start and duration. (Was `item5_dumps_are_bands_...`: the band
+/// look became the block look; the order, the counts and the rails stand.)
 #[test]
-fn item5_dumps_are_bands_newest_first_and_their_ripples_nest() {
+fn item5_dumps_are_event_blocks_newest_first_and_their_ripples_nest() {
     let mut a = app();
     let r = ledger(&mut a);
     let s = r.join("\n");
     let at = |t: &str| s.find(t).unwrap_or_else(|| panic!("{t}:\n{s}"));
-    assert!(at("▾ Dump 11") < at("▸ Dump 10") && at("▸ Dump 10") < at("▸ Dump 9") && at("▸ Dump 9") < at("▸ Dump 8"), "newest first:\n{s}");
-    let head = r.iter().find(|l| l.contains("▾ Dump 11")).unwrap();
-    assert!(head.contains("Let's call them dumps, not batches.") && head.contains("✓ done") && head.contains("7 ripples"), "{head}");
-    let d9 = r.iter().find(|l| l.contains("▸ Dump 9")).unwrap();
-    assert!(d9.contains("✕ failed") && d9.contains("4 ripples") && d9.contains("yesterday"), "{d9}");
-    // The rails: dump runs fragment, route and apply; apply runs two authors.
+    assert!(at("● Dump 11") < at("● Dump 10") && at("● Dump 10") < at("● Dump 9") && at("● Dump 9") < at("● Dump 8"), "newest first:\n{s}");
+    let hi = r.iter().position(|l| l.contains("● Dump 11")).unwrap();
+    assert!(r[hi].contains("✓ done") && r[hi].contains("7 ripples"), "{}", r[hi]);
+    assert!(r[hi + 1].contains("Let's call them dumps, not batches.") && !r[hi].contains("Let's call them"), "the words under the head:\n{s}");
+    let d9 = r.iter().position(|l| l.contains("● Dump 9")).unwrap();
+    assert!(r[d9].contains("✕ failed") && r[d9].contains("4 ripples") && r[d9].contains("yesterday"), "{}", r[d9]);
+    assert!(r[d9 + 2].contains("⎿ 4 ripples · 5 phases"), "shut, one ⎿ line says what ran:\n{s}");
+    // The rails: the dump ripple, its phases, the ripple each phase called;
+    // apply runs two authors.
     let row = |name: &str, nth: usize| r.iter().filter(|l| l.contains(name)).nth(nth).cloned().unwrap_or_else(|| panic!("{name}:\n{s}"));
-    assert!(row("③ dump", 0).contains("✓ ③ dump"), "{}", row("③ dump", 0));
-    assert!(row("② fragment", 0).contains("├─✓ ② fragment") && row("② fragment", 0).contains("done"), "{}", row("② fragment", 0));
-    assert!(row("① route", 0).contains("├─✓ ① route"));
-    assert!(row("③ apply", 0).contains("╰─✓ ③ apply") && row("③ apply", 0).contains("done"));
-    assert!(row("② author", 0).contains("  ├─✓ ② author"), "{}", row("② author", 0));
-    assert!(row("② author", 1).contains("  ╰─✓ ② author"), "{}", row("② author", 1));
+    assert!(row("③ dump", 0).contains("⎿ ✓ ③ dump"), "{}", row("③ dump", 0));
+    assert!(row("✓ load_dump", 0).contains("├─✓ load_dump"), "{}", row("✓ load_dump", 0));
+    assert!(row("② fragment", 0).contains("│ ╰─✓ ② fragment") && row("② fragment", 0).contains("done"), "{}", row("② fragment", 0));
+    assert!(row("① route", 0).contains("│ ╰─✓ ① route"));
+    assert!(row("③ apply", 0).contains("│ ╰─✓ ③ apply") && row("③ apply", 0).contains("done"));
+    assert!(row("② author", 0).contains("│   ├─✓ ② author"), "{}", row("② author", 0));
+    assert!(row("② author", 1).contains("│   ╰─✓ ② author"), "{}", row("② author", 1));
+    assert!(row("◇ commit", 0).contains("╰─◇ commit"), "the last phase closes the rail: {}", row("◇ commit", 0));
     assert!(row("② consequence", 0).contains("✓ ② consequence"));
     // Start and duration in their own columns, lined up.
-    for n in ["② fragment", "① route"] {
+    for n in ["② fragment", "① route", "✓ load_dump"] {
         let l = row(n, 0);
         assert_eq!(col(&l, "done"), col(&row("② fragment", 0), "done"), "{n}: the state column lines up");
     }
@@ -280,7 +300,8 @@ fn item5_dumps_are_bands_newest_first_and_their_ripples_nest() {
     assert!(row("① route", 0).trim_end_matches('│').trim_end().ends_with("900ms"));
 }
 
-/// Nesting to any depth: a type 3 inside a type 3 inside a type 3.
+/// Nesting to any depth: a type 3 inside a type 3 inside a type 3, under
+/// the phase that called it.
 #[test]
 fn item5_sub_ripples_of_sub_ripples_nest_three_deep() {
     let mut a = app();
@@ -288,27 +309,30 @@ fn item5_sub_ripples_of_sub_ripples_nest_three_deep() {
     select_key(&mut a, "ld:10");
     press(&mut a, KeyCode::Right);
     let s = screen(&mut a);
-    assert!(s.contains("▾ Dump 10"), "→ opens a shut dump:\n{s}");
     let r: Vec<&str> = s.lines().collect();
     let line = |t: &str| *r.iter().find(|l| l.contains(t)).unwrap_or_else(|| panic!("{t}:\n{s}"));
+    assert!(line("③ dump  2 fragments · 2 nodes").contains("⎿ ✓ ③ dump"), "→ opens a shut dump:\n{s}");
     // Each level two columns in from the one that ran it, its connector
-    // under its parent's glyph: dump › apply › author_with_review › reviewer.
+    // under its parent's glyph: dump › (phase apply) › apply ›
+    // author_with_review › reviewer.
     let glyph = |t: &str| col(line(t), t) - 2;
-    assert_eq!(glyph("③ apply  2 items · 2 written"), glyph("③ dump  2 fragments · 2 nodes") + 2, "{}", line("③ apply  2 items · 2 written"));
+    assert_eq!(glyph("✓ apply  2 items"), glyph("③ dump  2 fragments · 2 nodes"), "the phase's glyph is in the lane after the ripple's: {}", line("✓ apply  2 items"));
+    assert_eq!(glyph("③ apply  2 items · 2 written"), glyph("③ dump  2 fragments · 2 nodes") + 4, "{}", line("③ apply  2 items · 2 written"));
     assert_eq!(glyph("③ author_with_review"), glyph("③ apply  2 items · 2 written") + 2, "{}", line("③ author_with_review"));
     assert_eq!(glyph("② reviewer"), glyph("③ author_with_review") + 2, "three deep: {}", line("② reviewer"));
-    assert!(line("③ apply  2 items · 2 written").contains("╰─✓ ③ apply"), "{}", line("③ apply  2 items · 2 written"));
+    assert!(line("③ apply  2 items · 2 written").contains("│ ╰─✓ ③ apply"), "{}", line("③ apply  2 items · 2 written"));
     assert!(line("② author  drafted").contains("├─✓ ② author"), "{}", line("② author  drafted"));
     assert!(line("② reviewer").contains("╰─✓ ② reviewer"), "{}", line("② reviewer"));
     // apply's first author has a sibling below it, so apply's rail runs on.
     assert!(line("DEC-38: the copy").contains("├─✓ ② author"), "{}", line("DEC-38: the copy"));
     // The dump has eleven ripples, at every depth.
-    assert!(line("▾ Dump 10").contains("11 ripples"), "{}", line("▾ Dump 10"));
+    assert!(line("● Dump 10").contains("11 ripples"), "{}", line("● Dump 10"));
 }
 
 /// → and ← on a ripple that ran others: open, step in, shut; ← on one that
-/// ran nothing climbs to what ran it; ← on a dump's first ripple climbs to
-/// the dump's band.
+/// ran nothing climbs to what ran it — a ripple, or the PHASE that called
+/// it, and a phase to its ripple; ← on a dump's first ripple climbs to the
+/// dump, and on the dump shuts it.
 #[test]
 fn item5_ripples_open_and_shut_and_climb_by_the_band_standard() {
     let mut a = app();
@@ -318,23 +342,33 @@ fn item5_ripples_open_and_shut_and_climb_by_the_band_standard() {
     // ← shuts it, and its row says how many it ran.
     press(&mut a, KeyCode::Left);
     let s = screen(&mut a);
-    assert!(!s.contains("╰─✓ ② author") && s.contains("▸ 2 ripples inside"), "{s}");
+    assert!(!s.contains("╰─✓ ② author") && s.contains("+2 ripples inside"), "{s}");
     assert_eq!(selected_key(&a), "lx:11:0.2", "the selection stays on it");
     // → opens it; → again steps to the first of what it ran.
     press(&mut a, KeyCode::Right);
     assert!(screen(&mut a).contains("╰─✓ ② author"));
     press(&mut a, KeyCode::Right);
     assert_eq!(selected_key(&a), "lx:11:0.2.0");
-    // ← on one that ran nothing climbs to what ran it, then on up.
+    // ← on one that ran nothing climbs to what ran it, then on up: the
+    // phase that called apply, then the dump ripple whose phase it is.
     press(&mut a, KeyCode::Left);
     assert_eq!(selected_key(&a), "lx:11:0.2");
-    select_key(&mut a, "lx:11:0");
+    press(&mut a, KeyCode::Left);
+    press(&mut a, KeyCode::Left);
+    assert_eq!(selected_key(&a), "lp:11:0:3", "a shut ripple climbs to the phase that called it");
+    press(&mut a, KeyCode::Right);
+    assert_eq!(selected_key(&a), "lx:11:0.2", "→ on a phase steps to what it called");
+    select_key(&mut a, "lp:11:0:3");
+    press(&mut a, KeyCode::Left);
+    assert_eq!(selected_key(&a), "lx:11:0", "a phase climbs to its ripple");
     press(&mut a, KeyCode::Left);
     assert_eq!(selected_key(&a), "lx:11:0", "an open ripple shuts first");
+    assert!(screen(&mut a).contains("+6 phases inside"), "{}", screen(&mut a));
     press(&mut a, KeyCode::Left);
     assert_eq!(selected_key(&a), "ld:11", "a shut top ripple climbs to its dump");
     press(&mut a, KeyCode::Left);
-    assert!(screen(&mut a).contains("▸ Dump 11"), "← shuts the dump");
+    let s = screen(&mut a);
+    assert!(s.contains("⎿ 7 ripples · 6 phases") && !s.contains("③ dump  2 fragments · applying"), "← shuts the dump:\n{s}");
     // ↓ walks the rows, every one reachable.
     a.rows[0] = 0;
     for _ in 0..30 {
@@ -377,7 +411,7 @@ fn item5_enter_explores_each_type() {
     select_key(&mut a, "lx:11:0");
     press(&mut a, KeyCode::Enter);
     let s = render_to_text(&mut a, 140, 60).unwrap().join("\n");
-    assert!(s.contains("③ type 3 · splash") && s.contains("• Steps") && s.contains("◉ start") && s.contains("◇ cascade") && s.contains("✓ done") && !s.contains("running") && !s.contains("so far"), "{s}");
+    assert!(s.contains("③ type 3") && !s.to_lowercase().contains("splash") && s.contains("• Steps") && s.contains("◉ start") && s.contains("◇ cascade") && s.contains("✓ done") && !s.contains("running") && !s.contains("so far"), "{s}");
     let at = |t: &str| s.find(t).unwrap_or_else(|| panic!("{t}:\n{s}"));
     assert!(at("load_dump") < at("✓ fragment ") && at("✓ fragment ") < at("✓ apply ") && at("✓ apply ") < at("◇ commit"), "in order:\n{s}");
     // Its links: the ripples its steps ran. Follow `apply`, then the author
@@ -402,7 +436,7 @@ fn item5_enter_explores_each_type() {
 }
 
 /// A click on a ripple's row explores it at ONE click, as a bus row does; a
-/// click on a dump's band opens and shuts it.
+/// click on a dump's first line opens and shuts it.
 #[test]
 fn item5_a_click_explores_a_ripple_and_turns_a_dump() {
     let mut a = app();
@@ -412,10 +446,11 @@ fn item5_a_click_explores_a_ripple_and_turns_a_dump() {
     assert!(matches!(&a.modal, Some(Modal::Bus { stack }) if stack[0].0 == BusPage::Exec { seq: 11, path: vec![0, 1] }), "{:?}", a.modal);
     a.modal = None;
     let r = rows(&mut a);
-    let y = r.iter().position(|l| l.contains("▸ Dump 8")).unwrap() as u16;
+    let y = r.iter().position(|l| l.contains("● Dump 8")).unwrap() as u16;
+    assert!(!r.join("\n").contains("DEC-35: Tokens first"), "shut before the click");
     click(&mut a, 10, y);
     let s = screen(&mut a);
-    assert!(s.contains("▾ Dump 8") && s.contains("DEC-35: Tokens first"), "{s}");
+    assert!(s.contains("● Dump 8") && s.contains("DEC-35: Tokens first"), "{s}");
 }
 
 /// A dump made here is on the ledger at once, at the top, with nothing run
@@ -427,15 +462,18 @@ fn item5_a_dump_made_here_is_on_top_with_nothing_run() {
     a.dump("a new thought for the ledger");
     assert!(a.composer.is_blank());
     let r = ledger(&mut a);
-    let first = r.iter().find(|l| l.contains("Dump ")).unwrap();
-    assert!(first.contains("▾ Dump 12") && first.contains("a new thought for the ledger") && first.contains("0 ripples"), "{first}");
-    assert!(r.iter().any(|l| l.contains("◇ nothing has run for it yet")), "{}", r.join("\n"));
-    assert!(r.iter().any(|l| l.contains("▸ Dump 11")), "the one before is shut now");
+    let fi = r.iter().position(|l| l.contains("Dump ")).unwrap();
+    assert!(r[fi].contains("● Dump 12") && r[fi].contains("0 ripples"), "{}", r[fi]);
+    assert!(r[fi + 1].contains("a new thought for the ledger"), "its words under it: {}", r[fi + 1]);
+    assert!(r[fi + 2].contains("⎿ ◇ nothing has run for it yet"), "{}", r.join("\n"));
+    let d11 = r.iter().position(|l| l.contains("● Dump 11")).unwrap();
+    assert!(r[d11 + 1..d11 + 4].iter().any(|l| l.contains("⎿ 7 ripples")), "the one before is shut now:\n{}", r.join("\n"));
 }
 
-/// Every row's act: a dump's band is a band; a ripple explores.
+/// Every row's act: a dump's block is a band (it opens and shuts); a phase
+/// only shows, under its ripple; a ripple explores.
 #[test]
-fn item5_every_ledger_row_is_a_band_or_a_ripple() {
+fn item5_every_ledger_row_is_a_band_a_phase_or_a_ripple() {
     let a = {
         let mut a = app();
         ledger(&mut a);
@@ -443,9 +481,16 @@ fn item5_every_ledger_row_is_a_band_or_a_ripple() {
     };
     let v = tui::cauldron::status::view(&a, 120);
     let mut ripples = 0;
+    let mut phases = 0;
     for it in v.items.iter().skip(1) {
         match &it.act {
             SAct::Band => assert!(it.key.starts_with("ld:"), "{}", it.key),
+            SAct::Show => {
+                phases += 1;
+                let (seq, rest) = it.key.strip_prefix("lp:").and_then(|k| k.split_once(':')).unwrap_or_else(|| panic!("{}", it.key));
+                let ripple = rest.rsplit_once(':').unwrap().0;
+                assert_eq!(it.parent.as_deref(), Some(format!("lx:{seq}:{ripple}").as_str()), "{}: under its ripple", it.key);
+            }
             SAct::Exec { seq, path, .. } => {
                 ripples += 1;
                 assert_eq!(it.key, format!("lx:{seq}:{}", tui::cauldron::ledger::path_key(path)));
@@ -454,4 +499,5 @@ fn item5_every_ledger_row_is_a_band_or_a_ripple() {
         }
     }
     assert_eq!(ripples, 7, "dump 11's seven, the rest shut");
+    assert_eq!(phases, 6, "dump 11's dump ripple's six steps");
 }

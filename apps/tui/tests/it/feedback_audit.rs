@@ -45,7 +45,8 @@ fn env_in(root: &Path, name: &str) -> Environment {
 fn open_env(root: &Path, name: &str) -> App {
     // Hermetic: no billed type-one call (tests/it/seed_live.rs is the live proof).
     std::env::set_var("CAULDRON_TYPE_ONE", "off");
-    App::open(env_in(root, name), seed_dir(), true).expect("seed loads")
+    // V1.6: Claude Code's accounts are the daemon's; the fixture stands in.
+    crate::live_pool::seeded(App::open(env_in(root, name), seed_dir(), true).expect("seed loads"))
 }
 
 fn open(root: &Path) -> App {
@@ -82,7 +83,7 @@ fn click_on(a: &mut App, hit: Hit) {
 }
 
 fn cauldron_settings(a: &mut App, path: &str) {
-    a.set_ctab(CTab::Config);
+    a.set_ctab(CTab::Settings);
     a.focus = Focus::Content;
     a.snav = Nav::cauldron();
     a.rows[SETTINGS_ROW] = 0;
@@ -117,7 +118,10 @@ fn prods_weekly_80_is_a_real_default_that_survives_a_settings_file_and_new_accou
     let r = get(&a, "pools.{pool}.budget.weekly.threshold_pct", pool());
     assert_eq!((r.val.clone(), r.prov.clone()), (Val::Int(80), Prov::Default));
     // Any edit writes the settings file; the 80 still holds.
-    a.sset(&Bound::new("local.enabled", Ctx::default()), Val::Bool(true)).unwrap();
+    // (local inference is greyed by V1.7, so the edit is this cauldron's own switch.)
+    let ob = Bound::new("cauldron.opportunistic", Ctx::default());
+    let flipped = !a.sget(&ob).val.as_bool();
+    a.sset(&ob, Val::Bool(flipped)).unwrap();
     let file = root.join("data/prod/tui/soup/settings.toml");
     assert!(file.is_file());
     assert!(!std::fs::read_to_string(&file).unwrap().contains("threshold_pct"));
@@ -155,16 +159,23 @@ fn session_weekly_and_fable_caps_sit_beside_the_thresholds_at_pool_and_account()
         assert!(c(line_with(&s, l)).contains(&format!("{l} off")), "{s}");
     }
     // Fable is Claude Code's: its rows are on that band, not at the shared
-    // head (0214 A10).
-    let head = &s[..s.find("Claude Code").expect(&s)];
-    assert!(!head.contains("fable"), "{head}");
+    // head (0214 A10). V1.1: the band is on Accounts, so Providers' page is
+    // all shared head.
+    assert!(!s.contains("Claude Code") && !s.contains("fable"), "{s}");
     // The cauldron's default → the token source → the account. A value from
     // the cauldron's level is just the `default` (msg 165).
     a.sset(&Bound::new("budgets.default.weekly.cap_pct", Ctx::default()), Val::Int(90)).unwrap();
     cauldron_settings(&mut a, "providers/claude_code");
     let full = screen(&mut a);
+    // 0214 A10 where the band lives now (V1-CLEAN1, V1.1-I §3): on
+    // Accounts, nothing above Claude Code's band carries fable — the rows
+    // are on the band (sentinel: the search finds them there).
+    assert_eq!(a.ctab, CTab::Accounts, "providers/claude_code resolves to Accounts");
+    let at = full.find("Claude Code").expect(&full);
+    assert!(!full[..at].contains("fable"), "fable at Accounts' head:\n{}", &full[..at]);
+    assert!(full[at..].contains("fable"), "sentinel: fable's rows are on Claude Code's band:\n{full}");
     // Below its band's title: the shared defaults stand flat above it.
-    let s = full[full.find("Claude Code").unwrap()..].to_string();
+    let s = full[at..].to_string();
     let t = s.find("weekly threshold").unwrap();
     let cap = s.find("weekly cap").expect(&s);
     assert!(t < cap, "the cap beside the threshold:\n{s}");
@@ -211,6 +222,34 @@ fn a_cluster_has_no_budget_token_or_resource_setting_and_the_defaults_tab_holds_
 
 #[test]
 fn local_inference_has_a_disk_cap_and_the_ram_note_is_this_machines() {
+    let mut a = open(&scratch_root());
+    cauldron_settings(&mut a, "local");
+    let s = screen(&mut a);
+    assert!(c(line_with(&s, "disk cap")).contains("disk cap 20 GB"), "{s}");
+    // Bounded by the machine's disk cap.
+    // V1.7: local inference is greyed — its rows are read, never set.
+    let disk = Bound::new("local.disk_max_gb", Ctx::default());
+    a.sset(&Bound::new("machine.disk.cap_gb", Ctx::default()), Val::Int(30)).unwrap();
+    assert_eq!(a.sset(&disk, Val::Int(25)), Err(tui::cauldron::settings::GREYED.to_string()));
+    // RAM: the default and its note come from THIS machine, never `of 64 GB`.
+    cauldron_settings(&mut a, "machine");
+    let s = screen(&mut a);
+    let row = c(line_with(&s, "RAM max"));
+    match tui::cauldron::settings::machine_ram_gb() {
+        Some(total) => {
+            assert!(row.contains(&format!("RAM max {} GB", total * 3 / 4)), "{row}");
+            assert!(row.contains(&format!("75% of {total} GB")), "{row}");
+        }
+        None => assert!(row.contains("RAM max 48 GB") && !row.contains(" of "), "{row}"),
+    }
+}
+
+/// V1.7b F1: the body of `local_inference_has_a_disk_cap_and_the_ram_note_is_this_machines` at 59c5ec8f, verbatim — the positive
+/// spec the greyed endpoints lost (V1.7-I F1). Un-ignore when
+/// `inference_live` ungreys them; `local_inference_has_a_disk_cap_and_the_ram_note_is_this_machines` above is the refusal it pairs with.
+#[test]
+#[ignore = "endpoints greyed in V1.7; restore when un-greyed"]
+fn local_inference_has_a_disk_cap_and_the_ram_note_is_this_machines_ungreyed() {
     let mut a = open(&scratch_root());
     cauldron_settings(&mut a, "local");
     let s = screen(&mut a);
@@ -559,9 +598,16 @@ fn a_typod_environment_is_refused_off_a_terminal_and_nothing_is_made() {
         assert!(!ok && out.contains("no environment `prdo` (dev)"), "{args:?} {env:?}: {out}");
     }
     assert!(!root.join("data").join("prdo").exists(), "nothing was made");
-    // One that exists opens; so does prod, named or not, made or not.
-    for (args, env) in [(vec!["--dump", "--env", "dev"], None), (vec!["--dump", "--env", "prod"], None), (vec!["--dump"], Some("prod")), (vec!["--dump"], None)] {
+    // One that exists opens, and so does no name at all (the one there is).
+    for (args, env) in [(vec!["--dump", "--env", "dev"], None), (vec!["--dump"], None)] {
         let (ok, out) = run(&args, env);
         assert!(ok, "{args:?} {env:?}: {out}");
     }
+    // `prod` named but not made is refused like any other name (V1.2, Q-F1:
+    // prod is never made behind his back).
+    for (args, env) in [(vec!["--dump", "--env", "prod"], None), (vec!["--dump"], Some("prod"))] {
+        let (ok, out) = run(&args, env);
+        assert!(!ok && out.contains("no environment `prod` (dev)"), "{args:?} {env:?}: {out}");
+    }
+    assert!(!root.join("data").join("prod").exists(), "nothing was made");
 }

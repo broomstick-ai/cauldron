@@ -969,13 +969,30 @@ fn ha_box(app: &App, p: &mut Page, g: ClusterId, h: &crate::cauldron::model::Hum
                     if let Some(n) = &fl.note {
                         p.push(Line::from(vec![Span::raw(" ".repeat(ind)), muted(n.clone())]));
                     }
-                    // 0217 B2: no input — this face stores no value (see
-                    // `App::ha_act`). A field an older build "submitted"
-                    // says that its value was NOT kept.
-                    let input: Vec<Span<'static>> = if submitted {
-                        vec![Span::styled("✗ an older build said submitted — the value was NOT stored; give it in the human-actions app", palette::amber())]
+                    // V1.8: the input. A secret's every character draws as
+                    // `•`; a value that already reached its destination
+                    // shows a dim placeholder (never the value, never its
+                    // length); a field the validator refuses has no input.
+                    let entry = app.ha_entry.as_ref().filter(|e| e.cluster == g && e.serial == h.serial && e.step == si);
+                    let typing = entry.is_some_and(|e| e.editing.as_deref() == Some(fl.name.as_str()));
+                    let typed = entry.and_then(|e| e.value(&fl.name)).filter(|v| !v.is_empty() || typing);
+                    let dest = muted(format!("  → {}", fl.route.word()));
+                    let input: Vec<Span<'static>> = if let Some(r) = crate::cauldron::tickets::field_reject(fl) {
+                        vec![Span::styled(format!("✗ refused: {r}"), palette::amber())]
+                    } else if fl.route == crate::cauldron::route::Route::Unset {
+                        vec![muted("no destination: its ticket names no route")]
+                    } else if let Some(v) = typed {
+                        let shown = if fl.secret { "•".repeat(v.chars()) } else { v.expose().to_string() };
+                        let mut out = vec![Span::styled(format!("› {shown}"), palette::ink())];
+                        if typing {
+                            out.push(Span::styled("▏", palette::code()));
+                        }
+                        out.push(dest);
+                        out
+                    } else if submitted {
+                        vec![muted("•••• submitted"), dest]
                     } else {
-                        vec![muted("not taken here — give it in the human-actions app")]
+                        vec![muted("Enter to type"), dest]
                     };
                     let mut spans = vec![Span::raw(" ".repeat(ind))];
                     spans.extend(input);

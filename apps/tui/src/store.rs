@@ -701,7 +701,7 @@ impl Store {
 
     /// Whether a missing status row can be BELIEVED. False while the status
     /// page is truncated, in which case a row the daemon did not mention says
-    /// `?` rather than `absent`.
+    /// `…` (not told yet) rather than drawing blank (V1.9: never `absent`).
     pub fn absence_is_a_fact(&self) -> bool {
         self.threads.is_some() && !self.status_full
     }
@@ -4602,16 +4602,18 @@ fn row_of(store: &Store, project: &str, t: &index::IndexThread) -> ThreadRow {
         project: project.to_string(),
         cwd: f.map(|f| shorten(&f.cwd, &store.home)).unwrap_or_default(),
         model: f.map(|f| f.model.clone()).unwrap_or_default(),
-        // THREE STATES, AND THEY ARE DIFFERENT THINGS. `?` is "the daemon has
-        // not told us"; `absent` is "we asked and it has no row for this id at
-        // all", which is what an unadopted AUI-era thread looks like and is not
-        // a defect.
+        // THREE STATES, AND THEY ARE DIFFERENT THINGS — but only one of them
+        // is a WORD, and it is the daemon's (consumer §8, TC-48; V1.9). `…` is
+        // "the daemon has not told us yet" (loading); BLANK is "we asked and
+        // it has no row for this id at all", which is what an unadopted
+        // AUI-era thread looks like and is not a defect. Neither is drawn as
+        // a status the daemon never said — never `absent`.
         state: match f {
-            // `absent` is only sayable when the status page was NOT truncated.
+            // Blank is only sayable when the status page was NOT truncated.
             // Otherwise the id may simply have fallen off the end of the page,
-            // and `?` is the true thing.
-            None if store.absence_is_a_fact() => "absent".to_string(),
-            None => "?".to_string(),
+            // and "not told yet" is the true thing.
+            None if store.absence_is_a_fact() => String::new(),
+            None => "…".to_string(),
             // UI-b: the subtree's word, not only the thread's own.
             Some(_) => match store.shown_word(&t.id) {
                 Some(w) if !w.is_empty() => w,
@@ -7084,16 +7086,69 @@ mod tests {
             mine.known,
             "the daemon knows `mine` and the row must say so"
         );
-        // …and the one it does not know is KEPT, saying `absent`. Daemon
-        // absence means unadopted, not un-owned; dropping it would silently
-        // delete his own history.
+        // …and the one it does not know is KEPT, its state BLANK (V1.9: never
+        // `absent`). Daemon absence means unadopted, not un-owned; dropping it
+        // would silently delete his own history.
         let unadopted = &l.rows[1];
         assert!(!unadopted.known);
-        assert_eq!(unadopted.state, "absent");
+        assert_eq!(unadopted.state, "");
+        // V1.9's opposition: the row the daemon DOES know carries a word, so
+        // the blank above is the absence and not a column that never fills.
+        assert!(!mine.state.is_empty(), "the known row's state: {:?}", mine.state);
         assert!(
             matches!(unadopted.queued, Known::Unknown),
             "a row the daemon does not know must not render a zero"
         );
+    }
+
+    /// **V1.9 G3 — NO THREAD ROW SAYS `absent`** (consumer §8, TC-48). A
+    /// listed thread the daemon has not answered for yet draws `…`; one it
+    /// answered WITHOUT (an unadopted index thread, `absence_is_a_fact()`)
+    /// draws a BLANK state column; one it reports `idle` draws `idle` — the
+    /// opposition, so the blank is the absence and not a column that never
+    /// fills. Asserted on the model AND on the drawn frame at 120 columns.
+    #[test]
+    fn v19_g3_a_thread_row_never_says_absent_blank_or_loading_instead() {
+        fn drawn(s: &Store) -> Vec<String> {
+            let vs = tui_render::ViewState { mode: Mode::List, list: thread_list(s, 0, 0), ..Default::default() };
+            tui_render::frame(&vs, now(), 120, 24).iter().map(|r| r.spans.iter().map(|sp| sp.content.as_ref()).collect()).collect()
+        }
+        fn line<'a>(text: &'a [String], needle: &str) -> &'a String {
+            text.iter().find(|t| t.contains(needle)).unwrap_or_else(|| panic!("no row says {needle}: {text:#?}"))
+        }
+        const KNOWN: &str = "the daemon knows this one";
+        const UNADOPTED: &str = "an unadopted one";
+        let mut s = store();
+        s.adopt_projects(vec![project("harness", &[("mine", KNOWN, false), ("unadopted", UNADOPTED, false)])]);
+        s.enter_project(0);
+
+        // Never subscribed: no status page has arrived, so nothing is a fact.
+        assert!(!s.absence_is_a_fact());
+        let l = thread_list(&s, 0, 0);
+        assert_eq!(l.rows.iter().map(|r| r.state.as_str()).collect::<Vec<_>>(), ["…", "…"], "not told yet is `…`");
+        let text = drawn(&s);
+        // The summary is drawn WHOLE, so the `…` on its row is the state
+        // word and not a crop's ellipsis.
+        let row = line(&text, UNADOPTED);
+        assert!(row.contains(&format!("{UNADOPTED} ")) && row.contains('…'), "{row:?}");
+        assert!(!text.iter().any(|t| t.contains("absent")), "{text:#?}");
+
+        // The daemon's status page arrives, whole: it reports `mine` idle
+        // and has no row at all for `unadopted`.
+        s.apply(
+            TransportEvent::Fleet { statuses: vec![json!({"thread_id": "mine", "state": "idle", "executing": false})], capped: false },
+            now(),
+        );
+        assert!(s.absence_is_a_fact(), "the fixture must reach the absence branch");
+        let l = thread_list(&s, 0, 0);
+        let st = |id: &str| l.rows.iter().find(|r| r.id == id).unwrap().state.clone();
+        assert_eq!(st("unadopted"), "", "a thread the daemon has no row for draws blank, never `absent`");
+        assert_eq!(st("mine"), "idle", "opposition: the column CAN show a word");
+        let text = drawn(&s);
+        assert!(line(&text, KNOWN).contains("idle"), "{text:#?}");
+        let row = line(&text, UNADOPTED);
+        assert!(!row.contains("absent") && !row.contains('…') && !row.contains("idle"), "the unadopted row's state is blank: {row:?}");
+        assert!(!text.iter().any(|t| t.contains("absent")), "{text:#?}");
     }
 
     /// The event lane is the same question one view over: his threads' events,

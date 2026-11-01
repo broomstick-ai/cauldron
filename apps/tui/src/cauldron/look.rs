@@ -213,6 +213,21 @@ pub fn fixed_band_line(depth: usize, name: Vec<Span<'static>>, meta: Vec<Span<'s
 
 // ── the tab strip ─────────────────────────────────────────────────────────
 
+/// THE GLOBAL BAR's background (V1.1, product spec §12: the two bars in
+/// "different colors, like the global above and then the environment
+/// below"): the warm [`palette::Colors::toggle_bg`], so it never reads as the
+/// cool environment bar under it. Both are palette roles every ink is
+/// already checked on (`palette::BG_ROLES`), in both themes.
+pub fn global_bar_bg() -> Color {
+    palette::c().toggle_bg
+}
+
+/// THE ENVIRONMENT BAR's background (V1.1): a tab strip's own,
+/// [`palette::Colors::strip_bg`] — it is the bar the strips under it belong to.
+pub fn env_bar_bg() -> Color {
+    palette::c().strip_bg
+}
+
 /// What stands between two menu items on a strip (b964d571 msg 23).
 pub const STRIP_SEP: &str = "|";
 

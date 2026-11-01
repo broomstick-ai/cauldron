@@ -30,6 +30,12 @@ pub enum Act {
     DeleteCluster(String),
     RenameAccount { pool: String, id: String },
     RemoveAccount { pool: String, id: String },
+    /// V1.6: put account `key` back in the daemon's pool (`on`) or take it
+    /// out — the MACHINE-WIDE switch, the `accounts` shape's `disabled`
+    /// cell. Asked first, in the pool board's own words.
+    InPool { key: String, on: bool },
+    /// V1.6: log account `key` in through the threads daemon.
+    LogIn { key: String },
     /// `+ add endpoint` (design 0199 §3): the add modal, an endpoint being
     /// added globally or (`here`) to this cauldron alone.
     NewEndpoint { here: bool },
@@ -52,6 +58,9 @@ pub enum Act {
     /// of a device, asked first and recorded in the supervision log
     /// (`supervise`) — on the face's data, never on a process.
     Service { device: String, service: String, op: crate::cauldron::supervise::Op },
+    /// V1.8: a human action's step submitted — each typed value to its
+    /// field's destination — asked first, by field names only.
+    HaSubmit { cluster: String, serial: u32, step: usize },
 }
 
 /// The cauldron's two states, in the words of its switch (msg 235: "You
@@ -103,6 +112,19 @@ impl App {
 
     /// → on an act's row: ask for what it needs.
     pub fn start_act(&mut self, act: Act) {
+        // An act on a greyed inference source (every endpoint, a pool other
+        // than Claude Code's) is refused, said, and changes nothing (R-V1
+        // item 7): no add modal opens, nothing is drafted or written.
+        let live = crate::cauldron::settings::inference_live;
+        let greyed = match &act {
+            Act::NewEndpoint { .. } | Act::AddEndpoint { .. } | Act::RemoveEndpoint { .. } => !live("endpoints"),
+            Act::RenameAccount { pool, .. } | Act::RemoveAccount { pool, .. } => !live(pool),
+            _ => false,
+        };
+        if greyed {
+            self.notice = Some(crate::cauldron::settings::GREYED.into());
+            return;
+        }
         match &act {
             Act::NewEndpoint { here } => return self.new_endpoint(*here),
             Act::AddEndpoint { here } => {
@@ -112,7 +134,10 @@ impl App {
                 return;
             }
             Act::OpenEndpoint(id) => return self.open_endpoint(id),
+            Act::LogIn { key } => return self.start_login(key),
             Act::Gc => return self.ask_gc(),
+            // Asked by `App::ha_confirm`, which holds the values.
+            Act::HaSubmit { .. } => return,
             Act::Service { device, service, op } => {
                 // What cannot be done is said, and nothing is asked.
                 if let Err(why) = crate::cauldron::supervise::plan(&self.dash.mesh, &self.dash.threads, device, service, *op) {
@@ -154,11 +179,14 @@ impl App {
                 Modal::Confirm { title: format!("Delete {name}?"), body, act, error: None }
             }
             Act::RenameAccount { pool, id } => {
-                let name = self.accounts(pool).into_iter().find(|a| a.id == *id).map_or_else(String::new, |a| a.label);
+                // Drawn through the one masker (V1-CLEAN2): the title AND the
+                // name the field starts with — an address is never typed back
+                // onto the screen.
+                let name = self.account_name(pool, id);
                 Modal::Name { title: format!("Rename {name}"), name, act, error: None }
             }
             Act::RemoveAccount { pool, id } => {
-                let label = self.accounts(pool).into_iter().find(|a| a.id == *id).map_or_else(|| id.clone(), |a| a.label);
+                let label = self.account_name(pool, id);
                 let body = vec![format!("{label} leaves {pool}, and every setting it has goes with it.")];
                 Modal::Confirm { title: format!("Remove {label}?"), body, act, error: None }
             }
@@ -171,7 +199,21 @@ impl App {
                 };
                 Modal::Confirm { title: format!("Remove {name}?"), body, act, error: None }
             }
-            Act::NewEndpoint { .. } | Act::AddEndpoint { .. } | Act::OpenEndpoint(_) | Act::Gc => unreachable!("handled above"),
+            // The pool board's own question (`pool::action`), one way to say
+            // it; the account by its masked name.
+            Act::InPool { key, on } => {
+                // Masked once, by the one masker, told apart from a twin;
+                // the act itself keeps the raw key (it is what the daemon is
+                // sent), and its question is asked with the drawn name.
+                let shown = self.shown_key(key);
+                let a = if *on { crate::pool::action::Action::Enable(key.clone()) } else { crate::pool::action::Action::Disable(key.clone()) };
+                let body = vec![
+                    a.question_as(&shown),
+                    "This is the threads daemon's pool, for every cauldron on this machine. Whether one cauldron uses it is its own `use in this cauldron`.".into(),
+                ];
+                Modal::Confirm { title: format!("{} {shown}?", if *on { "Put back in the pool:" } else { "Take out of the pool:" }), body, act, error: None }
+            }
+            Act::NewEndpoint { .. } | Act::AddEndpoint { .. } | Act::OpenEndpoint(_) | Act::Gc | Act::HaSubmit { .. } | Act::LogIn { .. } => unreachable!("handled above"),
             Act::RegisterRepo => Modal::Name { title: "Register a repo — its path".into(), name: String::new(), act, error: None },
             Act::UnregisterRepo(n) => {
                 let body = vec![format!("{n} leaves the registry. Its files are not touched.")];
@@ -205,7 +247,10 @@ impl App {
         let Some(Modal::Name { act, name, .. }) = self.modal.clone() else { return };
         let r = match &act {
             Act::RenameCluster(k) => self.rename_cluster(k, &name),
-            Act::RenameAccount { pool, id } => self.settings.rename_account(pool, id, &name).map_err(|e| format!("{e:#}")).map(|()| format!("renamed to {}", name.trim())),
+            // The field started at the MASKED name: confirmed unchanged, the
+            // account keeps its own name (never renamed to `x•••@y•••`).
+            Act::RenameAccount { pool, id } if name.trim() == self.account_name(pool, id) => Ok("name unchanged".to_string()),
+            Act::RenameAccount { pool, id } => self.settings.rename_account(pool, id, &name).map_err(|e| format!("{e:#}")).map(|()| format!("renamed to {}", crate::pool::model::shown_name(name.trim()))),
             Act::RegisterRepo => self.register_repo(&name),
             _ => Err("not a name".into()),
         };
@@ -218,11 +263,13 @@ impl App {
         let r = match &act {
             Act::DeleteCluster(k) => self.delete_cluster(k),
             Act::RemoveAccount { pool, id } => self.remove_account(pool, id),
+            Act::InPool { key, on } => self.send_in_pool(key, *on),
             Act::RemoveEndpoint { here, id } => self.remove_endpoint(*here, id),
             Act::UnregisterRepo(n) => self.unregister_repo(n),
             Act::Enable(on) => self.set_enabled(*on),
             Act::Gc => self.run_gc(),
             Act::Service { device, service, op } => self.supervise(device, service, *op),
+            Act::HaSubmit { cluster, serial, step } => self.ha_submit(cluster, *serial, *step),
             _ => Err("nothing to confirm".into()),
         };
         self.after(r);
@@ -319,7 +366,7 @@ impl App {
     }
 
     fn remove_account(&mut self, pool: &str, id: &str) -> Result<String, String> {
-        let label = self.accounts(pool).into_iter().find(|a| a.id == id).map_or_else(|| id.to_string(), |a| a.label);
+        let label = self.account_name(pool, id);
         let before = self.flags();
         self.settings.remove_account(pool, id).map_err(|e| format!("{e:#}"))?;
         self.note_flips(before, &format!("{label} removed"));

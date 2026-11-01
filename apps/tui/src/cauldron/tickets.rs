@@ -13,14 +13,23 @@
 //! text to copy) and its `open` fences (a link to open). A heading or a
 //! `Deliverable:` inside a fence is text.
 //!
+//! A field names where its value goes in its fence's `route:` key (R-V1
+//! item 8, product spec §9, which supersedes 0217 B2's "not taken here"):
+//! `env`, `env:<NAME>`, `keychain` or `node` ([`Route`]). There is no default
+//! destination: [`validate_action`] refuses a secret field with no route, a
+//! secret field routed to a node, a route it does not know, and (V1.8.S4)
+//! two fields with one name or on one env variable — both copies. It is the
+//! soup crate's (`soup::actions`), and the soup's write path is the gate;
+//! this face calls the same function on display, so an action that somehow
+//! holds an unroutable field shows that field as REFUSED, with no input.
+//! And it is the soup's PARSER too (V1.8.S3): [`parse`] lays out the
+//! sections [`soup::actions::sections`] read, and holds no fence reader of
+//! its own, so what this face draws and what the gate checked cannot differ.
+//!
 //! What he has done is kept per environment beside the draft
 //! (`<data>/<env>/tui/soup/tickets.json`): the steps marked done and the
-//! fields an older build recorded as SUBMITTED, by name. This face takes no
-//! value at all (0217 B2): the human-action contract delivers a value to its
-//! project's registered write target, a cluster's ticket names none, and a
-//! box that only recorded "submitted" while dropping the key was a lie — so a
-//! field says where to give it instead, and an old `submitted` entry is
-//! shown as NOT stored. Every entry names a step or a field of a human action in the
+//! fields SUBMITTED — routed to their destination — by NAME, never a value.
+//! Every entry names a step or a field of a human action in the
 //! soup, by its id now (`X-3/HA-4/step`). An entry that names nothing here —
 //! an id from before msg 235, or an item of a seed this environment no longer
 //! reads (REL-3.S2b: prod's own `tickets.json` named the repo seed's
@@ -35,13 +44,25 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 
-/// One input a step asks him to paste into.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Field {
-    pub name: String,
-    pub label: String,
-    pub secret: bool,
-    pub note: Option<String>,
+pub use crate::cauldron::route::Route;
+use soup::actions::{self, Piece, Section};
+
+/// One input a step asks him to paste into: the SOUP's parsed field
+/// (V1.8.S3, "one parser"). This face never reads a fence itself; it draws
+/// the fields [`soup::actions::sections`] found, which are the very fields
+/// the soup's write path validated.
+pub use soup::actions::Field;
+
+/// Why an action's field is refused, and THE validator: both the soup
+/// crate's (V1.8.S2, "one validator, two callers"). The soup's write path
+/// calls [`validate_action`] before anything is stored; this face calls the
+/// very same function, and [`field_reject`] applies the very same per-field
+/// rule ([`soup::actions::field_reject`]) on display.
+pub use soup::actions::{validate_action, Reject};
+
+/// Why `field` is refused, or none: the soup's rule, on a parsed field.
+pub fn field_reject(field: &Field) -> Option<Reject> {
+    field.reject()
 }
 
 /// One block of a step, in its order.
@@ -109,86 +130,37 @@ pub fn slugify(heading: &str) -> String {
     t.chars().take(60).collect::<String>().trim_end_matches('-').to_string()
 }
 
-/// A fence's `key: value` header and its payload (after a `---` line, or
-/// all of it when there is none and `payload` is asked for).
-fn fence(lines: &[String], payload: bool) -> (Vec<(String, String)>, String) {
-    let split = lines.iter().position(|l| l.trim() == "---");
-    let (head, body): (&[String], &[String]) = match (split, payload) {
-        (Some(i), _) => (&lines[..i], &lines[i + 1..]),
-        (None, true) => (&[], lines),
-        (None, false) => (lines, &[]),
+/// One parsed piece as the blocks it draws as.
+fn block_of(p: Piece) -> Vec<Block> {
+    let f = match p {
+        Piece::Text(t) => return vec![Block::Text(t)],
+        Piece::Fence(f) => f,
     };
-    let kv = head
-        .iter()
-        .filter_map(|l| l.split_once(':').map(|(k, v)| (k.trim().to_string(), v.trim().to_string())))
-        .collect();
-    (kv, body.join("\n"))
-}
-
-fn get(kv: &[(String, String)], k: &str) -> Option<String> {
-    kv.iter().find(|(x, _)| x == k).map(|(_, v)| v.clone()).filter(|v| !v.is_empty())
-}
-
-/// Read a ticket's body.
-pub fn parse(body: &str) -> Ticket {
-    // Sections: (heading, blocks, deliverable).
-    let mut sections: Vec<(String, Vec<Block>, Option<String>)> = vec![(String::new(), Vec::new(), None)];
-    let mut lines = body.lines();
-    while let Some(line) = lines.next() {
-        let t = line.trim_end();
-        if let Some(kind) = t.trim_start().strip_prefix("```").map(str::trim) {
-            let mut inner = Vec::new();
-            for l in lines.by_ref() {
-                if l.trim_start().starts_with("```") {
-                    break;
-                }
-                inner.push(l.to_string());
-            }
-            let sec = sections.last_mut().expect("one section at least");
-            match kind {
-                "field" => {
-                    let (kv, _) = fence(&inner, false);
-                    let name = get(&kv, "name").unwrap_or_default();
-                    sec.1.push(Block::Field(Field {
-                        label: get(&kv, "label").unwrap_or_else(|| name.clone()),
-                        secret: get(&kv, "secret").is_none_or(|v| v != "false"),
-                        note: get(&kv, "note"),
-                        name,
-                    }));
-                }
-                "copy" => {
-                    let (kv, text) = fence(&inner, true);
-                    sec.1.push(Block::Copy { label: get(&kv, "label").unwrap_or_else(|| "Text to paste".into()), text });
-                }
-                "open" => {
-                    let (kv, _) = fence(&inner, false);
-                    let url = get(&kv, "url").unwrap_or_default();
-                    sec.1.push(Block::Open { label: get(&kv, "label").unwrap_or_else(|| "Open link".into()), url });
-                }
-                // Any other fence is text he reads.
-                _ => sec.1.extend(inner.into_iter().map(|l| Block::Text(format!("    {l}")))),
-            }
-            continue;
-        }
-        if let Some(h) = t.strip_prefix("## ") {
-            sections.push((h.trim().to_string(), Vec::new(), None));
-            continue;
-        }
-        let sec = sections.last_mut().expect("one section at least");
-        let bare = t.trim_start().trim_start_matches("**").trim_start();
-        if let Some(d) = bare.strip_prefix("Deliverable:").or_else(|| bare.strip_prefix("Deliverable**:")) {
-            sec.2 = Some(d.trim().trim_start_matches("**").trim().to_string());
-            continue;
-        }
-        sec.1.push(Block::Text(t.to_string()));
+    if let Some(field) = f.field() {
+        return vec![Block::Field(field)];
     }
-    let is_step = |s: &(String, Vec<Block>, Option<String>)| s.2.is_some() || s.1.iter().any(|b| matches!(b, Block::Field(_)));
-    let any_step = sections.iter().any(is_step);
+    let (kv, payload) = f.split();
+    let label = |or: &str| actions::value(&kv, "label").unwrap_or(or).to_string();
+    match f.kind.as_str() {
+        "copy" => vec![Block::Copy { label: label("Text to paste"), text: payload }],
+        "open" => vec![Block::Open { label: label("Open link"), url: actions::value(&kv, "url").unwrap_or("").to_string() }],
+        // Any other fence is text he reads.
+        _ => f.lines.into_iter().map(|l| Block::Text(format!("    {l}"))).collect(),
+    }
+}
+
+/// Read a ticket's body: the soup's sections ([`soup::actions::sections`],
+/// the one parser), laid out as steps. A step is a section that is a phase.
+pub fn parse(body: &str) -> Ticket {
+    let sections = actions::sections(body);
+    let any_step = sections.iter().any(Section::is_phase);
     let mut t = Ticket::default();
     let mut seen: Vec<String> = Vec::new();
     for (i, sec) in sections.into_iter().enumerate() {
-        if !any_step || is_step(&sec) {
-            let (title, blocks, deliverable) = sec;
+        let is_step = sec.is_phase();
+        let Section { heading: title, pieces, deliverable } = sec;
+        let blocks: Vec<Block> = pieces.into_iter().flat_map(block_of).collect();
+        if !any_step || is_step {
             // The implicit step: the whole body is one.
             if !any_step && i > 0 {
                 let last = t.steps.last_mut().expect("the implicit step is first");
@@ -204,7 +176,6 @@ pub fn parse(body: &str) -> Ticket {
             let slug = if n == 0 { base } else { format!("{base}-{}", n + 1) };
             t.steps.push(Step { title, slug, blocks: trim_blank(blocks), deliverable });
         } else {
-            let (title, blocks, _) = sec;
             if !title.is_empty() {
                 t.intro.push(format!("**{title}**"));
             }
@@ -373,6 +344,17 @@ impl Store {
         })
     }
 
+    /// Record field `field` as submitted: routed to its destination. Its
+    /// NAME only — a value never reaches this file.
+    pub fn set_submitted(&mut self, cluster: &str, serial: u32, field: &str) -> Result<()> {
+        let k = key(cluster, serial, field);
+        self.update(|f| {
+            if !f.submitted.contains(&k) {
+                f.submitted.push(k);
+            }
+        })
+    }
+
 }
 
 #[cfg(test)]
@@ -412,5 +394,51 @@ mod tests {
         assert_eq!(t.steps.len(), 1);
         assert_eq!(t.steps[0].blocks, vec![Block::Copy { label: "Subject".into(), text: "## not a heading\nDeliverable: not one".into() }]);
         assert_eq!(t.steps[0].deliverable.as_deref(), Some("sent."));
+    }
+
+    fn one_field(head: &str) -> String {
+        format!("## Give it\n\n```field\nname: K\n{head}```\n")
+    }
+
+    #[test]
+    fn a_fields_route_is_read_from_its_fence() {
+        let f = |head: &str| parse(&one_field(head)).steps[0].fields().next().cloned().unwrap();
+        assert_eq!(f("route: env\n").route, Route::Env("K".into()));
+        assert_eq!(f("route: env:pay_key\n").route, Route::Env("pay_key".into()));
+        assert_eq!(f("route: keychain\n").route, Route::Keychain);
+        assert_eq!(f("secret: false\nroute: node\n").route, Route::Node);
+        assert_eq!(f("").route, Route::Unset);
+        assert_eq!(f("route: vault\n").route, Route::Unknown("vault".into()));
+    }
+
+    /// G2 (and G1's rule, here at the face): a secret field needs a route,
+    /// and a node takes only a non-secret one. Each refusal is paired with
+    /// the accepted case beside it, so a constant answer fails.
+    #[test]
+    fn the_validator_refuses_an_unroutable_secret_and_accepts_a_routed_one() {
+        let v = |head: &str| validate_action(&one_field(head));
+        assert_eq!(v(""), Err(Reject::NoRoute { field: "K".into() }));
+        assert_eq!(v("secret: true\n"), Err(Reject::NoRoute { field: "K".into() }));
+        assert_eq!(v("route: keychain\n"), Ok(()));
+        assert_eq!(v("route: env\n"), Ok(()));
+        assert_eq!(v("route: node\n"), Err(Reject::SecretToNode { field: "K".into() }));
+        assert_eq!(v("secret: true\nroute: node\n"), Err(Reject::SecretToNode { field: "K".into() }));
+        assert_eq!(v("secret: false\nroute: node\n"), Ok(()));
+        assert_eq!(v("route: vault\n"), Err(Reject::UnknownRoute { field: "K".into(), route: "vault".into() }));
+        // A non-secret field with no route is not refused (it has no value
+        // to leak); it simply takes none here.
+        assert_eq!(v("secret: false\n"), Ok(()));
+        // V1.8.S2-I F1's two shapes: a fence open at the end of the body is
+        // still a field, and a `route:` below `---` is payload. The face draws
+        // the field and refuses it, as the soup's gate does.
+        let open = "## Give it\n\n```field\nname: K\nlabel: k\n";
+        assert_eq!(parse(open).steps[0].fields().map(|f| f.name.as_str()).collect::<Vec<_>>(), ["K"]);
+        assert_eq!(validate_action(open), Err(Reject::NoRoute { field: "K".into() }));
+        assert_eq!(v("---\nroute: env\n"), Err(Reject::NoRoute { field: "K".into() }));
+        assert_eq!(v("route: env\n---\nnote\n"), Ok(()));
+        // A body with no field at all is fine.
+        assert_eq!(validate_action("## Do it\n\nDeliverable: done."), Ok(()));
+        // The refusal names the field.
+        assert!(v("").unwrap_err().to_string().starts_with("K "));
     }
 }

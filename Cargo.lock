@@ -65,7 +65,7 @@ checksum = "1505bd5d3d116872e7271a6d4e16d81d0c8570876c8de68093a09ac269d8aac0"
 
 [[package]]
 name = "aui-wire"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "anyhow",
  "chrono",
@@ -221,7 +221,7 @@ dependencies = [
 
 [[package]]
 name = "cauldron"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "anyhow",
  "env",
@@ -229,9 +229,11 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2",
+ "shapewire",
  "soup",
  "test-isolation",
  "toml",
+ "tungstenite 0.24.0",
 ]
 
 [[package]]
@@ -460,7 +462,7 @@ dependencies = [
 
 [[package]]
 name = "env"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "anyhow",
  "serde",
@@ -1245,7 +1247,7 @@ checksum = "0e7465ac9959cc2b1404e8e2367b43684a6d13790fe23056cc8c6c5a6b7bcb94"
 
 [[package]]
 name = "mcp-host"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "anyhow",
  "serde",
@@ -1584,7 +1586,7 @@ dependencies = [
 
 [[package]]
 name = "projects"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "chrono",
  "dirs",
@@ -1985,7 +1987,7 @@ checksum = "94143f37725109f92c262ed2cf5e59bce7498c01bcc1502d7b9afe439a4e9f49"
 
 [[package]]
 name = "seam-probe"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "anyhow",
  "env",
@@ -2120,7 +2122,7 @@ dependencies = [
 
 [[package]]
 name = "shapewire"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "anyhow",
  "axum",
@@ -2207,7 +2209,7 @@ dependencies = [
 
 [[package]]
 name = "soup"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "anyhow",
  "env",
@@ -2344,7 +2346,7 @@ dependencies = [
 
 [[package]]
 name = "term-shell"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "anyhow",
  "ratatui",
@@ -2353,7 +2355,7 @@ dependencies = [
 
 [[package]]
 name = "test-isolation"
-version = "0.1.1"
+version = "0.1.2"
 
 [[package]]
 name = "thiserror"
@@ -2406,7 +2408,7 @@ dependencies = [
 
 [[package]]
 name = "threads"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "axum",
  "chrono",
@@ -2697,7 +2699,7 @@ dependencies = [
 
 [[package]]
 name = "tts"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -2723,7 +2725,7 @@ dependencies = [
 
 [[package]]
 name = "tui"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "anyhow",
  "aui-wire",
@@ -2733,6 +2735,7 @@ dependencies = [
  "futures-util",
  "projects",
  "ratatui",
+ "security-framework",
  "serde",
  "serde_json",
  "sha2",
@@ -2755,7 +2758,7 @@ dependencies = [
 
 [[package]]
 name = "tui-render"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "chrono",
  "proptest",

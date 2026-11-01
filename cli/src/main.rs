@@ -70,6 +70,7 @@
 //! supervisor process. See [`verb_status`].
 
 mod bundle;
+mod ctl;
 mod daemon;
 mod envs;
 mod gc;
@@ -110,6 +111,7 @@ const VERBS: &[(&str, &str)] = &[
     ("permissions", "which identity a permission prompt names, and what is actually asking"),
     ("supervisions", "every act this environment's supervisor performed on a service, and WHY"),
     ("tui", "the Cauldron face (the default); --chat for the chat face"),
+    ("ctl", "the coordinator's face, headless: dump | frame | node (`ctl help`)"),
 ];
 
 const USAGE: &str = "\
@@ -119,6 +121,11 @@ cauldron — the Cauldron entry point
     cauldron tui [args...]           the Cauldron face, explicitly (args pass
                                      through to `tui --cauldron`)
     cauldron tui --chat [args...]    the chat face instead
+    cauldron ctl dump|frame|node ... the coordinator's face, headless, on the TUI's own
+                                     calls: `ctl dump --env <name>` sends one dump (text on
+                                     stdin) exactly as the send key does; `ctl frame` is one
+                                     `--dump` frame; `ctl node <id>` reads one soup node.
+                                     JSON out, non-zero on refusal (`cauldron ctl help`)
     cauldron --build-stamp           the commit THIS binary was built from, as
                                      one `key=value` line, the format it reads
                                      off every service it launches
@@ -326,6 +333,7 @@ fn run() -> Result<i32> {
             eprintln!("cauldron: `aui` is not a cauldron verb — the AUI is launched by `aui`, not by cauldron.");
             Ok(2)
         }
+        Some("ctl") => ctl::verb_ctl(&argv[1..]),
         Some("daemon") => daemon::verb_daemon(&argv[1..]),
         Some("install") => launchd::verb_install(&argv[1..]),
         Some("uninstall") => launchd::verb_uninstall(&argv[1..]),
@@ -432,11 +440,52 @@ const DEFAULT_APP: &str = "tui";
 fn tui_face(args: &[String]) -> Result<i32> {
     if args.iter().any(|a| a == "--chat") {
         let rest: Vec<String> = args.iter().filter(|a| *a != "--chat").cloned().collect();
-        return app(DEFAULT_APP, &rest);
+        return app(DEFAULT_APP, &rest, None);
     }
     let mut with: Vec<String> = vec!["--cauldron".to_string()];
     with.extend(args.iter().filter(|a| *a != "--cauldron").cloned());
-    app(DEFAULT_APP, &with)
+    let opens = Environment::resolve().ok().and_then(|env| cauldron_face_opens(&env, &with[1..]));
+    app(DEFAULT_APP, &with, opens.as_deref())
+}
+
+/// **Which environment the CAULDRON face will open** (V1.2b), so the router
+/// launches THAT environment's build (`tui-<env>`, R6.S8) rather than the
+/// build of the name it merely defaulted to.
+///
+/// A name he gave wins: the face's own `--env <name>` or bare positional
+/// name (`cauldron tui prod`, V1.2d), read by the face's own rule
+/// `env::face::named_in`; else a name the router resolved from anything but
+/// the default. Arguments the face refuses (`--env` with no value, two bare
+/// names) name nothing trustworthy: `None`, the resolved name's build, and the
+/// face then says what was wrong. When nobody named one, it is the
+/// face's own rule, `apps/tui/src/cauldron/store.rs` `default_env` (V1.2,
+/// Q-F1) — the one last opened (`<root>/data/shared/tui/last_env.json`),
+/// while it still exists; else `prod`, if it exists; else the first that
+/// exists. `None` (no environment at all) is the first-run screen, which
+/// opens in the build of the resolved name, as before. Nothing is created or
+/// written by asking. The rule is ONE function, `env::face::opens` (V1.2c),
+/// which the face calls too; `face_env.rs` pins the router's use of it.
+fn cauldron_face_opens(env: &Environment, args: &[String]) -> Option<String> {
+    let named = if let Some(n) = env::face::named_in(args).ok()? {
+        Some(n)
+    } else if env.name_source != env::paths::Source::Default {
+        Some(env.name.clone())
+    } else {
+        None
+    };
+    // A name he gave never depends on listing the root (as before V1.2c):
+    // an unlistable root still opens the named cauldron's build.
+    let there = match env.environments() {
+        Ok(there) => there,
+        Err(_) if named.is_some() => Vec::new(),
+        Err(_) => return None,
+    };
+    // An unreadable record is passed over, exactly as the face does.
+    let last = std::fs::read(env.shared_root().join("tui").join("last_env.json"))
+        .ok()
+        .and_then(|b| serde_json::from_slice::<serde_json::Value>(&b).ok())
+        .and_then(|v| v.get("env")?.as_str().map(str::to_string));
+    env::face::opens(named, last, &there)
 }
 
 /// This binary's own commit, stamped on every supervision record so a reader
@@ -491,7 +540,11 @@ pub(crate) fn self_stamp() -> String {
 /// PATH fallback would silently open a different program instead of reporting a
 /// missing build. The app is a member of this workspace and is built beside the
 /// router by `cargo build --workspace`; beside-the-binary is the whole answer.
-fn app(app: &str, args: &[String]) -> Result<i32> {
+///
+/// `opens` is the environment the app will actually open, when the caller
+/// knows it differs from the resolved name (V1.2b: the cauldron face opens
+/// the last-used cauldron when nobody named one); its build is the one run.
+fn app(app: &str, args: &[String], opens: Option<&str>) -> Result<i32> {
     let mut candidates: Vec<PathBuf> = Vec::new();
     if let Ok(me) = std::env::current_exe() {
         if let Some(dir) = me.parent() {
@@ -499,8 +552,9 @@ fn app(app: &str, args: &[String]) -> Result<i32> {
             // (`launchd::app_file_name`), so that is looked for first; the
             // plain name stays the fallback (a build dir, or an env never
             // installed).
-            if let Ok(env) = Environment::resolve() {
-                let own = launchd::app_file_name(app, &env.name);
+            let name = opens.map(str::to_string).or_else(|| Environment::resolve().ok().map(|e| e.name));
+            if let Some(name) = name {
+                let own = launchd::app_file_name(app, &name);
                 if own != app {
                     candidates.push(dir.join(own));
                 }
@@ -526,6 +580,9 @@ fn app(app: &str, args: &[String]) -> Result<i32> {
         cmd.args(args);
         if let Ok(env) = Environment::resolve() {
             cmd.env("CAULDRON_ENV", &env.name).env("CAULDRON_HOME", &env.root);
+            // …and where the name came from: `default` means nobody named
+            // one, so the face may open the last one he used (V1.2, Q-F1).
+            cmd.env("CAULDRON_ENV_SOURCE", env.name_source.as_str());
         }
         if let Ok(me) = std::env::current_exe() {
             cmd.env("CAULDRON_BIN", me);

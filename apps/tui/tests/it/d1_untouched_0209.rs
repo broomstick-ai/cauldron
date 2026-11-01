@@ -41,7 +41,8 @@ fn env_in(root: &Path, name: &str) -> Environment {
 
 fn open(root: &Path) -> App {
     std::env::set_var("CAULDRON_TYPE_ONE", "off");
-    App::open(env_in(root, "prod"), seed_dir(), true).expect("opens")
+    // V1.6: Claude Code's accounts are the daemon's; the fixture stands in.
+    crate::live_pool::seeded(App::open(env_in(root, "prod"), seed_dir(), true).expect("opens"))
 }
 
 /// A scratch root holding `global` and `prod` where his live in his root.
@@ -149,7 +150,7 @@ fn d1_the_deferred_move_merges_with_what_another_face_wrote() {
 // ── step 2: the rest of the 0200 audit's defects ────────────────────────────
 
 fn config(a: &mut App, path: &str) {
-    a.set_ctab(tui::cauldron::app::CTab::Config);
+    a.set_ctab(tui::cauldron::app::CTab::Settings);
     a.snav = tui::cauldron::menu::Nav::cauldron();
     a.rows[tui::cauldron::menu::SETTINGS_ROW] = 0;
     a.open_settings_path(path).unwrap_or_else(|e| panic!("{path}: {e}"));
@@ -162,11 +163,12 @@ fn d5_a_table_row_keeps_its_switches_and_chevron_at_80_columns() {
     let mut a = open(&scratch_root());
     config(&mut a, "providers/claude_code");
     let s = render_to_text(&mut a, 80, 140).unwrap();
-    // Its name narrows (`sam-broomsti…`) so its switches do not.
-    let row = s.iter().find(|l| l.contains("sam-broom")).unwrap_or_else(|| panic!("{}", s.join("\n")));
+    // Its name narrows (`sam-b…`, beside V1.6's `in the pool`) so its
+    // switches do not.
+    let row = s.iter().find(|l| l.contains("sam-b") && l.contains('›')).unwrap_or_else(|| panic!("{}", s.join("\n")));
     assert_eq!(row.matches("inherit  on  off").count(), 2, "{row}");
     assert!(row.contains('›'), "{row}");
-    let head = s.iter().find(|l| l.contains("account ") && l.contains("enabled")).unwrap();
+    let head = s.iter().find(|l| l.contains("on in new cauldrons") && l.contains("opportunistic")).unwrap();
     assert!(!head.contains("…o") && head.contains("opportunistic"), "a narrowed column name keeps its gap: {head}");
 }
 

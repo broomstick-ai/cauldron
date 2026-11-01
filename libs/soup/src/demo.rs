@@ -131,7 +131,7 @@ impl Dataset {
     }
 }
 
-/// What the demo must visibly include (the brief's list, PRODUCT-SPEC §17).
+/// What the demo must visibly include (the brief's list, product spec §17).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Kind {
     /// At least two clusters.
@@ -236,7 +236,7 @@ pub use crate::actions::phases;
 
 /// An open action's field that is secret AND routed somewhere it may go.
 fn is_secret_routed(field: &crate::actions::Fence) -> bool {
-    crate::actions::is_secret(field) && matches!(crate::actions::route_of(field), Ok(Some(r)) if r != crate::actions::Route::Node)
+    crate::actions::is_secret(field) && matches!(crate::actions::route_of(field), crate::actions::Route::Env(_) | crate::actions::Route::Keychain)
 }
 
 fn ledger_execs(ds: &Dataset) -> Vec<(&Value, usize)> {
@@ -369,7 +369,7 @@ pub fn soup_dir(env: &::env::Environment) -> Result<PathBuf> {
 
 /// **The env-creation hook**: seed environment `env` with the curated
 /// dataset. Refused for any environment but [`ENV`]: no other environment
-/// ever shows seed data (PRODUCT-SPEC §17).
+/// ever shows seed data (product spec §17).
 pub fn seed_env(env: &::env::Environment) -> Result<Installed> {
     if env.name != ENV {
         bail!(

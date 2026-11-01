@@ -38,12 +38,21 @@ impl Action {
 
     /// What the confirm line asks.
     pub fn question(&self) -> String {
+        // Drawn: the account's shown name, never a raw email (V1-CLEAN1).
+        self.question_as(&super::model::shown_name(self.label()))
+    }
+
+    /// [`Action::question`] naming the account as `shown` — the caller's
+    /// drawn name for it (one that tells twins apart, V1-ACCT). The label is
+    /// never re-masked here, so a name is masked exactly once.
+    pub fn question_as(&self, shown: &str) -> String {
+        let l = shown;
         match self {
-            Action::Disable(l) => format!("disable {l}? it leaves the pool and gets no new work"),
-            Action::Enable(l) => format!("reactivate {l}? it rejoins the pool"),
-            Action::SetLive(l) => format!("make {l} this machine's login? (rewrites ~/.claude.json + keychain)"),
-            Action::SetShare(l, Some(s)) => format!("set {l}'s pool share to {:.0}%?", s * 100.0),
-            Action::SetShare(l, None) => format!("clear {l}'s pool share override?"),
+            Action::Disable(_) => format!("disable {l}? it leaves the pool and gets no new work"),
+            Action::Enable(_) => format!("reactivate {l}? it rejoins the pool"),
+            Action::SetLive(_) => format!("make {l} this machine's login? (rewrites ~/.claude.json + keychain)"),
+            Action::SetShare(_, Some(s)) => format!("set {l}'s pool share to {:.0}%?", s * 100.0),
+            Action::SetShare(_, None) => format!("clear {l}'s pool share override?"),
         }
     }
 

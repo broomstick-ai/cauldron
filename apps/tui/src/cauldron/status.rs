@@ -41,9 +41,10 @@
 //! metadata (msg 235: "Don't have any metadata in the tab header").
 //!
 //! LEDGER, first (8e4fca10 msg 457: "let's make it the first tab inside of
-//! status ... It'll have the entire history of execution"): every dump a
-//! band, newest first, and inside it the ripples it ran, nested, drawn as
-//! the Tasks tab draws its graph (`ledger`).
+//! status ... It'll have the entire history of execution"): every dump an
+//! event block in time order, styled as a Claude Code thread (V1.4), and
+//! under it its phases and the ripples it ran, nested, their rails the
+//! spawn lines (`ledger`).
 //!
 //! The keys are the bands' (`docs/navigation.md` rule 12): → (or Enter)
 //! opens a band, and on an open one steps to its first row; ← closes it, or
@@ -252,20 +253,18 @@ pub fn cluster_counts(app: &App, id: ClusterId, aggregate: bool) -> (usize, usiz
     counts_where(app, |s| s.is_some_and(|s| scope.contains(&s)))
 }
 
-/// The token source an account (as work records it) belongs to.
-fn source_of(app: &App, account: &str) -> Option<String> {
-    app.pool_ids().into_iter().find(|p| app.accounts(p).iter().any(|a| a.id == account || a.label == account))
-}
-
-/// Running runs on token source `pool` — on one account of it, if given.
-fn running_on(app: &App, pool: &str, account: Option<&str>) -> usize {
-    census(app)
-        .iter()
-        .filter(|e| e.state == RippleState::Running)
-        .filter_map(|e| e.account.as_deref())
-        .filter(|a| source_of(app, a).as_deref() == Some(pool))
-        .filter(|a| account.is_none_or(|x| app.accounts(pool).iter().any(|v| v.id == x && (v.id == *a || v.label == *a))))
-        .count()
+/// **RUNNING ON ONE ACCOUNT OF THE POOL** — the daemon's own `threads/non-idle`
+/// roster, homed per account by the pool board's fold (V1.5, spec step 5): the
+/// connection already holds it (`seam::held::STANDING`). `None` — drawn `—`,
+/// never 0 — until the roster has arrived.
+fn running_on(pool: &crate::cauldron::live::Pool, card: Option<&crate::pool::model::Card>) -> Option<usize> {
+    if !pool.board.totals.roster_known {
+        return None;
+    }
+    Some(match card {
+        Some(c) => c.running(),
+        None => pool.board.totals.running,
+    })
 }
 
 /// Running runs on inference endpoint `id` (named `name`): a run records
@@ -274,17 +273,20 @@ fn running_on_endpoint(app: &App, id: &str, name: &str) -> usize {
     census(app).iter().filter(|e| e.state == RippleState::Running).filter_map(|e| e.account.as_deref()).filter(|a| *a == id || *a == name).count()
 }
 
-/// Whether the daemon has a pool type for token source `pool`. Codex has
-/// none yet (0142 unknowns: `pool.rs` has one variant): its band is greyed,
-/// closed and empty.
+/// Whether token source `pool` is live: only Claude Code is (R-V1 item 7,
+/// [`crate::cauldron::settings::inference_live`]); every other source's
+/// band is greyed, closed and empty.
 pub fn source_built(pool: &str) -> bool {
-    pool != "codex"
+    crate::cauldron::settings::inference_live(pool)
 }
 
 /// Whether the threads daemon answers: when it does not, running and parked
 /// are UNKNOWN (`—`, never 0) and pending, the cauldron's own, still shows.
+///
+/// V1.5: answered by the face's one connection (`live.rs`'s link state), never
+/// by a seed's `"link"`.
 pub fn threads_live(app: &App) -> bool {
-    app.dash.threads.link == "live"
+    app.live.is_up()
 }
 
 // ── the bands ─────────────────────────────────────────────────────────────
@@ -305,7 +307,8 @@ pub fn is_open(app: &App, key: &str) -> bool {
         k if k.starts_with("dev:") => true,
         // The Ledger: the newest dump open, the rest shut; inside a dump,
         // every ripple shows what it ran until he shuts it.
-        k if k.starts_with("ld:") => k[3..].parse::<u64>().ok() == crate::cauldron::ledger::dumps(&app.ledger, &app.sends.sends).first().map(|d| d.seq),
+        // (The view itself reads the ledger once and asks `ledger_open`.)
+        k if k.starts_with("ld:") => k[3..].parse::<u64>().ok() == crate::cauldron::ledger::newest(&crate::cauldron::ledger::dumps(&app.ledger, &app.sends.sends)),
         k if k.starts_with("lx:") => true,
         k => k.strip_prefix("tok:").is_some_and(source_built),
     };
@@ -460,32 +463,42 @@ pub fn view(app: &App, width: usize) -> SView {
     b.v
 }
 
-/// LEDGER (8e4fca10 msg 457): every dump a band, newest first — its number
-/// and first line, and on its header its state, how many ripples ran for it,
-/// when, and how long — and inside it the ripples it ran, nested to any
-/// depth, drawn as the Tasks tab draws its graph (`crate::cauldron::ledger`).
+/// LEDGER (8e4fca10 msg 457; V1.4, R-V1 item 4: "a time-linear list of
+/// dumps, styled as an event flow like a Claude Code thread ... NOT the
+/// expandable bands used elsewhere"): every dump an EVENT BLOCK, in time
+/// order ([`crate::cauldron::ledger::NEWEST_FIRST`]) — a state dot, `Dump N`
+/// (or `⟲ Fold · <thread>`) and its metadata; its words under the text
+/// column; and, under `⎿`, what ran: a stepped type 3's PHASES with the
+/// ripples each called, and every ripple's tree, its rails the spawn lines.
 fn ledger(b: &mut B) {
     use crate::cauldron::ledger;
     let app = b.app;
+    // ONE reading of the ledger per view (V1.4 G9): the newest is computed
+    // here, never per block.
     let dumps = ledger::dumps(&app.ledger, &app.sends.sends);
     if dumps.is_empty() {
         b.line(Line::from(muted("  no dump yet")));
         return;
     }
-    for d in &dumps {
+    let newest = ledger::newest(&dumps);
+    for (i, d) in dumps.iter().enumerate() {
+        if i > 0 {
+            b.line(Line::default());
+        }
         let key = format!("ld:{}", d.seq);
-        let all = d.all();
-        if !ledger_band(b, d, &key) {
+        let open = ledger_open(app, d.seq, newest);
+        ledger_block(b, d, &key, open);
+        if !open {
             continue;
         }
         if d.ripples.is_empty() {
             let s = b.v.lines.len();
-            b.line(Line::from(vec![Span::raw("    "), muted("◇ nothing has run for it yet")]));
+            b.line(Line::from(vec![Span::raw("  "), muted("⎿ "), muted("◇ nothing has run for it yet")]));
             b.item(s, format!("lx:{}:none", d.seq), Some(key.clone()), SAct::Show, None);
             continue;
         }
         // One column for every row's start, so the times line up.
-        let start_w = all.iter().map(|e| display_width(&ledger::when(ledger::started(d.at, e)))).max().unwrap_or(8);
+        let start_w = d.all().iter().map(|e| display_width(&ledger::when(ledger::started(d.at, e)))).max().unwrap_or(8);
         let n = d.ripples.len();
         for (i, e) in d.ripples.iter().enumerate() {
             ledger_rows(b, d, e, vec![i], &[i + 1 == n], &key, start_w);
@@ -493,13 +506,20 @@ fn ledger(b: &mut B) {
     }
 }
 
-/// A dump's band header, drawn as the Tasks tab draws a row (re-audit 10
-/// D3): the TITLE crops, the metadata stands — its state, how many ripples
-/// ran, when, how long. Where the whole of it does not fit beside `Dump N`,
-/// the time shortens, then the separators; only past that does it crop.
-fn ledger_band(b: &mut B, d: &crate::cauldron::ledger::Dump, key: &str) -> bool {
+/// Whether dump `seq`'s block is open, given the newest dump: the newest
+/// open, the rest shut, each as he toggled it.
+fn ledger_open(app: &App, seq: u64, newest: Option<u64>) -> bool {
+    (Some(seq) == newest) != app.stnav.contains(&format!("ld:{seq}"))
+}
+
+/// A dump's EVENT BLOCK head: line 1 a state dot, `Dump N` (a fold:
+/// `⟲ Fold · <thread>`) and the metadata flush right — the TITLE crops, the
+/// metadata stands (re-audit 10 D3: where the whole of it does not fit, the
+/// time shortens, then the separators; only past that does it crop); then
+/// the dump's words, muted, under the text column, at most two lines; shut,
+/// one `⎿` line saying how much ran. No chevron, no band style, no box.
+fn ledger_block(b: &mut B, d: &crate::cauldron::ledger::Dump, key: &str, open: bool) {
     use crate::cauldron::ledger;
-    let open = is_open(b.app, key);
     let state = d.state();
     let (g, st) = crate::cauldron::bus::state_glyph(state);
     let all = d.all();
@@ -525,41 +545,80 @@ fn ledger_band(b: &mut B, d: &crate::cauldron::ledger::Dump, key: &str) -> bool 
         }
         out
     };
-    let title = format!("Dump {}", d.seq);
-    // What `▾ Dump N` and the gap before the metadata leave it.
-    let room = b.w.saturating_sub(2 + display_width(&title) + 2);
+    let title = if d.thread.is_empty() { format!("Dump {}", d.seq) } else { format!("⟲ Fold · {}", d.thread) };
+    // What `● Dump N` and the gap before the metadata leave it; a fold's
+    // thread name is title, and crops before the metadata does.
+    let stands = if d.thread.is_empty() { display_width(&title) } else { display_width("⟲ Fold") };
+    let room = b.w.saturating_sub(2 + stands + 2);
     let mw = |m: &[Span<'static>]| m.iter().map(|s| display_width(&s.content)).sum::<usize>();
     let meta = [look::meta(parts(false)), look::meta(parts(true)), tight(parts(true))]
         .into_iter()
         .find(|m| mw(m) <= room)
         .unwrap_or_else(|| look::fit_spans(tight(parts(true)), room));
-    let left = vec![look::chevron(open), bold(title), Span::raw("  "), ink2(d.headline())];
+    let left = vec![Span::styled("● ", st), bold(title)];
     let s = b.v.lines.len();
     b.line(lr(left, meta, b.w));
+    for w in d.words() {
+        b.line(Line::from(vec![Span::raw("  "), muted(crop(&w, b.w.saturating_sub(2)))]));
+    }
+    if !open {
+        let phases: usize = d.ripples.iter().filter_map(ledger::Dump::phases).map(|(p, _)| p.len()).sum();
+        let mut sum = look::noun(all.len(), "ripple");
+        if phases > 0 {
+            sum.push_str(&format!(" · {}", look::noun(phases, "phase")));
+        }
+        b.line(Line::from(vec![Span::raw("  "), muted(crop(&format!("⎿ {sum}"), b.w.saturating_sub(2)))]));
+    }
     b.item(s, key.to_string(), None, SAct::Band, Some(Tag::thing("dump", &d.seq.to_string())));
-    open
 }
 
-/// One execution's row, then — while it is open — the rows of what it ran.
-/// `lasts[l]` says whether the row's ancestor at depth `l` (the row itself,
-/// last) is the last of its siblings: the rails the margin draws.
-fn ledger_rows(b: &mut B, d: &crate::cauldron::ledger::Dump, e: &crate::cauldron::ledger::Exec, path: Vec<usize>, lasts: &[bool], parent: &str, start_w: usize) {
-    use crate::cauldron::ledger;
-    let depth = path.len() - 1;
-    let key = format!("lx:{}:{}", d.seq, ledger::path_key(&path));
-    let open = is_open(b.app, &key);
+/// The rails of a row whose ancestors' last-ness is `lasts` (the row itself
+/// last): `│ ` where an ancestor's siblings run on, then `├─` or `╰─` to the
+/// row — the spawn line from what ran it.
+fn ledger_rail(lasts: &[bool]) -> String {
+    let depth = lasts.len() - 1;
     let mut margin = String::new();
-    for l in 1..depth {
-        margin.push_str(if lasts[l] { "  " } else { "│ " });
+    for l in lasts.iter().take(depth).skip(1) {
+        margin.push_str(if *l { "  " } else { "│ " });
     }
     if depth > 0 {
         margin.push_str(if lasts[depth] { "╰─" } else { "├─" });
     }
-    let (g, st) = crate::cauldron::bus::state_glyph(&e.state);
-    let g = if e.state == "pending" { "◇" } else { g };
-    let mut left = vec![Span::raw("    "), muted(margin), Span::styled(format!("{g} "), st), Span::styled(format!("{} ", ledger::type_glyph(e.kind)), palette::code()), bold(e.ripple.clone())];
-    if !e.children.is_empty() && !open {
-        left.push(muted(format!("  ▸ {} inside", look::noun(e.children.len(), "ripple"))));
+    margin
+}
+
+/// The four columns before a body row: `⎿` on the block's first (the
+/// corner, once), blank on the rest.
+fn ledger_lead(first: bool) -> Vec<Span<'static>> {
+    if first { vec![Span::raw("  "), muted("⎿ ")] } else { vec![Span::raw("    ")] }
+}
+
+/// A state's glyph on the Ledger: `bus::state_glyph`, pending `◇`.
+fn ledger_glyph(state: &str) -> (&'static str, Style) {
+    let (g, st) = crate::cauldron::bus::state_glyph(state);
+    (if state == "pending" { "◇" } else { g }, st)
+}
+
+/// One execution's row, then — while it is open — what it ran: a top-level
+/// stepped type 3 its PHASES (each step, the ripples it called under it),
+/// then the children no step called; any other, its children. `lasts[l]`
+/// says whether the row's ancestor at depth `l` (the row itself, last) is
+/// the last of its siblings: the rails the margin draws.
+fn ledger_rows(b: &mut B, d: &crate::cauldron::ledger::Dump, e: &crate::cauldron::ledger::Exec, path: Vec<usize>, lasts: &[bool], parent: &str, start_w: usize) {
+    use crate::cauldron::ledger;
+    let key = format!("lx:{}:{}", d.seq, ledger::path_key(&path));
+    let open = is_open(b.app, &key);
+    let phases = if path.len() == 1 { ledger::Dump::phases(e) } else { None };
+    let inside = phases.as_ref().map_or(e.children.len(), |(p, rest)| p.len() + rest.len());
+    let first = path == [0];
+    let (g, st) = ledger_glyph(&e.state);
+    let mut left = ledger_lead(first);
+    left.extend([muted(ledger_rail(lasts)), Span::styled(format!("{g} "), st), Span::styled(format!("{} ", ledger::type_glyph(e.kind)), palette::code()), bold(e.ripple.clone())]);
+    if inside > 0 && !open {
+        left.push(muted(match &phases {
+            Some((p, _)) => format!("  +{} inside", look::noun(p.len(), "phase")),
+            None => format!("  +{} inside", look::noun(e.children.len(), "ripple")),
+        }));
     }
     left.push(muted(format!("  {}", e.line)));
     let right = vec![
@@ -567,18 +626,67 @@ fn ledger_rows(b: &mut B, d: &crate::cauldron::ledger::Dump, e: &crate::cauldron
         ink2(format!("{}  ", col(&ledger::when(ledger::started(d.at, e)), start_w))),
         ink2(format!("{:>7}", ledger::took(e.ms))),
     ];
-    b.row(key.clone(), parent, left, right, SAct::Exec { seq: d.seq, path: path.clone(), inside: e.children.len() }, Some(Tag::thing("ripple", &e.ripple)));
+    b.row(key.clone(), parent, left, right, SAct::Exec { seq: d.seq, path: path.clone(), inside }, Some(Tag::thing("ripple", &e.ripple)));
     if !open {
         return;
     }
-    let n = e.children.len();
-    for (i, c) in e.children.iter().enumerate() {
+    let child = |b: &mut B, i: usize, last: bool, parent: &str| {
         let mut p = path.clone();
         p.push(i);
         let mut l = lasts.to_vec();
-        l.push(i + 1 == n);
-        ledger_rows(b, d, c, p, &l, &key, start_w);
+        l.push(last);
+        ledger_rows(b, d, &e.children[i], p, &l, parent, start_w);
+    };
+    match phases {
+        Some((steps, rest)) => {
+            let n = steps.len() + rest.len();
+            for (si, (step, calls)) in steps.iter().enumerate() {
+                let mut l = lasts.to_vec();
+                l.push(si + 1 == n);
+                let pk = ledger_phase(b, d, &path, si, step, &l, &key, start_w);
+                for (j, &ci) in calls.iter().enumerate() {
+                    let mut p = path.clone();
+                    p.push(ci);
+                    let mut ll = l.clone();
+                    ll.push(j + 1 == calls.len());
+                    ledger_rows(b, d, &e.children[ci], p, &ll, &pk, start_w);
+                }
+            }
+            for (j, &ci) in rest.iter().enumerate() {
+                child(b, ci, steps.len() + j + 1 == n, &key);
+            }
+        }
+        None => {
+            let n = e.children.len();
+            for i in 0..n {
+                child(b, i, i + 1 == n, &key);
+            }
+        }
     }
+}
+
+/// One PHASE of a dump: a step of its top-level type 3, a row under the
+/// ripple whose step it is — its state, its name, its line; flush right its
+/// state and how long it took, in the ripples' columns. Keyed
+/// `lp:<seq>:<ripple path>:<step>`; it only shows (S1 gives it no page).
+/// Returns its key, the parent of the ripples it called.
+#[allow(clippy::too_many_arguments)]
+fn ledger_phase(b: &mut B, d: &crate::cauldron::ledger::Dump, path: &[usize], si: usize, step: &crate::cauldron::ledger::Step, lasts: &[bool], parent: &str, start_w: usize) -> String {
+    use crate::cauldron::ledger;
+    let key = format!("lp:{}:{}:{si}", d.seq, ledger::path_key(path));
+    let (g, st) = ledger_glyph(&step.state);
+    let mut left = ledger_lead(false);
+    left.extend([muted(ledger_rail(lasts)), Span::styled(format!("{g} "), st), ink2(step.name.clone())]);
+    if !step.line.is_empty() {
+        left.push(muted(format!("  {}", step.line)));
+    }
+    let right = vec![
+        Span::styled(format!("{}  ", col(&step.state, 7)), status_style_exec(&step.state)),
+        ink2(format!("{}  ", col("", start_w))),
+        ink2(format!("{:>7}", if step.ms == 0 { String::new() } else { ledger::took(step.ms) })),
+    ];
+    b.row(key.clone(), parent, left, right, SAct::Show, None);
+    key
 }
 
 /// An execution's state word in its colour: running green, failed red,
@@ -889,132 +997,282 @@ fn recent_band(b: &mut B) {
     more(b, "runs", "recorded", runs.len() - n, 1);
 }
 
+/// The marks (§7) on the cells that make an account PLACEABLE — its identity
+/// and its credential: either one marked draws the account unavailable.
+fn unplaceable<'a>(marks: Option<&'a std::collections::BTreeMap<String, crate::cauldron::live::Mark>>) -> Option<&'a crate::cauldron::live::Mark> {
+    marks.and_then(|m| m.get("credential").or_else(|| m.get("identity")))
+}
+
+/// `3d 4h`, `2h 15m`, `12m` — from `now` to the daemon's `at` (a daemon
+/// timestamp drawn as a distance; nothing here decides when anything resets).
+fn until(now: chrono::DateTime<chrono::Utc>, at: chrono::DateTime<chrono::Utc>) -> String {
+    let m = (at - now).num_minutes().max(0);
+    let (d, h, mm) = (m / 1440, (m % 1440) / 60, m % 60);
+    match (d, h) {
+        (0, 0) => format!("{mm}m"),
+        (0, _) => format!("{h}h {mm:02}m"),
+        _ => format!("{d}d {h}h"),
+    }
+}
+
+/// The daemon's `pressure` number as it is drawn: two decimals at most, no
+/// trailing zeros (`1.7`, `0.85`, `2`). Never computed here.
+pub fn pressure_words(p: f64) -> String {
+    let s = format!("{p:.2}");
+    s.trim_end_matches('0').trim_end_matches('.').to_string()
+}
+
 /// An account's one state word: what explains why work is not running on
-/// it, shown once, as its state — never as a parked count (0142).
-fn account_state(on: bool, card: Option<&crate::cauldron::dash::Account>) -> Option<(String, Style)> {
-    if !on {
+/// it, shown once, as its state — never as a parked count (0142). Read off
+/// the daemon's cells (V1.5): its `disabled`, a §7 mark on its credential,
+/// `health`, the login slot, `limit`; else when its first axis resets.
+fn account_state(on: bool, card: &crate::pool::model::Card, marks: Option<&std::collections::BTreeMap<String, crate::cauldron::live::Mark>>, now: chrono::DateTime<chrono::Utc>) -> Option<(String, Style)> {
+    if !on || card.disabled() {
         return Some(("DISABLED".into(), palette::muted()));
     }
-    let c = card?;
-    if c.login == "EXPIRED" {
-        return Some(("LOGIN EXPIRED".into(), palette::amber()));
+    if unplaceable(marks).is_some() {
+        return Some(("UNAVAILABLE".into(), palette::amber()));
     }
-    if let Some(ax) = c.axes.iter().find(|a| a.pct >= 100) {
-        return Some((format!("AT LIMIT · back {}", ax.resets), palette::amber()));
+    if card.not_answering.is_some() {
+        return Some(("NOT ANSWERING".into(), palette::red()));
     }
-    c.axes.first().map(|a| (format!("resets {}", a.resets), palette::muted()))
+    if let Some((w, _)) = card.slot.warning().map(|_| card.slot.badge()) {
+        return Some((if w == "EXPIRED" { "LOGIN EXPIRED".into() } else { w }, palette::amber()));
+    }
+    // AT LIMIT is the DAEMON's `limit` cell (V1-CLEAN1, V1.5-I F5; spec:
+    // "Do not compute pressure, limits or resets in the face") — never a
+    // gauge read at 100 % beside it.
+    if let Some(u) = card.limit_until {
+        return Some((format!("AT LIMIT · back {}", until(now, u)), palette::amber()));
+    }
+    card.gauges.iter().find_map(|g| g.resets_at).map(|r| (format!("resets in {}", until(now, r)), palette::muted()))
 }
 
-/// Whether an account can take work now: on, logged in, under every limit.
-fn account_open(on: bool, card: Option<&crate::cauldron::dash::Account>) -> bool {
-    on && card.is_none_or(|c| c.login != "EXPIRED" && c.axes.iter().all(|a| a.pct < 100))
+/// Whether an account can take work now: on, placeable, answering, logged
+/// in, and not held at its limit by the daemon's `limit` cell (V1-CLEAN1:
+/// never worked out from a gauge here).
+fn account_open(on: bool, card: &crate::pool::model::Card, marks: Option<&std::collections::BTreeMap<String, crate::cauldron::live::Mark>>) -> bool {
+    on && !card.disabled()
+        && unplaceable(marks).is_none()
+        && card.not_answering.is_none()
+        && card.slot.warning().is_none()
+        && card.limit_until.is_none()
 }
 
+/// STATUS › TOKENS (R-V1 item 5, product spec §13): one band per token
+/// source; Claude Code's accounts are the REAL pool, read off this face's one
+/// connection to the threads daemon ([`crate::cauldron::live::Live::pool`]) —
+/// each a card, always expanded, with its session, weekly and fable meters
+/// off the `gauge` cell, the daemon's `pressure` verbatim, and its state in
+/// the daemon's words. Nothing on it comes from a seed.
 fn tokens(b: &mut B) {
     let app = b.app;
-    let pools = app.pool_ids();
-    let live = threads_live(app);
-    let n = |x: usize| if live { x.to_string() } else { "—".into() };
     // msg 235 (S3): one band per token source, at the top — no TOKENS band
     // around them (the sub-tab already says Tokens).
-    let board = &app.dash.threads;
-    for p in pools {
+    for p in app.pool_ids() {
+        if p == CLAUDE_CODE && source_built(&p) {
+            claude_code(b, &p);
+            continue;
+        }
+        // Every other source is greyed (R-V1 item 7): a source the daemon has
+        // no pool for runs nothing; what it holds is its accounts (msg 186
+        // V3: every band carries metadata).
         let key = format!("tok:{p}");
         let accts = app.accounts(&p);
-        let built = source_built(&p);
-        let r = running_on(app, &p, None);
-        let mut meta = Vec::new();
-        let name_style = if built { palette::ink().add_modifier(Modifier::BOLD) } else { palette::muted() };
-        if built {
-            meta.push(look::seg("▶", look::noun(n(r), "run"), "", if live && r > 0 { Tone::Good } else { Tone::Plain }));
-            {
-                let ons: Vec<bool> = accts.iter().map(|a| app.account_on(&p, &a.id)).collect();
-                let open = accts.iter().zip(&ons).filter(|(a, on)| account_open(**on, a.seed.filter(|_| p == CLAUDE_CODE).map(|i| &board.accounts[i]))).count();
-                meta.push(look::word(format!("{open} of {} accounts open", accts.len()), Tone::Plain));
-            }
-        } else {
-            // A source the daemon has no pool for runs nothing; what it
-            // holds is its accounts (msg 186 V3: every band carries metadata).
-            meta.push(look::seg("▶", look::noun(0, "run"), "", Tone::Plain));
-            meta.push(look::seg("", accts.len(), if accts.len() == 1 { "account" } else { "accounts" }, Tone::Plain));
-        }
+        let meta = vec![look::seg("▶", look::noun(0, "run"), "", Tone::Plain), look::seg("", accts.len(), if accts.len() == 1 { "account" } else { "accounts" }, Tone::Plain)];
         let tag = Some(Tag::thing("setting", &format!("pools.{p}")));
-        if !b.band(0, &key, None, vec![Span::styled(pool_label(&p), name_style)], look::meta(meta), tag) {
-            continue;
-        }
-        if !built {
-            continue;
-        }
-        let cells = b.w.saturating_sub(56).clamp(8, 24);
-        for a in accts {
-            let akey = format!("acct:{p}/{}", a.id);
-            let card = a.seed.filter(|_| p == CLAUDE_CODE).map(|i| &board.accounts[i]);
-            let on = app.account_on(&p, &a.id);
-            let r = running_on(app, &p, Some(&a.id));
-            let mut meta: Vec<Span<'static>> = vec![look::seg("▶", look::noun(n(r), "run"), "", if live && r > 0 { Tone::Good } else { Tone::Plain })];
-            if let Some(c) = card {
-                for ax in &c.axes {
-                    meta.push(look::word(format!("{} {}%", ax.axis, ax.pct), if ax.pct >= 90 { Tone::Warn } else { Tone::Plain }));
-                }
-            }
-            // Set up globally, not taken by this cauldron (msg 186).
-            let state = if on && !app.account_allowed(&p, &a.id) { Some(("NOT USED HERE".to_string(), palette::muted())) } else { account_state(on, card) };
-            let warn = state.as_ref().is_some_and(|(_, st)| *st == palette::amber());
-            if let Some((w, st)) = state {
-                meta.push(Span::styled(w, st));
-            }
-            let tag = Some(Tag::thing("setting", &format!("pools.{p}.accounts.{}", a.id)));
-            let name_style = if on { palette::ink().add_modifier(Modifier::BOLD) } else { palette::muted() };
-            // An account is a CARD (msg 186: "the cloud code and the accounts,
-            // each one of those can be a ... card ... let's just start with all
-            // of them being the same"): its border its state.
-            let border = if !on {
-                palette::muted()
-            } else if warn {
-                palette::amber()
-            } else if live && r > 0 {
-                palette::code()
-            } else {
-                palette::muted()
-            };
-            // Two columns in from the pool's title (0211 R4).
-            let body = b.card_fixed(2, &akey, Some(&key), vec![Span::styled(a.label.clone(), name_style)], look::meta(meta), border, tag);
-            {
-                let iw = look::inside(b.w.saturating_sub(4));
-                let mut rows: Vec<(String, Vec<Span<'static>>)> = Vec::new();
-                if let Some(c) = card {
-                    for ax in &c.axes {
-                        let tail = if ax.pct >= 100 { Span::styled(format!("   at the limit — back in {}", ax.resets), palette::amber()) } else { muted(format!("   resets in {}", ax.resets)) };
-                        rows.push((ax.axis.clone(), vec![Span::styled(meter(ax.pct, cells), if ax.pct >= 90 { palette::amber() } else { palette::ink() }), Span::styled(format!(" {:>3}%", ax.pct), palette::ink()), tail]));
-                    }
-                    rows.push(("login".into(), vec![Span::styled(c.login.clone(), if c.login == "EXPIRED" { palette::amber() } else { palette::ink() })]));
-                    if let Some(sub) = &c.subscription {
-                        rows.push(("subscription".into(), vec![Span::styled(sub.clone(), palette::ink())]));
-                    }
-                    // msg 235 (S4): tokens left over time left, this
-                    // account's alone — above 1 it is not on pace to spend
-                    // its week.
-                    let pressure = c.pressure();
-                    rows.push(("pressure".into(), vec![Span::styled(pressure.map_or("—".to_string(), |p| format!("{p:.2}x")), if pressure.is_some_and(|p| p > 1.0) { palette::code() } else { palette::ink() })]));
-                    let opp = match app.opportunistic(&p, &a) {
-                        Some(true) => "flagged",
-                        Some(false) => "not flagged",
-                        None => "—",
-                    };
-                    rows.push(("opportunistic".into(), vec![Span::styled(opp.to_string(), palette::ink())]));
-                }
-                rows.push(("running".into(), vec![Span::styled(n(r), if live && r > 0 { palette::code() } else { palette::ink() })]));
-                for l in look::table(rows, 0, iw) {
-                    b.line(l);
-                }
-                let s = b.v.lines.len();
-                b.line(Line::from(Span::styled("config ▸", palette::code())));
-                b.item(s, format!("cfg:{p}/{}", a.id), Some(akey.clone()), SAct::Config { pool: p.clone(), account: a.id.clone() }, None);
-            }
-            b.card_end(2, body - 1, body, border);
-        }
+        b.band(0, &key, None, vec![Span::styled(pool_label(&p), palette::muted())], look::meta(meta), tag);
     }
     endpoints(b);
+}
+
+/// Claude Code's band: the daemon's account pool, its cards always expanded.
+fn claude_code(b: &mut B, p: &str) {
+    let app = b.app;
+    let key = format!("tok:{p}");
+    let now = chrono::Utc::now();
+    let pool = app.live.pool();
+    let ready = pool.as_ref().filter(|x| x.known);
+    let dash = |x: Option<usize>| x.map_or("—".to_string(), |n| n.to_string());
+    let mut meta = Vec::new();
+    match ready {
+        Some(pl) => {
+            let r = running_on(pl, None);
+            meta.push(look::seg("▶", look::noun(dash(r), "run"), "", if r.is_some_and(|r| r > 0) { Tone::Good } else { Tone::Plain }));
+            let cards: Vec<_> = pl.board.cards.iter().collect();
+            let open = cards.iter().filter(|c| account_open(app.account_on(p, &crate::cauldron::menu::account_id(&c.label)), c, pl.marks.get(&c.label))).count();
+            // An account still loading is not counted as shut: until its row
+            // is here, how many are open is not known for it (never `0 of N`).
+            if !cards.is_empty() {
+                meta.push(look::word(format!("{open} of {} accounts open", cards.len()), Tone::Plain));
+            }
+            if !pl.loading.is_empty() {
+                meta.push(look::word(format!("{} loading", pl.loading.len()), Tone::Plain));
+            }
+        }
+        None => {
+            meta.push(look::seg("▶", look::noun("—", "run"), "", Tone::Plain));
+            let w = match (&pool, &app.live.store.link) {
+                (None, _) => "not connected",
+                (Some(_), tui_render::LinkState::Connected) => "loading",
+                (Some(_), tui_render::LinkState::Disconnected { .. }) => "down",
+                (Some(_), _) => "connecting",
+            };
+            meta.push(look::word(w, Tone::Plain));
+        }
+    }
+    let tag = Some(Tag::thing("setting", &format!("pools.{p}")));
+    if !b.band(0, &key, None, vec![Span::styled(pool_label(p), palette::ink().add_modifier(Modifier::BOLD))], look::meta(meta), tag) {
+        return;
+    }
+    let Some(pl) = ready else {
+        // Loading, or no connection: say which — never an empty band, never 0.
+        let why = match &pool {
+            // Loading only while the link is UP; a link still connecting or
+            // refused says so (a refused dial read as `loading` forever —
+            // measured, V1.5 frame-1).
+            Some(_) => match &app.live.store.link {
+                tui_render::LinkState::Connected => "loading the account pool…".to_string(),
+                tui_render::LinkState::Disconnected { reason, .. } => format!("threads is down: {reason}"),
+                _ => "connecting to the threads daemon…".to_string(),
+            },
+            None => app.live.why_not.clone().unwrap_or_else(|| "not connected to a threads daemon".into()),
+        };
+        b.line(Line::from(vec![Span::raw("  "), muted(why)]));
+        return;
+    };
+    if pl.board.cards.is_empty() && pl.loading.is_empty() {
+        b.line(Line::from(vec![Span::raw("  "), muted("the daemon holds no accounts")]));
+    }
+    let cells = b.w.saturating_sub(56).clamp(8, 24);
+    for c in &pl.board.cards {
+        let id = crate::cauldron::menu::account_id(&c.label);
+        let akey = format!("acct:{p}/{id}");
+        let marks = pl.marks.get(&c.label);
+        let on = app.account_on(p, &id);
+        let r = running_on(pl, Some(c));
+        let mut meta: Vec<Span<'static>> = vec![look::seg("▶", look::noun(dash(r), "run"), "", if r.is_some_and(|r| r > 0) { Tone::Good } else { Tone::Plain })];
+        if marks.and_then(|m| m.get("gauge")).is_none() {
+            for (g, (_, label)) in c.gauges.iter().zip(crate::pool::model::AXES) {
+                if let Some(pct) = g.pct {
+                    meta.push(look::word(format!("{label} {pct:.0}%"), if pct >= 90.0 { Tone::Warn } else { Tone::Plain }));
+                }
+            }
+        }
+        // Set up globally, not taken by this cauldron (msg 186).
+        let state = if on && !app.account_allowed(p, &id) { Some(("NOT USED HERE".to_string(), palette::muted())) } else { account_state(on, c, marks, now) };
+        let warn = state.as_ref().is_some_and(|(_, st)| *st == palette::amber() || *st == palette::red());
+        if let Some((w, st)) = state {
+            meta.push(Span::styled(w, st));
+        }
+        let tag = Some(Tag::thing("setting", &format!("pools.{p}.accounts.{id}")));
+        let lit = on && !c.disabled();
+        let name_style = if lit { palette::ink().add_modifier(Modifier::BOLD) } else { palette::muted() };
+        // An account is a CARD (msg 186), its border its state.
+        let border = if !lit {
+            palette::muted()
+        } else if warn {
+            palette::amber()
+        } else if r.is_some_and(|r| r > 0) {
+            palette::code()
+        } else {
+            palette::muted()
+        };
+        // Two columns in from the pool's title (0211 R4).
+        let body = b.card_fixed(2, &akey, Some(&key), vec![Span::styled(c.title(), name_style)], look::meta(meta), border, tag);
+        let iw = look::inside(b.w.saturating_sub(4));
+        let mut rows: Vec<(String, Vec<Span<'static>>)> = Vec::new();
+        match marks.and_then(|m| m.get("gauge")) {
+            Some(mk) => rows.push(("usage".into(), vec![Span::styled(mk.words(), palette::amber())])),
+            None => {
+                for (g, (_, label)) in c.gauges.iter().zip(crate::pool::model::AXES) {
+                    let row = match g.pct {
+                        Some(pct) => {
+                            let pc = pct.clamp(0.0, 100.0).round() as u32;
+                            // When the axis resets — the meter's own reading.
+                            // Whether the account is AT its limit is the
+                            // daemon's `limit` cell, drawn on the card's state
+                            // and `limit` row, never worked out from a full
+                            // meter (V1-CLEAN1, V1.5-I F5).
+                            let tail = match g.resets_at {
+                                Some(at) => muted(format!("   resets in {}", until(now, at))),
+                                None => muted(String::new()),
+                            };
+                            vec![Span::styled(meter(pc, cells), if pc >= 90 { palette::amber() } else { palette::ink() }), Span::styled(format!(" {pc:>3}%"), palette::ink()), tail]
+                        }
+                        // No reading on this axis: unknown, never 0.
+                        None => vec![muted(format!("{}  —   no reading", meter(0, cells).replace('░', " ")))],
+                    };
+                    rows.push((label.to_string(), row));
+                }
+            }
+        }
+        let login = match marks.and_then(|m| m.get("credential")) {
+            Some(mk) => Span::styled(mk.words(), palette::amber()),
+            None => {
+                let (mut w, t) = c.slot.badge();
+                // How long its login has left, off the daemon's
+                // `refresh_expires_at_ms` (the wire carries the instant; the
+                // face draws the distance).
+                if let (crate::pool::model::Slot::Live, Some(x)) = (&c.slot, c.login_expires) {
+                    w = format!("{w} · expires in {}", until(now, x));
+                }
+                Span::styled(w, match t {
+                    crate::pool::model::Tone::Bad => palette::red(),
+                    crate::pool::model::Tone::Warn => palette::amber(),
+                    crate::pool::model::Tone::Muted => palette::muted(),
+                    _ => palette::ink(),
+                })
+            }
+        };
+        rows.push(("login".into(), vec![login]));
+        if let Some(sub) = pl.subscriptions.get(&c.label) {
+            rows.push(("subscription".into(), vec![Span::styled(sub.clone(), palette::ink())]));
+        }
+        if let Some(why) = &c.not_answering {
+            rows.push(("health".into(), vec![Span::styled(format!("not answering: {why}"), palette::red())]));
+        }
+        if let Some(u) = c.limit_until {
+            rows.push(("limit".into(), vec![Span::styled(c.limit_prose.clone().unwrap_or_else(|| format!("back in {}", until(now, u))), palette::amber())]));
+        }
+        // msg 235 (S4): the daemon's ONE placement pressure (P15), verbatim —
+        // `∞` when the cell says `infinite` — never worked out here.
+        let pressure = match marks.and_then(|m| m.get("pressure")) {
+            Some(mk) => Span::styled(mk.words(), palette::amber()),
+            None if c.infinite => Span::styled("∞".to_string(), palette::code()),
+            None => match c.pressure {
+                Some(x) => Span::styled(pressure_words(x), if x > 1.0 { palette::code() } else { palette::ink() }),
+                None => muted(c.unranked_reason.clone().map_or("—".to_string(), |w| format!("— {w}"))),
+            },
+        };
+        rows.push(("pressure".into(), vec![pressure]));
+        // OPPORTUNISTIC (msg 235): its switch, and the daemon's pressure above 1.
+        let may = app.sget(&crate::cauldron::menu::Bound::new("pools.{pool}.accounts.{account}.opportunistic.enabled", crate::cauldron::settings::Ctx::account(p, &id))).val.as_bool() && on;
+        let opp = match (c.infinite, c.pressure) {
+            (true, _) => if may { "flagged" } else { "not flagged" },
+            (false, Some(x)) => if may && x > 1.0 { "flagged" } else { "not flagged" },
+            (false, None) => "—",
+        };
+        rows.push(("opportunistic".into(), vec![Span::styled(opp.to_string(), palette::ink())]));
+        rows.push(("running".into(), vec![Span::styled(dash(r), if r.is_some_and(|r| r > 0) { palette::code() } else { palette::ink() })]));
+        for l in look::table(rows, 0, iw) {
+            b.line(l);
+        }
+        let s = b.v.lines.len();
+        b.line(Line::from(Span::styled("config ▸", palette::code())));
+        b.item(s, format!("cfg:{p}/{id}"), Some(akey.clone()), SAct::Config { pool: p.to_string(), account: id.clone() }, None);
+        b.card_end(2, body - 1, body, border);
+    }
+    // Named by the daemon, its row not here yet: a card drawn LOADING (§6).
+    let every: Vec<&str> = pl.board.cards.iter().map(|c| c.label.as_str()).chain(pl.loading.iter().map(String::as_str)).collect();
+    for label in &pl.loading {
+        let id = crate::cauldron::menu::account_id(label);
+        let akey = format!("acct:{p}/{id}");
+        let tag = Some(Tag::thing("setting", &format!("pools.{p}.accounts.{id}")));
+        let body = b.card_fixed(2, &akey, Some(&key), vec![Span::styled(crate::pool::model::shown_among(label, every.iter().copied()), palette::muted())], look::meta(vec![look::word("loading", Tone::Plain)]), palette::muted(), tag);
+        b.line(Line::from(muted("loading…")));
+        b.card_end(2, body - 1, body, palette::muted());
+    }
 }
 
 /// INFERENCE ENDPOINTS (design 0199 D6: what a key has spent is Status's,
@@ -1035,7 +1293,10 @@ fn endpoints(b: &mut B) {
         look::seg("", seen.len(), if seen.len() == 1 { "endpoint" } else { "endpoints" }, Tone::Plain),
         look::word(format!("{used} used here"), Tone::Plain),
     ];
-    let name = vec![Span::styled("Inference endpoints", palette::ink().add_modifier(Modifier::BOLD))];
+    // No endpoint is live (R-V1 item 7): the band, its cards and their
+    // borders are greyed, as Codex's is; what they hold is still read.
+    let live_src = source_built("endpoints");
+    let name = vec![Span::styled("Inference endpoints", if live_src { palette::ink().add_modifier(Modifier::BOLD) } else { palette::muted() })];
     if !b.band(0, key, None, name, look::meta(meta), Some(Tag::thing("setting", "endpoints"))) {
         return;
     }
@@ -1059,7 +1320,7 @@ fn endpoints(b: &mut B) {
         if !on {
             meta.push(Span::styled(if app.ep_val(here, &id, "enabled").as_bool() { "NOT USED HERE" } else { "DISABLED" }, palette::muted()));
         }
-        let border = if !on {
+        let border = if !on || !live_src {
             palette::muted()
         } else if over {
             palette::amber()
@@ -1068,7 +1329,7 @@ fn endpoints(b: &mut B) {
         } else {
             palette::muted()
         };
-        let name_style = if on { palette::ink().add_modifier(Modifier::BOLD) } else { palette::muted() };
+        let name_style = if on && live_src { palette::ink().add_modifier(Modifier::BOLD) } else { palette::muted() };
         let ekey = format!("ep:{id}");
         let body = b.card_fixed(2, &ekey, Some(key), vec![Span::styled(app.ep_name(here, &id), name_style)], look::meta(meta), border, Some(Tag::thing("endpoint", &id)));
         let iw = look::inside(b.w.saturating_sub(4));
@@ -1374,10 +1635,10 @@ mod tests {
                 let head = rows.iter().find(|l| l.contains(&format!("Dump {} ", d.seq)) || l.contains(&format!("Dump {}…", d.seq))).unwrap_or_else(|| panic!("{w}: no Dump {}:\n{}", d.seq, rows.join("\n")));
                 assert!(has_all(head, d), "{w} columns, Dump {}: {head:?} lacks one of {:?}", d.seq, parts(d));
             }
-            if w == 50 {
-                let head = rows.iter().find(|l| l.contains("Dump 11")).unwrap();
-                assert!(!head.contains("Let's call them dumps, not batches."), "at 50 the title crops: {head:?}");
-            }
+            // The dump's words are its own line now (V1.4's event block),
+            // never on the head.
+            let hi = rows.iter().position(|l| l.contains("Dump 11")).unwrap();
+            assert!(!rows[hi].contains("Let's call them") && rows[hi + 1].contains("Let's call them"), "{w}: {:?}", &rows[hi..hi + 2]);
         }
     }
 
@@ -1392,10 +1653,11 @@ mod tests {
         for w in 30..=200usize {
             let v = view(&a, w);
             for d in &ds {
-                let head = v.lines.iter().map(text).find(|l| l.contains(&format!("Dump {}", d.seq))).unwrap_or_else(|| panic!("{w}: Dump {}", d.seq));
+                let hi = v.lines.iter().map(text).position(|l| l.contains(&format!("Dump {}", d.seq))).unwrap_or_else(|| panic!("{w}: Dump {}", d.seq));
+                let head = text(&v.lines[hi]);
                 assert!(display_width(&head) <= w, "{w}: {head:?}");
                 if w == 200 {
-                    assert!(head.contains(&d.headline()), "wide, the title is whole: {head:?}");
+                    assert!(text(&v.lines[hi + 1]).contains(&d.headline()), "wide, the words are whole under the head: {:?}", text(&v.lines[hi + 1]));
                 }
                 let tight: usize = parts(d).iter().map(|p| display_width(p)).sum::<usize>() + display_width(&ledger::when_short(d.at)) + 3;
                 if w >= 2 + display_width(&format!("Dump {}", d.seq)) + 2 + tight {

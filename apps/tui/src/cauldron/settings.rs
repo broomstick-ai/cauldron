@@ -519,6 +519,71 @@ pub const MODEL_MODES: &[&str] = &["any", "explicit"];
 pub const PERIODS: &[&str] = &["daily", "weekly", "monthly", "none"];
 pub const THRESHOLD_WORDS: &[&str] = &["park new", "park all"];
 
+/// Whether inference source `source` — a token source (`claude_code`,
+/// `codex`, a pool added here), an endpoint template (`openrouter` …
+/// `custom`), `local`, or an endpoint — is LIVE in this release (R-V1 item
+/// 7: "Claude Code only. All other endpoints are greyed out."; product spec
+/// §15). The ONE place that says so: every greying decision calls it. The
+/// endpoint model and its templates are kept for when they ungrey.
+pub fn inference_live(source: &str) -> bool {
+    source == crate::cauldron::menu::CLAUDE_CODE
+}
+
+/// The inference source setting `key` (a def's key, `{…}` unfilled) in
+/// `ctx` belongs to, if it belongs to one: every endpoint's setting (global
+/// or this cauldron's, their defaults, what a cauldron takes of one) is the
+/// `endpoints` source's — the same name the Config pages and acts on
+/// endpoints ask [`inference_live`] about — local inference's is `local`'s,
+/// and a pool's or its accounts' is that pool's.
+pub fn inference_source(key: &str, ctx: &Ctx) -> Option<String> {
+    if key.starts_with("endpoints.") || key.starts_with("cauldron.endpoints.") || key.starts_with("cauldron.use.") {
+        return Some("endpoints".into());
+    }
+    if key.starts_with("local.") {
+        return Some("local".into());
+    }
+    if key.starts_with("pools.{pool}.") || key.starts_with("cauldron.accounts.{pool}.") {
+        return Some(ctx.pool.clone());
+    }
+    None
+}
+
+/// Whether setting `key` (a def's key, `{…}` unfilled) in `ctx` belongs to
+/// an inference source that is not live ([`inference_live`]): an endpoint's
+/// (every endpoint, global or this cauldron's, and their defaults), what a
+/// cauldron takes of one, local inference, and a greyed pool's or its
+/// accounts'. Such a setting is shown greyed and never written here; what is
+/// on disk of it is kept untouched.
+pub fn greyed_key(key: &str, ctx: &Ctx) -> bool {
+    greyed_key_by(key, ctx, inference_live)
+}
+
+/// [`greyed_key`] with liveness asked of `live` instead of
+/// [`inference_live`] — so that un-greying a source, which is one line in
+/// `inference_live`, is provably what reaches its settings (V1.7b F4).
+pub fn greyed_key_by(key: &str, ctx: &Ctx, live: impl Fn(&str) -> bool) -> bool {
+    inference_source(key, ctx).is_some_and(|s| !live(&s))
+}
+
+/// Whether value `v` of setting `key` points work at a greyed source: a
+/// role's source other than `auto` or a live one, or a role's endpoint
+/// while endpoints are not live.
+pub fn greyed_value(key: &str, v: &Val) -> bool {
+    greyed_value_by(key, v, inference_live)
+}
+
+/// [`greyed_value`] with liveness asked of `live`.
+pub fn greyed_value_by(key: &str, v: &Val, live: impl Fn(&str) -> bool) -> bool {
+    match (key, v) {
+        ("roles.{role}.pool", Val::Str(p)) => p != "auto" && !live(p),
+        ("roles.{role}.endpoint", Val::Str(e)) => !e.is_empty() && e != "none" && !live("endpoints"),
+        _ => false,
+    }
+}
+
+/// What a refused act on a greyed source says.
+pub const GREYED: &str = "greyed: Claude Code is the only inference source";
+
 /// The template an endpoint of template `template` (and, for `local`,
 /// server `server`) prefills from.
 pub fn template(template: &str, server: &str) -> &'static Template {
@@ -729,7 +794,11 @@ pub static DEFS: &[Def] = &[
     // switch.
     d("pools.{pool}.model.{model}", "model", Ty::Toggle, "on", P),
     // ── §2.2 accounts ──
-    d("pools.{pool}.accounts.{account}.enabled", "account enabled", Ty::Toggle, "on", A).inh("pools.{pool}.accounts_enabled"),
+    // V1.6: the per-account GLOBAL DEFAULT every cauldron's `use in this
+    // cauldron` inherits (R-V1 item 6: "The global default is on. The default
+    // is configurable, for example off for work accounts"). The key is kept —
+    // stored settings outlive the word — and only its label says what it is.
+    d("pools.{pool}.accounts.{account}.enabled", "on in new cauldrons", Ty::Toggle, "on", A).inh("pools.{pool}.accounts_enabled"),
     d("pools.{pool}.accounts.{account}.share", "share", SHARE, "100", A),
     d("pools.{pool}.accounts.{account}.max_concurrent", "max concurrent", THREADS, "-1", A).inh("pools.{pool}.max_concurrent"),
     d("pools.{pool}.accounts.{account}.live_login", "live login", Ty::LiveLogin, "off", A),
@@ -1304,6 +1373,64 @@ impl Store {
         Ok(Store { vals, retired, kept, unknown, warnings, source: Some(text.to_string()) })
     }
 
+    /// Every value whose key starts `from` moved to start `to` instead
+    /// (V1-ACCT: an account's old id to its id now). A value already under
+    /// the new key wins and the old one is dropped. A key this build could
+    /// not read under the old spelling (a raw address as the id puts dots
+    /// inside one segment) is read under the new one when that is a setting.
+    /// Returns how many keys moved.
+    /// Every value under prefix `from` moved to the same suffix under EACH of
+    /// `tos` (an old id two accounts shared goes to both, V1-ACCT-I N2). A
+    /// value already under a target wins: callers move in precedence order,
+    /// so the first writer of a target is the one kept (N1). Returns how
+    /// many old entries moved, and how many target values a lower-precedence
+    /// one lost to (each dropped value, once per target).
+    fn move_prefix(&mut self, from: &str, tos: &[String]) -> (usize, usize) {
+        let (mut n, mut lost) = (0, 0);
+        let olds: Vec<String> = self.vals.keys().filter(|k| k.starts_with(from)).cloned().collect();
+        for old in olds {
+            let v = self.vals.remove(&old).expect("listed above");
+            for to in tos {
+                match self.vals.entry(format!("{to}{}", &old[from.len()..])) {
+                    std::collections::btree_map::Entry::Vacant(e) => {
+                        e.insert(v.clone());
+                    }
+                    std::collections::btree_map::Entry::Occupied(e) => lost += usize::from(*e.get() != v),
+                }
+            }
+            n += 1;
+        }
+        let mut keep = Vec::new();
+        for (k, v) in std::mem::take(&mut self.unknown) {
+            let Some(rest) = k.strip_prefix(from) else {
+                keep.push((k, v));
+                continue;
+            };
+            let parsed: Vec<(String, Val)> = tos.iter().filter_map(|to| {
+                let new = format!("{to}{rest}");
+                lookup(&new).and_then(|(def, _)| from_toml(def, &v).ok()).map(|val| (new, val))
+            }).collect();
+            if parsed.is_empty() {
+                keep.push((k, v));
+                continue;
+            }
+            for (new, val) in parsed {
+                match self.vals.entry(new) {
+                    std::collections::btree_map::Entry::Vacant(e) => {
+                        e.insert(val);
+                    }
+                    std::collections::btree_map::Entry::Occupied(e) => lost += usize::from(*e.get() != val),
+                }
+            }
+            n += 1;
+        }
+        self.unknown = keep;
+        if n > 0 {
+            self.warnings.retain(|w| !w.contains(&format!("`{from}")));
+        }
+        (n, lost)
+    }
+
     pub fn load(path: &Path) -> Result<Option<Store>> {
         match std::fs::read_to_string(path) {
             Ok(s) => Ok(Some(Store::parse(&s, &path.display().to_string())?)),
@@ -1546,6 +1673,54 @@ pub struct AccountsFile {
     pub removed: Vec<String>,
 }
 
+/// `accounts.json`'s entries under an old account id moved to the new one
+/// ([`Settings::adopt_account_ids`]): a rename keyed `{pool}/{old}` (one
+/// already under the new id wins), a removal, an added account's id.
+/// Returns how many moved.
+fn move_account_ids(f: &mut AccountsFile, pool: &str, moves: &[(String, Vec<String>)]) -> usize {
+    let mut n = 0;
+    for (old, nows) in moves {
+        let ok = format!("{pool}/{old}");
+        // A rename (a label he gave) and a removal go to every account that
+        // shared the old id (V1-ACCT-I N2); the first, in precedence order,
+        // is kept (N1).
+        if let Some(r) = f.renamed.remove(&ok) {
+            for now in nows {
+                f.renamed.entry(format!("{pool}/{now}")).or_insert_with(|| r.clone());
+            }
+            n += 1;
+        }
+        if f.removed.contains(&ok) {
+            f.removed.retain(|x| *x != ok);
+            for now in nows {
+                let nk = format!("{pool}/{now}");
+                if !f.removed.contains(&nk) {
+                    f.removed.push(nk);
+                }
+            }
+            n += 1;
+        }
+    }
+    // An added account carries its own label: its id is that label's, never
+    // whichever account came first to claim a shared old id.
+    let olds: Vec<&String> = moves.iter().map(|(o, _)| o).collect();
+    let mut i = 0;
+    while i < f.accounts.len() {
+        let a = &f.accounts[i];
+        if a.pool == pool && olds.contains(&&a.id) && crate::cauldron::menu::legacy_account_ids(&a.label).contains(&a.id) {
+            let now = crate::cauldron::menu::account_id(&a.label);
+            n += 1;
+            if f.accounts.iter().any(|b| b.pool == pool && b.id == now) {
+                f.accounts.remove(i);
+                continue;
+            }
+            f.accounts[i].id = now;
+        }
+        i += 1;
+    }
+    n
+}
+
 /// One flip of an account's opportunistic flag (0057 `opportunistic_mode`):
 /// when, which account, which way, and what changed to cause it.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -1624,6 +1799,10 @@ pub struct Settings {
     /// never re-adopted from the stale copy (0211 R1).
     held_on_disk: std::cell::Cell<bool>,
     writable: bool,
+    /// What [`Settings::adopt_account_ids`] decided that he should be told:
+    /// an old id two accounts shared, a value dropped for a newer one. Masked
+    /// names only. The face takes them as a notice.
+    pub adoption_notes: Vec<String>,
 }
 
 impl Settings {
@@ -1671,7 +1850,13 @@ impl Settings {
             adopted: Vec::new(),
             held_on_disk: std::cell::Cell::new(false),
             writable,
+            adoption_notes: Vec::new(),
         };
+        // This install's digest key, beside the settings it keys (V1-ACCT2):
+        // created by the first face that may write here.
+        if let Err(e) = crate::pool::model::install_key::bind(global_dir, writable) {
+            tracing::warn!(error = %e, "the install's account-id key could not be read or written: ids are this process's only");
+        }
         let own_file = Store::load(&s.path())?;
         let from_file = own_file.is_some();
         s.cauldron = match own_file {
@@ -1847,6 +2032,125 @@ impl Settings {
             }
             Ok(())
         })
+    }
+
+    /// **MOVE WHAT WAS STORED UNDER AN ACCOUNT'S OLD ID TO ITS ID NOW**
+    /// (V1-ACCT, V1-CLEAN2-I B1). An account id is a persisted key, and an
+    /// address-keyed account's id changed from the slug of its address to
+    /// [`crate::cauldron::menu::account_id`]'s digest form; without this, a
+    /// switch he set (`enabled = false`) sat under the old id and was
+    /// silently ignored. For each of `labels` (the account keys of `pool`
+    /// this face knows), every value under one of its
+    /// [`crate::cauldron::menu::legacy_account_ids`] — global
+    /// `pools.{pool}.accounts.{old}.*`, this cauldron's
+    /// `cauldron.accounts.{pool}.{old}.*`, `accounts.json`'s `{pool}/{old}`
+    /// rename and removal and an added account's id, and the live-login
+    /// pointer — is moved to the new id and written ONCE. A value already
+    /// under the new id wins (he set it since); the old one is then dropped.
+    /// Returns how many entries moved; 0 means nothing was written. On the
+    /// `--dump` path the move lives in this face only.
+    pub fn adopt_account_ids(&mut self, pool: &str, labels: &[String]) -> Result<usize> {
+        use crate::cauldron::menu::{account_id, legacy_account_ids};
+        // Every old id, with EVERY account that had it, in precedence order
+        // (`legacy_account_ids`' rank first, then the roster's order — which
+        // decides nothing, since a shared id goes to all of its accounts).
+        let per: Vec<(String, Vec<String>)> = labels.iter().map(|l| (account_id(l), legacy_account_ids(l))).collect();
+        let mut moves: Vec<(String, Vec<String>)> = Vec::new();
+        for rank in 0..per.iter().map(|(_, o)| o.len()).max().unwrap_or(0) {
+            for (now, olds) in &per {
+                let Some(old) = olds.get(rank) else { continue };
+                match moves.iter_mut().find(|(o, _)| o == old) {
+                    Some((_, nows)) => {
+                        if !nows.contains(now) {
+                            nows.push(now.clone());
+                        }
+                    }
+                    None => moves.push((old.clone(), vec![now.clone()])),
+                }
+            }
+        }
+        if moves.is_empty() {
+            return Ok(0);
+        }
+        let name = |now: &str| {
+            let keys: Vec<&str> = labels.iter().map(String::as_str).collect();
+            labels.iter().find(|l| account_id(l) == now).map(|l| crate::pool::model::shown_among(l, keys.iter().copied())).unwrap_or_else(|| now.to_string())
+        };
+        let mut moved = 0;
+        let mut lost_total = 0;
+        // The two settings files.
+        for global in [true, false] {
+            let store = if global { &mut self.global } else { &mut self.cauldron };
+            let mut n = 0;
+            for (old, nows) in &moves {
+                let (from, tos): (String, Vec<String>) = if global {
+                    (format!("pools.{pool}.accounts.{old}."), nows.iter().map(|now| format!("pools.{pool}.accounts.{now}.")).collect())
+                } else {
+                    (format!("cauldron.accounts.{pool}.{old}."), nows.iter().map(|now| format!("cauldron.accounts.{pool}.{now}.")).collect())
+                };
+                let (m, lost) = store.move_prefix(&from, &tos);
+                n += m;
+                lost_total += lost;
+                if m > 0 && nows.len() > 1 {
+                    let who: Vec<String> = nows.iter().map(|x| name(x)).collect();
+                    self.adoption_notes.push(format!("one old account id held settings for {} accounts ({}): each now has them", nows.len(), who.join(", ")));
+                }
+            }
+            if n > 0 {
+                moved += n;
+                if global {
+                    self.save_global()?;
+                } else {
+                    self.save()?;
+                }
+            }
+        }
+        if lost_total > 0 {
+            self.adoption_notes.push(format!(
+                "{lost_total} account setting(s) were stored under more than one old id: the newest form's value was kept (the id written since, then the pre-salt digest id, then the raw key, then the plain slug)"
+            ));
+        }
+        // The live-login pointer, `{pool}/{id}`: it names ONE account. A
+        // shared old id cannot say which, so it goes to the first of them in
+        // byte order of their labels (deterministic, said in a notice).
+        if let Some(ll) = self.live_login() {
+            if let Some((_, nows)) = moves.iter().find(|(old, _)| ll == format!("{pool}/{old}")) {
+                let mut cands: Vec<(&String, String)> = labels.iter().filter(|l| nows.contains(&account_id(l))).map(|l| (l, account_id(l))).collect();
+                cands.sort();
+                if let Some((_, now)) = cands.first() {
+                    if cands.len() > 1 {
+                        self.adoption_notes.push(format!("the live login named an old id {} accounts shared: it now names {}", cands.len(), name(now)));
+                    }
+                    self.set(self::def("identity.live_login"), &Ctx::default(), Val::Str(format!("{pool}/{now}")))?;
+                    moved += 1;
+                }
+            }
+        }
+        // `accounts.json`: its renames and removals by `{pool}/{id}`, and an
+        // added account's own id.
+        let owed = |f: &AccountsFile| {
+            moves.iter().any(|(old, _)| {
+                let k = format!("{pool}/{old}");
+                f.renamed.contains_key(&k) || f.removed.contains(&k) || f.accounts.iter().any(|a| a.pool == pool && a.id == *old)
+            })
+        };
+        if owed(&self.accounts_file) {
+            if !self.writable {
+                // --dump: the move lives in this face only.
+                let mut f = self.accounts_file.clone();
+                moved += move_account_ids(&mut f, pool, &moves);
+                self.added = f.accounts.clone();
+                self.accounts_file = f;
+            } else {
+                let mut n = 0;
+                self.update_accounts(|f| {
+                    n = move_account_ids(f, pool, &moves);
+                    Ok(())
+                })?;
+                moved += n;
+            }
+        }
+        Ok(moved)
     }
 
     /// Remove account `id` from `pool`: an account added here is deleted, a
@@ -2192,7 +2496,7 @@ impl Settings {
     /// so it inherits every value from the pool. Refused when its id is
     /// taken. Returns the new account's id.
     pub fn add_account(&mut self, pool: &str, label: &str, taken: impl Fn(&str) -> bool) -> Result<String> {
-        let id = crate::cauldron::store::slug(label);
+        let id = crate::cauldron::menu::account_id(label.trim());
         if id.is_empty() {
             bail!("an account needs a name with a letter or a digit in it");
         }
@@ -2320,7 +2624,7 @@ impl Settings {
 const HELP: &[(&str, &str)] = &[
     ("cauldron.enabled", "Whether this cauldron is enabled. Disabled, nothing new starts anywhere in it: no ripple, no task, no seeding. What is running finishes. A cluster cannot be disabled on its own. Changing it asks first."),
     ("cauldron.opportunistic", "Whether this cauldron takes advantage of the accounts flagged opportunistic: parked work here may spend them freely. Each account's own answer inherits this one."),
-    (".allowed", "Whether this cauldron may place work on this account. The account itself is set up once, on the Providers tab, for every cauldron; this switch only says whether THIS cauldron uses it. Inherit takes the account's own switch there."),
+    (".allowed", "Whether this cauldron may place work on this account. The account itself is logged in once, on the Accounts tab, for every cauldron; this switch only says whether THIS cauldron uses it. Inherit takes the account's `on in new cauldrons` there."),
     ("cauldron.accounts.{pool}.{account}.weekly_threshold_pct", "When this account's weekly window reaches this share, this cauldron stops placing new work on it. off: never stop for the week."),
     ("cauldron.accounts.{pool}.{account}.opportunistic", "Whether this cauldron takes advantage of this account while it is flagged opportunistic."),
     ("endpoints.defaults.budget_period", "The period a new endpoint's budget runs over until it is given its own: daily, weekly, monthly, or none (a total that never resets)."),
@@ -2365,7 +2669,7 @@ const HELP: &[(&str, &str)] = &[
     (".accounts_enabled", "Whether this source's accounts are on: every account set to inherit takes this."),
     (".models", "The models this source offers. A role can only be given a model some source offers."),
     (".model.{model}", "Whether this detected model may be used. Off, no role is given it from this source."),
-    (".accounts.{account}.enabled", "Whether this cauldron uses this account at all. Off, nothing new is placed on it; what runs on it finishes."),
+    (".accounts.{account}.enabled", "Whether a cauldron uses this account unless it says otherwise: every cauldron's `use in this cauldron` set to inherit takes this. On by default; turn it off for an account most cauldrons should leave alone — a work account — and switch it on in the one cauldron that may use it. Whether the threads daemon places work on the account at all is `in the pool`, its own switch."),
     (".share", "This account's share of the work its source places, against the other accounts' shares."),
     (".live_login", "This account is the machine's own login: the one a plain claude on this machine uses. Exactly one account can be."),
     (".note", "Your note on this account, shown wherever the account is."),
@@ -2480,7 +2784,7 @@ pub fn help(def: &Def) -> String {
         (_, Some(p)) if p.starts_with("cauldron.") => " Inherit takes this cauldron's.",
         (_, Some(p)) if p.starts_with("endpoints.{ep}.") => " Inherit takes the endpoint's own, on the Providers tab.",
         (_, Some(p)) if p.starts_with("endpoints.defaults.") => " Inherit takes the default under the endpoints table.",
-        (_, Some(p)) if def.key.starts_with("cauldron.") && p.starts_with("pools.") => " Inherit takes the account's own, on the Providers tab.",
+        (_, Some(p)) if def.key.starts_with("cauldron.") && p.starts_with("pools.") => " Inherit takes the account's own, on the Accounts tab.",
         (Level::Account, Some(_)) => " Inherit takes its token source's.",
         (Level::Pool, Some(_)) => " Inherit takes the global default.",
         _ => "",

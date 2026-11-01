@@ -327,20 +327,27 @@ fn j4_the_config_default_is_named_aggregated_clusters() {
     let d = tui::cauldron::settings::def("ui.aggregate_default");
     assert_eq!(d.label, "Aggregated clusters");
     let mut a = open_at(&scratch_root());
-    a.set_ctab(CTab::Config);
-    a.cfg_tab = tui::cauldron::menu::CfgTab::Tui;
+    a.set_ctab(CTab::Settings);
+    a.set_cfg_tab(tui::cauldron::menu::CfgTab::Tui);
     let s = render_to_text(&mut a, 140, 50).unwrap().join("\n");
     assert!(s.contains("Aggregated clusters") && !s.contains("include everything below"), "{s}");
 }
 
 /// At 50 columns the cauldrons dropdown is whole, never cropped into the tabs.
+/// V1.1: the environment bar (row 1) holds five tabs, so `prod` is whole from
+/// 53 columns (the spec's floor is 60); narrower its NAME crops, never a tab
+/// and never the `▾`.
 #[test]
 fn j8_the_top_bar_at_50_columns() {
     let mut a = open_at(&scratch_root());
-    for w in [40u16, 50, 56, 60, 80, 140] {
-        let top = render_to_text(&mut a, w, 20).unwrap()[0].clone();
+    // V1-CLEAN1 (V1.1-I §3): the `|| w < 46` arm that excused 40 columns is
+    // gone — below the spec's 60-column floor only 50 is held, and held whole.
+    let top = render_to_text(&mut a, 50, 20).unwrap()[1].clone();
+    assert!(top.contains('▾') && top.ends_with("Permissions|Settings"), "50: {top:?}");
+    for w in [56u16, 60, 80, 140] {
+        let top = render_to_text(&mut a, w, 20).unwrap()[1].clone();
         assert!(top.contains(" prod  ▾"), "{w}: {top:?}");
-        assert!(w < 46 || top.contains("Config"), "{w}: {top:?}");
+        assert!(top.contains("Settings"), "{w}: {top:?}");
         assert!(!top.contains("prCauldron") && !top.contains("prSurface"), "{w}: {top:?}");
         // 8e4fca10 msg 457: no product name; the environment leads.
         assert!(top.starts_with("  prod  ▾") || top.starts_with(" prod  ▾"), "{w}: {top:?}");
@@ -358,7 +365,7 @@ fn j8_the_top_bar_at_50_columns() {
 fn h8_con1_says_which_tabs_carry_a_count() {
     let mut a = open_at(&scratch_root());
     let s = render_to_text(&mut a, 140, 50).unwrap();
-    assert!(s[2].contains("Questions 3 | Actions 1 | Tasks |"), "{}", s[2]);
+    assert!(s[3].contains("Questions 3 | Actions 1 | Tasks |"), "{}", s[3]);
     let seed = std::fs::read_to_string(seed_dir().join("clusters.json")).unwrap();
     assert!(seed.contains("No numbers on the cauldron's tabs; only Questions and Actions carry a count."));
     assert!(!seed.contains("only Tasks carries a count"));

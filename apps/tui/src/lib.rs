@@ -141,6 +141,9 @@ pub mod first_run;
 pub mod cauldron;
 pub mod index;
 pub mod input;
+/// The face's `TUI_LOG` filter, with the wire-frame targets capped at
+/// `debug` (V1-ACCT-I N4).
+pub mod log_filter;
 /// **THE FACE'S HALF OF THE SEAM** — everything this crate supplies to
 /// [`seam`], or does with what it hands back. The place every face-specific
 /// decision lives, so the seam itself can stay a copy.

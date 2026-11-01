@@ -39,11 +39,17 @@ fn env_in(root: &Path, name: &str) -> Environment {
 
 fn open_in(root: &Path, name: &str) -> App {
     std::env::set_var("CAULDRON_TYPE_ONE", "off");
-    App::open(env_in(root, name), seed_dir(), true).expect("seed loads")
+    crate::live_pool::seeded(App::open(env_in(root, name), seed_dir(), true).expect("seed loads"))
 }
 
 fn open() -> App {
     open_in(&scratch_root(), "prod")
+}
+
+/// The face over the fixture seed with NO stand-in daemon behind it yet.
+fn open_plain() -> App {
+    std::env::set_var("CAULDRON_TYPE_ONE", "off");
+    App::open(env_in(&scratch_root(), "prod"), seed_dir(), true).expect("seed loads")
 }
 
 fn key(code: KeyCode) -> Event {
@@ -58,7 +64,7 @@ fn screen(a: &mut App) -> String {
 }
 
 fn config(a: &mut App, path: &str) {
-    a.set_ctab(CTab::Config);
+    a.set_ctab(CTab::Settings);
     a.focus = tui::cauldron::app::Focus::Content;
     a.snav = Nav::cauldron();
     a.rows[SETTINGS_ROW] = 0;
@@ -196,8 +202,9 @@ fn v6_a_table_is_rows_on_one_colour_parted_by_the_apps_with_a_chevron() {
     a.rows[SETTINGS_ROW] = 0;
     let s = screen(&mut a);
     let (head, hx) = at(&s, "account   ");
-    let (r1, x1) = at(&s, "sam-broomstick");
-    let (r2, x2) = at(&s, "acct2 ");
+    // V1.6: the daemon's order (its keys): acct2, acct3, sam-broomstick.
+    let (r1, x1) = at(&s, "acct2 ");
+    let (r2, x2) = at(&s, "acct3 ");
     assert_eq!((x1, x2), (hx, hx), "the names left-aligned under `account`\n{s}");
     assert_eq!(r1, head + 1);
     assert_eq!(r2, r1 + 2, "one row's edge between two rows");
@@ -248,7 +255,7 @@ fn v7_no_titled_rule_anywhere() {
         }
     };
     for t in CfgTab::ALL {
-        a.set_ctab(CTab::Config);
+        a.set_ctab(CTab::Settings);
         a.set_cfg_tab(t);
         for _ in 0..12 {
             let closed: Vec<_> = a.entries().into_iter().filter(|f| f.open == Some(false)).filter_map(|f| f.entry.band()).collect();
@@ -308,16 +315,17 @@ fn v8_an_always_expanded_band_has_a_dot_and_never_closes() {
 fn c1_c2_five_tabs_the_last_this_cauldron_and_the_global_ones_kept_once() {
     let root = scratch_root();
     let mut a = open_in(&root, "prod");
-    a.set_ctab(CTab::Config);
+    a.set_ctab(CTab::Settings);
     let s = screen(&mut a);
-    assert!(s.contains(" prod cauldron | TUI | Devices | Providers | Permissions "), "{s}");
+    // V1.1: no sub-tab strip; the pages are root tabs on the two bars.
+    assert!(s.lines().next().unwrap().ends_with("TUI | Devices | Providers | Accounts") && s.lines().nth(1).unwrap().ends_with("Permissions | Settings"), "{s}");
     let tab = |a: &App, p: SPage| CfgTab::ALL.into_iter().find(|t| a.page_entries(&t.root()).iter().any(|e| e.band() == Some(p.clone())));
     for (p, t) in [
         (SPage::Attention, CfgTab::Tui),
         (SPage::Machine, CfgTab::Devices),
         (SPage::Storage, CfgTab::Devices),
         (SPage::Mesh, CfgTab::Devices),
-        (SPage::Pool("claude_code".into()), CfgTab::Providers),
+        (SPage::Pool("claude_code".into()), CfgTab::Accounts),
         (SPage::Identity, CfgTab::Permissions),
         (SPage::Use, CfgTab::Cauldron),
         (SPage::Roles, CfgTab::Cauldron),
@@ -373,7 +381,7 @@ fn c3_the_first_setting_is_cauldron_enabled_enabled_or_disabled() {
     let root = scratch_root();
     let mut a = open_in(&root, "prod");
     config(&mut a, "cauldron");
-    a.rows[SETTINGS_ROW] = 1;
+    a.rows[SETTINGS_ROW] = 0;
     assert!(matches!(a.settings_entry(), Some(Entry::Set(b)) if b.key == "cauldron.enabled"));
     let s = screen(&mut a);
     let row = s.lines().find(|l| l.contains("cauldron enabled")).unwrap();
@@ -381,7 +389,7 @@ fn c3_the_first_setting_is_cauldron_enabled_enabled_or_disabled() {
     assert!(row.contains(" enabled  disabled ") && row.contains("default enabled"), "{row}");
     // A click on `disabled` asks; Enter does it.
     screen(&mut a);
-    let (r, _) = *a.hits.iter().find(|(_, h)| *h == Hit::Opt { row: 1, cell: 0, opt: 1 }).expect("`disabled` is a click target");
+    let (r, _) = *a.hits.iter().find(|(_, h)| *h == Hit::Opt { row: 0, cell: 0, opt: 1 }).expect("`disabled` is a click target");
     press(&mut a, r.x + 1, r.y);
     assert!(matches!(&a.modal, Some(Modal::Confirm { .. })), "{:?}", a.modal);
     a.handle(key(KeyCode::Enter));
@@ -440,7 +448,11 @@ fn c5_c8_a_subscription_source_is_flat_and_codex_is_the_same() {
         assert_eq!(models, a.detected_models(p), "{p}");
         assert!(!models.is_empty());
     }
-    assert_eq!(a.row_head(&SPage::Account("codex".into(), "sam-codex".into())), a.row_head(&SPage::Account("claude_code".into(), "acct2".into())));
+    // V1.6: the same table, Claude Code's with the daemon's `in the pool`
+    // beside its name.
+    let mut codex = a.row_head(&SPage::Account("codex".into(), "sam-codex".into()));
+    codex.insert(1, "in the pool");
+    assert_eq!(codex, a.row_head(&SPage::Account("claude_code".into(), "acct2".into())));
 }
 
 // ── C6 ────────────────────────────────────────────────────────────────────
@@ -499,7 +511,7 @@ fn c7_opportunistic_is_a_per_account_switch_and_a_cauldron_setting() {
     // No Opportunistic band anywhere on Config.
     let mut a = a;
     for t in CfgTab::ALL {
-        a.set_ctab(CTab::Config);
+        a.set_ctab(CTab::Settings);
         a.set_cfg_tab(t);
         assert!(!a.page_entries(&t.root()).iter().any(|e| matches!(e, Entry::Sub { label, .. } if label.contains("pportunistic"))), "{t:?}");
     }
@@ -517,11 +529,13 @@ fn c7_opportunistic_is_a_per_account_switch_and_a_cauldron_setting() {
 
 /// S4 (msg 235: "tokens remaining ratio over time ... you want it to be
 /// bigger when there are more tokens available, and you want it to be
-/// bigger when there's less time available"): an account's pressure is its
+/// bigger when there's less time available"): the SEED's pressure model
+/// (`dash::Account::pressure`, what Config's seed rows still read) is its
 /// own, deterministic — (1 − weekly used) ÷ (hours to its weekly reset ÷
-/// 168) — and never relative to the other accounts.
+/// 168) — and never relative to the other accounts. Status no longer works
+/// pressure out at all (V1.5): the test below holds that.
 #[test]
-fn s4_pressure_is_tokens_left_over_time_left() {
+fn s4_the_seeds_pressure_is_tokens_left_over_time_left() {
     use tui::cauldron::dash::{Account, Axis};
     let acct = |pct: u32, resets: &str| Account {
         number: 1,
@@ -540,13 +554,44 @@ fn s4_pressure_is_tokens_left_over_time_left() {
     assert!(p(30, "2d") > p(60, "2d"), "more tokens, more pressure");
     assert_eq!(acct(10, "0m").pressure(), None, "no time left: no reading");
     assert_eq!(Account { axes: Vec::new(), ..acct(1, "1d") }.pressure(), None);
-    // On Status, each card shows its own, to two places.
-    let mut a = open();
+}
+
+/// S4 on Status (V1.5; V1-CLEAN1, V1.5-I F3): each card prints the DAEMON's
+/// `pressure` cell, never the seed's tokens-over-time. The stand-in daemon
+/// is made to say numbers the seed's own reading would NOT give (sam-broomstick
+/// 7.25, acct2 0.07 — the seed works out 1.3 and 0.41), so a face that
+/// computed pressure, or read the seed, cannot pass: the two sources differ
+/// by construction (asserted first, as the sentinel).
+#[test]
+fn s4_status_prints_the_daemons_pressure_cell_not_the_seeds_reading() {
+    let said = |k: &str| match k {
+        "sam-broomstick" => Some(7.25),
+        "acct2" => Some(0.07),
+        _ => None,
+    };
+    let mut a = open_plain();
+    let seeds: Vec<(String, Option<f64>)> = a.dash.threads.accounts.iter().map(|x| (x.label.clone(), x.pressure())).collect();
+    for (k, p) in &seeds {
+        if let (Some(d), Some(p)) = (said(k), p) {
+            assert!((d - p).abs() > 0.1, "sentinel: the daemon's {k} ({d}) differs from the seed's ({p})");
+        }
+    }
+    assert_eq!(seeds.iter().filter(|(k, p)| said(k).is_some() && p.is_some()).count(), 2, "sentinel: both seed readings exist: {seeds:?}");
+    crate::live_pool::seed_live_with(&mut a, |f| {
+        if let Some(d) = f["key"].as_str().and_then(said) {
+            f["row"]["pressure"]["pressure"] = serde_json::json!(d);
+        }
+    });
     a.set_ctab(CTab::Status);
     a.set_sttab(StatusTab::Tokens);
     let s = screen(&mut a);
-    assert!(s.lines().any(|l| l.contains("pressure") && l.contains("1.30x")), "{s}");
-    assert!(s.lines().any(|l| l.contains("pressure") && l.contains("0.41x")), "{s}");
+    let pressures: Vec<&str> = s.lines().filter(|l| l.contains("pressure") && l.contains('│')).flat_map(|l| l.split_whitespace()).collect();
+    for w in ["7.25", "0.07"] {
+        assert!(pressures.contains(&w), "the daemon's {w} is not printed:\n{s}");
+    }
+    for w in ["1.3", "0.41"] {
+        assert!(!pressures.contains(&w), "the seed's {w} is printed:\n{s}");
+    }
 }
 
 /// S3 (look): one band per token source, each account's card always open
@@ -563,12 +608,12 @@ fn s3_account_cards_are_always_open() {
     for k in [KeyCode::Right, KeyCode::Left, KeyCode::Enter] {
         a.rows[0] = i;
         a.handle(key(k));
-        assert!(screen(&mut a).contains("login         │ 4d"), "{k:?} leaves it open");
+        assert!(screen(&mut a).contains("login         │ login ok · expires in 4d"), "{k:?} leaves it open");
     }
     a.rows[0] = i;
     screen(&mut a);
     let (r, _) = *a.hits.iter().find(|(_, h)| *h == Hit::Row(i)).unwrap();
     a.last_click = None;
     press(&mut a, r.x + 4, r.y);
-    assert!(screen(&mut a).contains("login         │ 4d"), "a click leaves it open");
+    assert!(screen(&mut a).contains("login         │ login ok · expires in 4d"), "a click leaves it open");
 }

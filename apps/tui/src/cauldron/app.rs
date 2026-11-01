@@ -38,14 +38,49 @@ use crate::cauldron::tags::{self, Tag};
 /// to Cauldron", and "instead of getting rid of the threads tab there at the
 /// top, let's just call it agents" — CAULDRON | AGENTS | STATUS | CONFIG.
 /// the release plan's environment bar names it THREADS again (REL-6,
-/// settling PRODUCT-SPEC (b)-Q3): CAULDRON | THREADS | STATUS | CONFIG.
+/// settling product spec (b)-Q3): CAULDRON | THREADS | STATUS | CONFIG.
+///
+/// V1.1 (release plan R-V1 item 1: *"Global, on top: Config, with TUI,
+/// devices, providers and accounts. Environment, below: Cauldron, Threads,
+/// Status, Permissions."*; product spec §12: *"two tab bars like on top of
+/// each other ... different colors"*): there is no Config tab any more. The
+/// GLOBAL bar, on top, is Config — TUI · Devices · Providers · Accounts — and
+/// the ENVIRONMENT bar under it, scoped by the dropdown at its left, is
+/// Cauldron · Threads · Status · Permissions · Settings (Settings is this
+/// environment's own page, the one Config called `<name> cauldron`; V1
+/// Q-B1). Exactly one tab is shown, in either bar. The settings pages
+/// ([`crate::cauldron::menu::CfgTab`]) are still drawn by the menu's page
+/// renderers; only their addressing changed: each is a root tab now.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CTab {
     Cauldron,
     Threads,
     Status,
-    Config,
+    Permissions,
+    Settings,
+    Tui,
+    Devices,
+    Providers,
+    Accounts,
 }
+
+/// Which of the two tab bars a tab is on (V1.1).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Bar {
+    /// The top bar: Config, every environment shares it.
+    Global,
+    /// The bar under it, scoped by the environment dropdown at its left.
+    Env,
+}
+
+/// Every tab that shows a settings page ([`CTab::page`]), as a pattern: the
+/// arms that were `CTab::Config` before V1.1.
+macro_rules! page_tabs {
+    () => {
+        CTab::Permissions | CTab::Settings | CTab::Tui | CTab::Devices | CTab::Providers | CTab::Accounts
+    };
+}
+pub(crate) use page_tabs;
 
 /// The cauldron tabs' former names, and what each is now: `surface` before
 /// 8e4fca10 msg 457, `agents` before REL-6. Typed (a flag) they are REFUSED,
@@ -54,15 +89,61 @@ pub enum CTab {
 /// his data outlives the word.
 pub const CTAB_RENAMED: &[(&str, CTab)] = &[("surface", CTab::Cauldron), ("agents", CTab::Threads)];
 
+/// The tab `config` was before V1.1, as this face STORED it (a setting, a
+/// reference's origin): Config opened on its first tab, this cauldron's own
+/// page, which is Settings now. Typed, `--tab config` is refused (V1.1 G5).
+pub const CTAB_CONFIG_WAS: CTab = CTab::Settings;
+
 impl CTab {
-    pub const ALL: [CTab; 4] = [CTab::Cauldron, CTab::Threads, CTab::Status, CTab::Config];
+    /// Every tab, the environment bar's first and then the global bar's: the
+    /// order ⇧Tab and F1 … F9 go through them.
+    pub const ALL: [CTab; 9] = [CTab::Cauldron, CTab::Threads, CTab::Status, CTab::Permissions, CTab::Settings, CTab::Tui, CTab::Devices, CTab::Providers, CTab::Accounts];
+    /// The environment bar, left to right, after the dropdown.
+    pub const ENV: [CTab; 5] = [CTab::Cauldron, CTab::Threads, CTab::Status, CTab::Permissions, CTab::Settings];
+    /// The global bar, left to right.
+    pub const GLOBAL: [CTab; 4] = [CTab::Tui, CTab::Devices, CTab::Providers, CTab::Accounts];
     pub fn label(self) -> &'static str {
         match self {
             CTab::Cauldron => "Cauldron",
             CTab::Threads => "Threads",
             CTab::Status => "Status",
-            CTab::Config => "Config",
+            CTab::Permissions => "Permissions",
+            CTab::Settings => "Settings",
+            CTab::Tui => "TUI",
+            CTab::Devices => "Devices",
+            CTab::Providers => "Providers",
+            CTab::Accounts => "Accounts",
         }
+    }
+    /// The bar it is on.
+    pub fn bar(self) -> Bar {
+        if Self::GLOBAL.contains(&self) {
+            Bar::Global
+        } else {
+            Bar::Env
+        }
+    }
+    /// The settings page it shows, if it is one (every tab but Cauldron,
+    /// Threads and Status).
+    pub fn page(self) -> Option<crate::cauldron::menu::CfgTab> {
+        use crate::cauldron::menu::CfgTab;
+        Some(match self {
+            CTab::Cauldron | CTab::Threads | CTab::Status => return None,
+            CTab::Permissions => CfgTab::Permissions,
+            CTab::Settings => CfgTab::Cauldron,
+            CTab::Tui => CfgTab::Tui,
+            CTab::Devices => CfgTab::Devices,
+            CTab::Providers => CfgTab::Providers,
+            CTab::Accounts => CfgTab::Accounts,
+        })
+    }
+    /// Whether it shows a settings page.
+    pub fn is_page(self) -> bool {
+        self.page().is_some()
+    }
+    /// The tab that shows settings page `p`.
+    pub fn of_page(p: crate::cauldron::menu::CfgTab) -> CTab {
+        Self::ALL.into_iter().find(|t| t.page() == Some(p)).expect("every page is a tab")
     }
     pub fn parse(s: &str) -> Option<Self> {
         Self::ALL.into_iter().find(|t| t.label().eq_ignore_ascii_case(s))
@@ -71,9 +152,10 @@ impl CTab {
     pub fn renamed(s: &str) -> Option<Self> {
         CTAB_RENAMED.iter().find(|(old, _)| old.eq_ignore_ascii_case(s)).map(|(_, t)| *t)
     }
-    /// A tab as this face stored it: today's name, or its old one.
+    /// A tab as this face stored it: today's name, or its old one (`config`
+    /// is [`CTAB_CONFIG_WAS`]).
     pub fn stored(s: &str) -> Option<Self> {
-        Self::parse(s).or_else(|| Self::renamed(s))
+        Self::parse(s).or_else(|| Self::renamed(s)).or_else(|| s.eq_ignore_ascii_case("config").then_some(CTAB_CONFIG_WAS))
     }
     fn index(self) -> usize {
         Self::ALL.iter().position(|t| *t == self).expect("in ALL")
@@ -330,7 +412,9 @@ pub enum Hit {
     BucketDivider,
     Item(usize),
     Row(usize),
-    /// Sub-tab `.0` of the strip on a cauldron tab (Status, Config).
+    /// Sub-tab `.0` of the strip on a cauldron tab (Status; V1.1: the
+    /// settings pages have none, each is a root tab of its own). A root tab
+    /// is [`Hit::CTab`], whose tab names its bar ([`CTab::bar`]).
     Strip(u8),
     /// A title the DEV rename reaches by a double click (msg 235): the
     /// sidebar's title, a box's legend. Tabs are reached by their own hits.
@@ -416,6 +500,12 @@ pub enum Modal {
     Picker { for_: crate::cauldron::menu::PickFor, title: String, options: Vec<String>, selected: usize },
     /// Naming an account to add to a pool.
     AddAccount { pool: String, name: String, error: Option<String> },
+    /// V1.6: a login through the threads daemon (`+ add account`, or an
+    /// account's `log in`): its stage, and the code being typed — drawn as
+    /// dots, never as itself, and redacted from `{:?}` (V1-ACCT: `Modal`
+    /// derives `Debug`; [`crate::cauldron::accounts::LoginCode`] does not
+    /// print what it holds). `tag` tells its replies from a login he left.
+    Login { title: String, stage: crate::cauldron::accounts::LoginStage, code: crate::cauldron::accounts::LoginCode, tag: u64 },
     /// Typing an item to add to a list setting.
     AddItem { list: Bound, name: String, error: Option<String> },
     /// A name (or a path) a management act needs: renaming a cluster or an
@@ -511,9 +601,10 @@ pub const KEYMAP: &[(&str, &str)] = &[
     ("click", "a setting, band or button acts at once · else select, and click again to open"),
     ("click, on Cauldron", "its reference at the caret, in place of the one there · double click: a quote"),
     ("drag a ⣿", "resize the sidebar · the bucket"),
-    ("⇧Tab · F1 … F4", "next cauldron tab · Cauldron · Threads · Status · Config"),
-    ("→ ←, on a sub-tab strip · click one", "the next / previous sub-tab (Status, Config)"),
-    ("^T", "disable or enable the cauldron (asks first; also `cauldron enabled`, Config's last tab)"),
+    ("⇧Tab · F1 … F9", "next tab: the environment bar's, then the global bar's"),
+    ("⌥⇧Tab", "to the other bar: the tab last shown there"),
+    ("→ ←, on a sub-tab strip · click one", "the next / previous sub-tab (Status)"),
+    ("^T", "disable or enable the cauldron (asks first; also `cauldron enabled`, on Settings)"),
     ("Tab · ⌥1 … ⌥6 · ⌥, ⌥.", "next cluster tab · a cluster tab · previous / next"),
     ("Space", "flip a switch (a setting, an account)"),
     ("h · click its ⓘ", "what a setting means"),
@@ -556,6 +647,8 @@ pub const KEYMAP: &[(&str, &str)] = &[
 pub enum TabKey {
     Cauldron(usize),
     CauldronStep(isize),
+    /// ⌥⇧Tab (V1.1): to the other bar — the tab last shown there.
+    OtherBar,
     Cluster(usize),
     ClusterStep(isize),
 }
@@ -594,6 +687,7 @@ pub fn tab_key(key: &KeyEvent) -> Option<TabKey> {
     let digit = |c: char| c.to_digit(10).filter(|d| *d >= 1).map(|d| d as usize - 1);
     match key.code {
         KeyCode::F(n @ 1..=12) => Some(TabKey::Cauldron(n as usize - 1)),
+        KeyCode::BackTab if m.contains(KeyModifiers::ALT) => Some(TabKey::OtherBar),
         KeyCode::BackTab => Some(TabKey::CauldronStep(1)),
         KeyCode::Tab if m.contains(KeyModifiers::SHIFT) => Some(TabKey::CauldronStep(1)),
         KeyCode::Char(c) if m.contains(KeyModifiers::ALT) && !m.contains(KeyModifiers::CONTROL) => match c {
@@ -607,6 +701,37 @@ pub fn tab_key(key: &KeyEvent) -> Option<TabKey> {
             OPTION_DIGITS.iter().position(|&o| o == c).map(TabKey::Cluster)
         }
         _ => None,
+    }
+}
+
+/// V1.8: one step of a human action being filled in: the values typed so
+/// far (by field name, in memory only) and the field taking keys.
+#[derive(Debug)]
+pub struct HaEntry {
+    pub cluster: ClusterId,
+    pub serial: u32,
+    pub step: usize,
+    pub values: Vec<(String, crate::cauldron::route::Secret)>,
+    /// The field taking keys, by name; none once the selection left it for
+    /// another part of the same step.
+    pub editing: Option<String>,
+}
+
+impl HaEntry {
+    /// The value typed into field `name`, if any.
+    pub fn value(&self, name: &str) -> Option<&crate::cauldron::route::Secret> {
+        self.values.iter().find(|(n, _)| n == name).map(|(_, v)| v)
+    }
+
+    fn value_mut(&mut self, name: &str) -> &mut crate::cauldron::route::Secret {
+        let i = match self.values.iter().position(|(n, _)| n == name) {
+            Some(i) => i,
+            None => {
+                self.values.push((name.to_string(), crate::cauldron::route::Secret::new()));
+                self.values.len() - 1
+            }
+        };
+        &mut self.values[i].1
     }
 }
 
@@ -793,8 +918,12 @@ pub struct App {
     pub settings: Settings,
     /// Which bands of the cauldron's Config tab are open.
     pub snav: Nav,
-    /// The cauldron Config's tab: Cauldron or Global (msg 186).
+    /// The settings page last shown (V1.1: while a page tab is shown, the
+    /// page it shows — [`CTab::page`]; [`App::set_ctab`] keeps them one).
     pub cfg_tab: crate::cauldron::menu::CfgTab,
+    /// The tab last shown on the OTHER bar from the one shown: where ⌥⇧Tab
+    /// goes (V1.1).
+    pub other_tab: CTab,
     /// Which bands of the Status tab he has turned from their default.
     pub stnav: HashSet<String>,
     /// The Status tab's sub-tab (msg 186).
@@ -820,6 +949,14 @@ pub struct App {
     /// What he has done on the human actions' steps here: the fields
     /// submitted and the steps marked done (never a value he typed).
     pub tickets: crate::cauldron::tickets::Store,
+    /// V1.8: the values being typed into ONE step of a human action, in
+    /// memory only — never a draft on disk. Cleared on Submit, on Esc, when
+    /// the selection leaves the step, and with the cauldron (a switch opens
+    /// a new face, which starts with none).
+    pub ha_entry: Option<HaEntry>,
+    /// V1.8: where a `route: keychain` value is put. The machine's keychain;
+    /// a test puts its own here and never touches the login keychain.
+    pub keychain: std::sync::Arc<dyn crate::cauldron::route::Keychain>,
     /// Seedings in flight: each runs OFF the UI loop and lands on a quiet
     /// tick ([`App::poll_seeding`]).
     pub seeding: Vec<PendingSeed>,
@@ -832,6 +969,15 @@ pub struct App {
     /// The name and boundaries the open new-cluster modal opened with: ← at
     /// the start of a field still holding that (or nothing) leaves the modal.
     new_cluster_opened: (String, String),
+    /// **THE FIRST-RUN SCREEN** (V1.2): this root has no environment at all,
+    /// so the face shows one action, `+ create your first cauldron`, and
+    /// nothing else. `Some(live)`: `live` is whether a cauldron may be made
+    /// from it (false on `--dump`). While it is on, the App behind it was
+    /// opened with nothing written (`persist` false), so no environment is
+    /// made behind his back.
+    pub first_run: Option<bool>,
+    /// Where the last frame drew the first-run action (a click there is Enter).
+    pub first_run_at: Rect,
 }
 
 /// One git read of every registered repo: each repo's worktrees.
@@ -962,6 +1108,7 @@ impl App {
             snav: Nav::cauldron(),
             // Config opens on its first tab, this cauldron's (b964d571 msg 23).
             cfg_tab: crate::cauldron::menu::CfgTab::Cauldron,
+            other_tab: CTab::Tui,
             stnav: HashSet::new(),
             // Status opens on its first sub-tab, Tokens (b964d571 msg 23).
             sttab: crate::cauldron::status::StatusTab::Ledger,
@@ -973,10 +1120,14 @@ impl App {
             dev_names,
             watch: store::Watch::now(&dir, &global),
             tickets,
+            ha_entry: None,
+            keychain: std::sync::Arc::new(crate::cauldron::route::SystemKeychain::login()),
             seeding: Vec::new(),
             orphans_looked: std::time::Instant::now(),
             new_cluster_kept: None,
             new_cluster_opened: (String::new(), String::new()),
+            first_run: None,
+            first_run_at: Rect::default(),
             threads: Default::default(),
             live: crate::cauldron::live::Live::detached(String::new()),
             live_door: None,
@@ -1033,7 +1184,7 @@ impl App {
         let seed = store::DumpSeed::load(&app.seeds, &app.env.name)?;
         app.seed_draft = seed.draft;
         app.sends.seed(seed.dumps);
-        app.ledger = crate::cauldron::ledger::Seed::load(&app.seeds, &app.env.name, &store::soup_dir(&app.env)?)?;
+        app.ledger = crate::cauldron::ledger::Seed::load(crate::cauldron::ledger::fixtures(&app.seeds, &app.env), &app.env.name, &store::soup_dir(&app.env)?)?;
         let mut text = app.draft.load()?;
         if !app.draft.exists() {
             text = app.seed_draft.clone();
@@ -1054,7 +1205,62 @@ impl App {
         if let Err(e) = app.sends.adopt_old_log() {
             app.error = Some(format!("taking in an older face's dumps: {e:#}"));
         }
+        // The environment the face opens on next time nobody names one
+        // (V1.2, Q-F1): this one. The face's own UI state; never on --dump.
+        if persist {
+            if let Err(e) = store::write_last_env(&app.env) {
+                app.error = Some(format!("recording the last cauldron: {e:#}"));
+            }
+        }
+        app.land_on_first_cluster();
+        // V1-ACCT: a seed or added account's settings under its old id move
+        // to its id now (the daemon's roster follows when it is in).
+        app.adopt_account_ids();
         Ok(app)
+    }
+
+    /// **The first-run screen** (V1.2): `env`'s root has no environment, so
+    /// the face opens on one action, `+ create your first cauldron`. The App
+    /// behind it writes nothing (`persist` false), so no environment is made
+    /// by opening it; `live` says whether the action may make one (false on
+    /// `--dump`).
+    pub fn open_first_run(env: Environment, seeds: PathBuf, live: bool) -> Result<Self> {
+        let mut app = App::open(env, seeds, false)?;
+        app.first_run = Some(live);
+        Ok(app)
+    }
+
+    /// **The first cluster** (V1.2): a cauldron with no cluster of its own
+    /// opens with the sidebar's root `+` selected and the focus on it — its
+    /// one prominent action, no sentence. Enter on it names the first cluster.
+    pub fn land_on_first_cluster(&mut self) {
+        let Ok(dir) = store::soup_dir(&self.env) else { return };
+        if store::has_no_cluster(&self.seeds, &self.env.name, &dir) {
+            self.on_add_root = true;
+            self.on_below = false;
+            self.focus = Focus::Tree;
+        }
+    }
+
+    /// Keys and presses on the first-run screen, while no modal is open:
+    /// Enter (or a click on the action) names the first cauldron; ^C and `q`
+    /// leave. Everything else does nothing — there is nothing else here.
+    fn first_run_event(&mut self, event: &Event) {
+        match event {
+            Event::Key(k) if k.kind != KeyEventKind::Release => match k.code {
+                KeyCode::Enter | KeyCode::Right => self.modal = Some(Modal::NewCauldron { name: String::new(), error: None }),
+                KeyCode::Char('c') if k.modifiers.contains(KeyModifiers::CONTROL) => self.quit = true,
+                KeyCode::Char('q') if k.modifiers.is_empty() => self.quit = true,
+                _ => {}
+            },
+            Event::Mouse(MouseEvent { kind: MouseEventKind::Down(MouseButton::Left), column, row, .. }) => {
+                let r = self.first_run_at;
+                if *column >= r.x && *column < r.right() && *row >= r.y && *row < r.bottom() {
+                    self.modal = Some(Modal::NewCauldron { name: String::new(), error: None });
+                }
+            }
+            _ => {}
+        }
     }
 
     // ── cauldrons ──────────────────────────────────────────────────────────
@@ -1073,6 +1279,7 @@ impl App {
         next.ktab = self.ktab;
         next.sttab = self.sttab;
         next.cfg_tab = self.cfg_tab;
+        next.other_tab = self.other_tab;
         next.bands = std::mem::take(&mut self.bands);
         next.snav = std::mem::replace(&mut self.snav, Nav::cauldron());
         next.stnav = std::mem::take(&mut self.stnav);
@@ -1089,6 +1296,7 @@ impl App {
         next.collapsed = collapsed.iter().filter_map(|k| next.forest.find(k)).collect();
         next.focus = self.focus;
         next.back_to = self.back_to;
+        next.land_on_first_cluster();
         next.notice = Some(format!("cauldron → {name}"));
         // **REL-6d: THE THREADS CONNECTION FOLLOWS THE CAULDRON.** The old
         // environment's connection is torn down first (its runtime, socket
@@ -1101,7 +1309,7 @@ impl App {
         drop(std::mem::replace(&mut self.live, crate::cauldron::live::Live::detached(String::new())));
         next.live_door = self.live_door.take();
         *self = next;
-        if self.ctab == CTab::Threads {
+        if self.shows_live() {
             self.start_live();
         }
         Ok(())
@@ -1192,6 +1400,29 @@ impl App {
     fn create_cauldron(&mut self) {
         let Some(Modal::NewCauldron { name, .. }) = &self.modal else { return };
         let name = name.trim().to_string();
+        if let Some(live) = self.first_run {
+            // The first cauldron: made through the same path `+ new` takes,
+            // then the face opens on it, as itself (V1.2).
+            let made = if name.is_empty() {
+                Err(anyhow::anyhow!("a cauldron needs a name"))
+            } else if !live {
+                Err(anyhow::anyhow!("nothing is created by --dump"))
+            } else {
+                store::create_env(&self.env, &name).and_then(|env| App::open(env, self.seeds.clone(), true))
+            };
+            match made {
+                Ok(next) => {
+                    *self = next;
+                    self.notice = Some(format!("created {name}"));
+                }
+                Err(e) => {
+                    if let Some(Modal::NewCauldron { error, .. }) = &mut self.modal {
+                        *error = Some(format!("{e:#}"));
+                    }
+                }
+            }
+            return;
+        }
         let made = if name.is_empty() {
             Err(anyhow::anyhow!("a cauldron needs a name"))
         } else if !self.persist {
@@ -1202,7 +1433,7 @@ impl App {
         match made {
             Ok(()) => {
                 self.modal = None;
-                self.set_ctab(CTab::Config);
+                self.set_ctab(CTab::Settings);
                 self.notice = Some(format!("created {name}"));
             }
             Err(e) => {
@@ -1611,11 +1842,14 @@ impl App {
         if matches!(self.modal, Some(Modal::Bus { .. })) {
             return self.bus_modal_key(key);
         }
+        if matches!(self.modal, Some(Modal::Login { .. })) {
+            return self.login_key(key);
+        }
         let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
         let Some(modal) = self.modal.as_mut() else { return };
         match modal {
             // Routed to `row_modal_key`, `chip_modal_key` and `bus_modal_key` above.
-            Modal::Settings { .. } | Modal::Chip { .. } | Modal::Bus { .. } => {}
+            Modal::Settings { .. } | Modal::Chip { .. } | Modal::Bus { .. } | Modal::Login { .. } => {}
             Modal::Help { .. } => match key.code {
                 KeyCode::Esc | KeyCode::Left | KeyCode::Enter | KeyCode::Right | KeyCode::Char('h' | 'q') => self.modal = None,
                 _ => {}
@@ -1739,7 +1973,11 @@ impl App {
                     // One level back: to the cauldrons it was opened from.
                     Some(Modal::NewCauldron { .. }) => {
                         self.modal = None;
-                        self.open_cauldrons();
+                        // On the first-run screen there are no cauldrons
+                        // to go back to: back to its one action.
+                        if self.first_run.is_none() {
+                            self.open_cauldrons();
+                        }
                     }
                     _ => self.modal = None,
                 },
@@ -2720,7 +2958,9 @@ impl App {
         let key = &self.forest.get(cluster).key;
         let Some(st) = t.steps.get(step) else { return false };
         let resolved = self.forest.get(cluster).human_action(serial).is_some_and(|h| h.status == crate::cauldron::model::HaStatus::Resolved);
-        resolved || self.tickets.is_done(key, serial, &st.slug)
+        // V1.8: a value step whose every field reached its destination.
+        let routed = st.fields().next().is_some() && st.fields().all(|f| self.tickets.is_submitted(key, serial, &f.name));
+        resolved || routed || self.tickets.is_done(key, serial, &st.slug)
     }
 
     /// Enter (or →) on part `part` of a human action's steps.
@@ -2747,13 +2987,28 @@ impl App {
                     _ => "done".into(),
                 });
             }
-            // 0217 B2: a value is never taken here. This face has no
-            // destination for one (the human-action contract writes a
-            // submitted value to its PROJECT's registered write target, and
-            // a cluster's ticket names none), so a box that took it would
-            // only pretend to: it said `✓ submitted` and dropped the key.
-            Part::Field { field, .. } => {
-                self.notice = Some(format!("{}: not taken here — this face has nowhere to store a value; give it in the human-actions app, then mark the step done", field.label));
+            // V1.8 (R-V1 item 8; product spec §9 supersedes 0217 B2): the
+            // value is TAKEN, in a masked input, and goes only where its
+            // fence's `route:` says. A field the validator refuses takes no
+            // keys at all; nor does one that names no destination.
+            Part::Field { field, step } => {
+                use crate::cauldron::route::Route;
+                if let Some(r) = crate::cauldron::tickets::field_reject(&field) {
+                    self.notice = Some(format!("refused: {r}"));
+                    return;
+                }
+                if field.route == Route::Unset {
+                    self.notice = Some(format!("{}: its ticket names no destination (route:), so this face takes no value for it", field.label));
+                    return;
+                }
+                let same = self.ha_entry.as_ref().is_some_and(|e| e.cluster == cluster && e.serial == serial && e.step == step);
+                if !same {
+                    self.ha_entry = Some(HaEntry { cluster, serial, step, values: Vec::new(), editing: None });
+                }
+                if let Some(e) = self.ha_entry.as_mut() {
+                    e.editing = Some(field.name.clone());
+                }
+                self.notice = Some(format!("{} → {} · Enter submits · Esc clears", field.label, field.route.word()));
             }
             Part::Done { step } => {
                 let st = &t.steps[step];
@@ -2762,6 +3017,169 @@ impl App {
                     Ok(()) => self.notice = Some(format!("{} {}", if st.title.is_empty() { "the step" } else { &st.title }, if on { "done" } else { "not done" })),
                     Err(e) => self.error = Some(format!("the step NOT marked: {e:#}")),
                 }
+            }
+        }
+    }
+
+    /// V1.8: a key while a human action's field takes keys. True when it
+    /// was the field's; false hands it on (an arrow, Tab, a function key:
+    /// the field stops taking keys, and [`App::ha_keep`] clears the step's
+    /// values if the selection leaves the step).
+    fn ha_input_key(&mut self, key: KeyEvent) -> bool {
+        let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
+        let alt = key.modifiers.intersects(KeyModifiers::ALT | KeyModifiers::SUPER);
+        let Some(e) = self.ha_entry.as_mut() else { return false };
+        let Some(name) = e.editing.clone() else { return false };
+        match key.code {
+            KeyCode::Esc => {
+                self.ha_entry = None;
+                self.notice = Some("cleared: nothing was submitted".into());
+            }
+            KeyCode::Enter => self.ha_confirm(),
+            KeyCode::Backspace => e.value_mut(&name).pop(),
+            KeyCode::Char('u') if ctrl => e.value_mut(&name).wipe(),
+            KeyCode::Char(c) if !ctrl && !alt => e.value_mut(&name).push(c),
+            _ => {
+                e.editing = None;
+                return false;
+            }
+        }
+        true
+    }
+
+    /// V1.8: the step's typed values live only while the selection is on a
+    /// part of that step, on the cluster page, with no other window open
+    /// than the Submit confirm.
+    fn ha_keep(&mut self) {
+        let Some(e) = self.ha_entry.as_ref() else { return };
+        let (cluster, serial, step) = (e.cluster, e.serial, e.step);
+        let confirming = matches!(&self.modal, Some(Modal::Confirm { act: crate::cauldron::manage::Act::HaSubmit { .. }, .. }));
+        let selected = match self.items().get(self.item).copied() {
+            Some(Item::HaPart { cluster: c, serial: s, part }) if c == cluster && s == serial && self.focus == Focus::Content && self.ctab == CTab::Cauldron => {
+                self.ticket(c, s).and_then(|(_, t)| t.parts().into_iter().nth(part)).map(|p| match p {
+                    crate::cauldron::tickets::Part::Field { step, field } => (step, Some(field.name)),
+                    crate::cauldron::tickets::Part::Done { step } | crate::cauldron::tickets::Part::Copy { step, .. } | crate::cauldron::tickets::Part::Open { step, .. } => (step, None),
+                })
+            }
+            _ => None,
+        };
+        match selected {
+            Some((st, name)) if st == step && (self.modal.is_none() || confirming) => {
+                if let Some(e) = self.ha_entry.as_mut() {
+                    if e.editing.is_some() && e.editing != name {
+                        e.editing = None;
+                    }
+                }
+            }
+            _ if confirming => {}
+            _ => self.ha_entry = None,
+        }
+    }
+
+    /// V1.8: Enter in a human action's field: what would be submitted, by
+    /// field NAME and destination (never a value), asked first.
+    fn ha_confirm(&mut self) {
+        let Some(e) = self.ha_entry.as_ref() else { return };
+        let Some((_, t)) = self.ticket(e.cluster, e.serial) else { return };
+        let Some(st) = t.steps.get(e.step) else { return };
+        let mut body = Vec::new();
+        for f in st.fields() {
+            if e.value(&f.name).is_some_and(|v| !v.is_empty()) {
+                body.push(format!("{} → {}", f.name, self.ha_dest(&f.route, &f.name)));
+            }
+        }
+        if body.is_empty() {
+            self.notice = Some("nothing typed: nothing to submit".into());
+            return;
+        }
+        let n = body.len();
+        let key = self.forest.get(e.cluster).key.clone();
+        let (serial, step) = (e.serial, e.step);
+        self.modal = Some(Modal::Confirm {
+            title: format!("Submit {n} value{}?", if n == 1 { "" } else { "s" }),
+            body,
+            act: crate::cauldron::manage::Act::HaSubmit { cluster: key, serial, step },
+            error: None,
+        });
+    }
+
+    /// Where a route puts a value, in words: the destination and its place,
+    /// never the value.
+    fn ha_dest(&self, route: &crate::cauldron::route::Route, field: &str) -> String {
+        use crate::cauldron::route::{keychain_service, Route};
+        match route {
+            Route::Env(n) => match self.secrets_env_file() {
+                Some(f) => format!("env file {} as {n}", crate::cauldron::artpage::tilde(&f.to_string_lossy())),
+                None => "env file — secrets.env_file is not set".into(),
+            },
+            Route::Keychain => format!("keychain {}/{field}", keychain_service(&self.env.name)),
+            r => r.word().to_string(),
+        }
+    }
+
+    /// This cauldron's `secrets.env_file`, when set.
+    pub fn secrets_env_file(&self) -> Option<PathBuf> {
+        match self.settings.get(settings::def("secrets.env_file"), &settings::Ctx::default()).val {
+            settings::Val::Str(s) if !s.trim().is_empty() => Some(PathBuf::from(s.trim())),
+            _ => None,
+        }
+    }
+
+    /// V1.8: Submit, confirmed: each typed value of the step goes through the
+    /// routing adapter, and a value that ARRIVED is marked submitted by name.
+    /// The values are cleared whatever happens. What it says names fields
+    /// and destinations only.
+    pub(crate) fn ha_submit(&mut self, cluster: &str, serial: u32, step: usize) -> Result<String, String> {
+        use crate::cauldron::route::{keychain_service, write_env, Route};
+        let entry = self.ha_entry.take();
+        let Some(entry) = entry.filter(|e| self.forest.get(e.cluster).key == cluster && e.serial == serial && e.step == step) else {
+            return Err("nothing typed: nothing to submit".into());
+        };
+        if !self.persist {
+            return Err("nothing is routed by --dump".into());
+        }
+        let Some((h, t)) = self.ticket(entry.cluster, serial) else { return Err("the action is gone".into()) };
+        if h.status != crate::cauldron::model::HaStatus::Open {
+            return Err("the action is not open".into());
+        }
+        let Some(st) = t.steps.get(step).cloned() else { return Err("the step is gone".into()) };
+        let mut sent = Vec::new();
+        let mut failed = Vec::new();
+        for f in st.fields() {
+            let Some(v) = entry.value(&f.name).filter(|v| !v.is_empty()) else { continue };
+            if let Some(r) = crate::cauldron::tickets::field_reject(f) {
+                failed.push(format!("refused: {r}"));
+                continue;
+            }
+            let r = match &f.route {
+                Route::Env(name) => match self.secrets_env_file() {
+                    Some(file) => write_env(&file, name, v),
+                    None => Err(format!("{} NOT submitted: secrets.env_file is not set for this cauldron — there is no default", f.name)),
+                },
+                Route::Keychain => self.keychain.set(&keychain_service(&self.env.name), &f.name, v),
+                // Non-secret only (the validator): a dump addressed to the
+                // action, which a ripple folds into its node.
+                Route::Node => {
+                    let text = format!("[HA-{serial}.{}] {}", f.name, v.expose());
+                    if self.send_text(&text) { Ok(()) } else { Err(format!("{} NOT submitted: the dump was not stored", f.name)) }
+                }
+                Route::Unset | Route::Unknown(_) => Err(format!("{}: no destination", f.name)),
+            };
+            match r {
+                Ok(()) => match self.tickets.set_submitted(cluster, serial, &f.name) {
+                    Ok(()) => sent.push(format!("{} → {}", f.name, f.route.word())),
+                    Err(e) => failed.push(format!("{} reached its {} but was NOT recorded: {e:#}", f.name, f.route.word())),
+                },
+                Err(why) => failed.push(why),
+            }
+        }
+        drop(entry);
+        match (sent.is_empty(), failed.is_empty()) {
+            (_, true) => Ok(format!("submitted {}", sent.join(", "))),
+            (true, false) => Err(failed.join(" · ")),
+            (false, false) => {
+                self.modal = None;
+                Err(format!("submitted {} · {}", sent.join(", "), failed.join(" · ")))
             }
         }
     }
@@ -2815,7 +3233,7 @@ impl App {
                 }
                 true
             }
-            CTab::Config => {
+            page_tabs!() => {
                 let Some(band) = self.selectable_flat().into_iter().nth(self.settings_sel()).and_then(|f| f.entry.band()) else { return false };
                 let open = self.snav.is_open(&band);
                 self.snav.set_open(band, !open);
@@ -2829,8 +3247,7 @@ impl App {
     fn strip_label(&self, i: usize) -> Option<String> {
         match self.ctab {
             CTab::Status => crate::cauldron::status::StatusTab::ALL.get(i).map(|t| t.label().to_string()),
-            CTab::Config => crate::cauldron::menu::CfgTab::ALL.get(i).map(|t| self.cfg_label(*t)),
-            CTab::Cauldron | CTab::Threads => None,
+            _ => None,
         }
     }
 
@@ -3114,9 +3531,14 @@ impl App {
             self.field = None;
             // What he leaves resets, unless he keeps it (msg 165: "default
             // off: leaving and returning resets the expansion"). The sub-tab
-            // he was on is not expansion: it stays.
+            // he was on is not expansion: it stays. The settings pages were
+            // one tab, Config, before V1.1: going from one to another is not
+            // leaving them, as stepping Config's sub-tabs was not.
+            if t.bar() != self.ctab.bar() {
+                self.other_tab = self.ctab;
+            }
             match self.ctab {
-                CTab::Config if !self.preserve("config") => {
+                page_tabs!() if !t.is_page() && !self.preserve("config") => {
                     self.snav = Nav::cauldron();
                     self.rows[crate::cauldron::menu::SETTINGS_ROW] = 0;
                 }
@@ -3126,6 +3548,14 @@ impl App {
                     self.rows[0] = 0;
                 }
                 _ => {}
+            }
+        }
+        // A settings page shown anew opens on its first row.
+        if let Some(p) = t.page() {
+            if self.cfg_tab != p {
+                self.cfg_tab = p;
+                self.field = None;
+                self.rows[crate::cauldron::menu::SETTINGS_ROW] = 0;
             }
         }
         self.ctab = t;
@@ -3151,6 +3581,16 @@ impl App {
                 }
             }
             TabKey::CauldronStep(d) => self.step_ctab(d),
+            TabKey::OtherBar => {
+                let to = if self.other_tab.bar() != self.ctab.bar() {
+                    self.other_tab
+                } else if self.ctab.bar() == Bar::Env {
+                    CTab::GLOBAL[0]
+                } else {
+                    CTab::ENV[0]
+                };
+                self.set_ctab(to);
+            }
             // A cluster tab is on Surface: go there first.
             TabKey::Cluster(i) => {
                 if let Some(&t) = KTab::ALL.get(i) {
@@ -3170,7 +3610,7 @@ impl App {
     fn dash_index(&self) -> Option<usize> {
         match self.ctab {
             CTab::Status => Some(0),
-            CTab::Config => Some(crate::cauldron::menu::SETTINGS_ROW),
+            page_tabs!() => Some(crate::cauldron::menu::SETTINGS_ROW),
             CTab::Cauldron | CTab::Threads => None,
         }
     }
@@ -3180,7 +3620,7 @@ impl App {
         match self.ctab {
             CTab::Cauldron | CTab::Threads => Vec::new(),
             CTab::Status => (0..crate::cauldron::status::view(self, 120).items.len()).map(Row::Status).collect(),
-            CTab::Config => self.settings_rows(),
+            page_tabs!() => self.settings_rows(),
         }
     }
 
@@ -3202,7 +3642,7 @@ impl App {
     /// ⌥↑ / ⌥↓ on a tab: its section heads.
     fn row_section(&mut self, delta: isize) {
         let heads = match self.ctab {
-            CTab::Config => self.settings_heads(),
+            page_tabs!() => self.settings_heads(),
             CTab::Status => crate::cauldron::status::view(self, 120).heads,
             CTab::Cauldron | CTab::Threads => return,
         };
@@ -3310,17 +3750,12 @@ impl App {
                     self.set_sttab(t);
                 }
             }
-            CTab::Config => {
-                if let Some(&t) = crate::cauldron::menu::CfgTab::ALL.get(i) {
-                    self.set_cfg_tab(t);
-                }
-            }
-            CTab::Cauldron | CTab::Threads => {}
+            _ => {}
         }
     }
 
-    /// → and ← on a ripple of the Ledger that ran others (msg 457: expand and
-    /// collapse follow the band standard): → opens what it ran, and on an
+    /// → and ← on a ripple of the Ledger that ran others, or on a phase
+    /// (msg 457: expand and collapse follow the band standard): → opens what it ran, and on an
     /// open one steps to the first of them; ← shuts an open one. Enter and a
     /// click explore it instead. False on any other row, and for ← on a shut
     /// one or one that ran nothing, which climbs as every row does.
@@ -3328,6 +3763,17 @@ impl App {
         use crate::cauldron::status::SAct;
         let v = crate::cauldron::status::view(self, 120);
         let Some(it) = v.items.get(self.rows[0]).cloned() else { return false };
+        // A dump's PHASE (V1.4): always shown whole; → steps to the first
+        // ripple it called, and on one that called none → and ← climb as
+        // every row does.
+        if it.key.starts_with("lp:") {
+            let called = v.items.get(self.rows[0] + 1).is_some_and(|n| n.parent.as_deref() == Some(it.key.as_str()));
+            if right && called {
+                self.rows[0] += 1;
+                return true;
+            }
+            return false;
+        }
         let SAct::Exec { inside, .. } = it.act else { return false };
         let open = crate::cauldron::status::is_open(self, &it.key);
         match (right, open) {
@@ -3426,7 +3872,7 @@ impl App {
     pub fn origin_here(&self) -> crate::cauldron::refs::Origin {
         let tab = match self.ctab {
             CTab::Status => self.sttab.label().to_ascii_lowercase(),
-            CTab::Config => self.cfg_tab.slug().to_string(),
+            t if t.is_page() => self.cfg_tab.slug().to_string(),
             _ => self.ktab.label().to_ascii_lowercase(),
         };
         crate::cauldron::refs::Origin { cluster: self.forest.get(self.selected).key.clone(), ctab: self.ctab.label().to_ascii_lowercase(), tab, aggregate: self.aggregate }
@@ -3566,7 +4012,7 @@ impl App {
         match self.ctab {
             CTab::Cauldron => self.named(self.ktab.label()),
             CTab::Status => format!("Status › {}", self.sttab.label()),
-            CTab::Config => format!("Config › {}", self.cfg_tab.label()),
+            page_tabs!() => self.ctab.label().to_string(),
             CTab::Threads => "Threads".into(),
         }
     }
@@ -3583,10 +4029,11 @@ impl App {
                 self.select(g);
                 self.select_row_tag(tag)
             }
-            Some(CTab::Config) => {
-                self.set_ctab(CTab::Config);
-                if let Some(t) = crate::cauldron::menu::CfgTab::parse(&o.tab) {
-                    self.set_cfg_tab(t);
+            Some(t) if t.is_page() => {
+                // Before V1.1 the origin was `config` and the page its tab.
+                match crate::cauldron::menu::CfgTab::parse(&o.tab) {
+                    Some(p) => self.set_cfg_tab(p),
+                    None => self.set_ctab(t),
                 }
                 self.select_row_tag(tag)
             }
@@ -3696,7 +4143,6 @@ impl App {
                 }
             }
             (None, Tag::Thing { kind, .. }) if kind == "setting" => {
-                self.set_ctab(CTab::Config);
                 crate::cauldron::menu::CfgTab::ALL.into_iter().any(|t| {
                     self.set_cfg_tab(t);
                     self.select_row_tag(tag)
@@ -4003,6 +4449,7 @@ impl App {
             return;
         }
         self.handle_event(event);
+        self.ha_keep();
         if row.is_some() && self.modal.as_ref().is_some_and(|m| !matches!(m, Modal::Settings { .. })) {
             self.modal_back = row;
         }
@@ -4032,6 +4479,9 @@ impl App {
         if matches!(event, Event::Key(_) | Event::Mouse(MouseEvent { kind: MouseEventKind::Down(_), .. })) {
             self.flash = None;
         }
+        if self.first_run.is_some() && self.modal.is_none() {
+            return self.first_run_event(&event);
+        }
         match event {
             Event::Key(key) if key.kind != KeyEventKind::Release => self.key(key),
             Event::Paste(s) => match &mut self.modal {
@@ -4049,6 +4499,7 @@ impl App {
                     | Modal::DevRename { name, .. },
                 ) => name.push_str(s.trim()),
                 Some(Modal::Chip { editor, .. }) => editor.insert_paste(&s),
+                Some(Modal::Login { .. }) => self.login_paste(&s),
                 // A modal with no field to take it (a confirm — a service's
                 // restart, msg 403 — a picker, a page): the paste is not
                 // dropped without a word. It stays on the clipboard; he is
@@ -4056,6 +4507,14 @@ impl App {
                 // dictation arrives as a paste).
                 Some(_) if !s.trim().is_empty() => self.notice = Some("not pasted: this has no field — Esc, then paste into the bucket".into()),
                 Some(_) => {}
+                // V1.8: a paste into a human action's field is typed into
+                // it, masked like any key (one line: its ends trimmed).
+                None if self.ha_entry.as_ref().is_some_and(|e| e.editing.is_some()) => {
+                    if let Some(e) = self.ha_entry.as_mut() {
+                        let name = e.editing.clone().unwrap_or_default();
+                        e.value_mut(&name).push_str(s.trim());
+                    }
+                }
                 None if self.ctab == CTab::Threads => crate::cauldron::threads::paste(self, &s),
                 None if self.field.is_some() => {
                     if let Some(f) = &mut self.field {
@@ -4210,7 +4669,7 @@ impl App {
                     // "when you click on the row, you go to modal with all
                     // the settings").
                     // So does a value row's picker or editor (0217 B4).
-                    if self.ctab == CTab::Config {
+                    if self.ctab.is_page() {
                         if let Some(e) = self.settings_entry().filter(|e| matches!(e, crate::cauldron::menu::Entry::Row(_)) || self.is_value_row(e)) {
                             self.open_entry(e);
                             return;
@@ -4232,7 +4691,7 @@ impl App {
                         }
                         // A button presses only on itself (`Hit::Press`).
                         // A switch's label only selects (0217 B17).
-                        CTab::Config if again && !self.settings_entry().is_some_and(|e| e.is_button() || self.is_switch(&e)) => {
+                        page_tabs!() if again && !self.settings_entry().is_some_and(|e| e.is_button() || self.is_switch(&e)) => {
                             self.settings_open();
                         }
                         _ => {}
@@ -4264,7 +4723,7 @@ impl App {
                 }
                 // The ⓘ on a Config row: what it means, in a modal.
                 Some(Hit::Tip(i)) => {
-                    if self.ctab == CTab::Config {
+                    if self.ctab.is_page() {
                         if let Some(f) = self.entries().into_iter().nth(i) {
                             self.help_entry(&f.entry);
                         }
@@ -4625,6 +5084,10 @@ impl App {
         if self.dropdown.is_some() {
             return self.dropdown_key(key);
         }
+        // V1.8: a human action's field taking keys (masked when secret).
+        if self.ha_entry.as_ref().is_some_and(|e| e.editing.is_some()) && self.ha_input_key(key) {
+            return;
+        }
         // A click just put a reference in the bucket: what he types next is
         // text, there — a space to keep several (b964d571 msg 23), a word —
         // never a page command (0255 H2: `q` quit the face mid-sentence).
@@ -4708,7 +5171,7 @@ impl App {
         }
         // The Config tab: open, back, flip, clear, nudge, explain. Moving is
         // the tab's own, below.
-        if self.ctab == CTab::Config && !alt && !ctrl && self.settings_key(code) {
+        if self.ctab.is_page() && !alt && !ctrl && self.settings_key(code) {
             return;
         }
         // The Status tab: bands open and close.

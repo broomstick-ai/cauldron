@@ -71,8 +71,8 @@ fn b3_design_references_are_rewritten_on_adoption() {
 #[test]
 fn b4_one_click_opens_a_value_row() {
     let mut a = open_env(&scratch_root(), "prod");
-    a.set_ctab(CTab::Config);
-    a.cfg_tab = CfgTab::Tui;
+    a.set_ctab(CTab::Settings);
+    a.set_cfg_tab(CfgTab::Tui);
     let s = render_to_text(&mut a, 120, 50).unwrap();
     let (x, y) = at(&s, "opens on");
     click(&mut a, x, y);
@@ -119,9 +119,9 @@ fn b7_b10_b15_config_says_only_settings() {
     std::fs::write(&g, "[notify.tones]\ncapture = false\n\n[ui]\naggregate_default = true\n").unwrap();
     let mut a = open_env(&root, "prod");
     assert_eq!(a.sget(&Bound::new("ui.aggregate_default", Ctx::default())).val, Val::Bool(true));
-    a.set_ctab(CTab::Config);
+    a.set_ctab(CTab::Settings);
     for (tab, path) in [(CfgTab::Devices, "devices/storage"), (CfgTab::Tui, "tui"), (CfgTab::Providers, "providers")] {
-        a.cfg_tab = tab;
+        a.set_cfg_tab(tab);
         a.snav = tui::cauldron::menu::Nav::cauldron();
         let _ = a.open_settings_path(path);
         let s = render_to_text(&mut a, 140, 120).unwrap().join("\n");
@@ -159,8 +159,8 @@ fn b12_a_roles_models_are_its_sources() {
 #[test]
 fn b13_a_default_is_never_cut_at_80_columns() {
     let mut a = open_env(&scratch_root(), "prod");
-    a.set_ctab(CTab::Config);
-    a.cfg_tab = CfgTab::Providers;
+    a.set_ctab(CTab::Settings);
+    a.set_cfg_tab(CfgTab::Providers);
     for path in ["providers/endpoints", "providers/claude_code"] {
         a.snav = tui::cauldron::menu::Nav::cauldron();
         a.open_settings_path(path).unwrap();
@@ -180,8 +180,8 @@ fn b13_a_default_is_never_cut_at_80_columns() {
 fn a_value_row_opened_and_left_writes_nothing() {
     let root = scratch_root();
     let mut a = open_env(&root, "prod");
-    a.set_ctab(CTab::Config);
-    a.cfg_tab = CfgTab::Providers;
+    a.set_ctab(CTab::Settings);
+    a.set_cfg_tab(CfgTab::Providers);
     let files = || ["data/shared/tui/settings.toml", "data/prod/tui/soup/settings.toml"].map(|f| std::fs::read(root.join(f)).ok());
     let before = files();
     let s = render_to_text(&mut a, 120, 60).unwrap();
@@ -200,7 +200,32 @@ fn a_value_row_opened_and_left_writes_nothing() {
 #[test]
 fn b4_one_click_on_a_modal_key_row_takes_the_key() {
     let mut a = open_env(&scratch_root(), "prod");
-    a.set_ctab(CTab::Config);
+    a.set_ctab(CTab::Settings);
+    a.set_cfg_tab(CfgTab::Providers);
+    // V1.7 (R-V1 item 7): every endpoint is greyed — the add modal does
+    // not open, and one click on a greyed endpoint's key opens no field.
+    a.start_act(tui::cauldron::manage::Act::NewEndpoint { here: false });
+    assert!(a.modal.is_none() && a.notice.as_deref() == Some(tui::cauldron::settings::GREYED), "{:?}", a.modal);
+    a.open_settings_path("providers/endpoints/ep-1").unwrap();
+    let s = render_to_text(&mut a, 120, 60).unwrap();
+    let (x, y) = at(&s, "│   key ");
+    let x = x + 4;
+    click(&mut a, x, y);
+    assert!(a.field.is_none(), "a greyed key takes nothing:\n{}", s.join("\n"));
+}
+
+/// B4 in a modal (0217: "a key typed after one click on `key` was silently
+/// dropped"): in the add-endpoint modal one click on `key` opens its field,
+/// and what is typed goes into it.
+///
+/// V1.7b F1: the body of `b4_one_click_on_a_modal_key_row_takes_the_key` at 59c5ec8f, verbatim — the positive
+/// spec the greyed endpoints lost (V1.7-I F1). Un-ignore when
+/// `inference_live` ungreys them; `b4_one_click_on_a_modal_key_row_takes_the_key` above is the refusal it pairs with.
+#[test]
+#[ignore = "endpoints greyed in V1.7; restore when un-greyed"]
+fn b4_one_click_on_a_modal_key_row_takes_the_key_ungreyed() {
+    let mut a = open_env(&scratch_root(), "prod");
+    a.set_ctab(CTab::Settings);
     a.set_cfg_tab(CfgTab::Providers);
     a.start_act(tui::cauldron::manage::Act::NewEndpoint { here: false });
     let s = render_to_text(&mut a, 120, 60).unwrap();

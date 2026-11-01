@@ -41,9 +41,12 @@ async fn s_runs_the_preflight_then_hands_over_or_records() {
     std::env::remove_var("CLAUDE_CONFIG_DIR");
     let tmp = tempfile::tempdir().unwrap();
     let dir = tmp.path();
-    // A handle to nowhere: the local act never uses the socket.
+    // A handle to nowhere: the local act never uses the socket. V1-POOLTEST:
+    // "nowhere" is the egress module's DEAD_PORT (1, privileged, the one port
+    // an isolated process may name without a grant), not port 9, which nobody
+    // granted — the isolation gate rightly refused it.
     let (tx, _rx) = mpsc::channel(8);
-    let h = client::spawn("ws://127.0.0.1:9/ws".into(), tx);
+    let h = client::spawn(format!("ws://127.0.0.1:{}/ws", env::egress::DEAD_PORT), tx);
     let a = Action::SetLive("beta".into());
 
     // 1. The preflight reaches its dry-run stop → the real switch is handed

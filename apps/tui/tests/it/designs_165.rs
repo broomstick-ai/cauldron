@@ -41,7 +41,7 @@ fn env_in(root: &Path, name: &str) -> Environment {
 
 fn open_in(root: &Path) -> App {
     std::env::set_var("CAULDRON_TYPE_ONE", "off");
-    App::open(env_in(root, "prod"), seed_dir(), true).expect("seed loads")
+    crate::live_pool::seeded(App::open(env_in(root, "prod"), seed_dir(), true).expect("seed loads"))
 }
 
 fn open() -> (App, PathBuf) {
@@ -158,7 +158,7 @@ fn k2_k3_the_bucket_is_a_box_three_to_six_rows_and_its_divider_drags() {
     let (mut a, root) = open();
     a.focus = Focus::Tree;
     let rows = render_to_text(&mut a, 120, 40).unwrap();
-    assert!(rows[1].starts_with('╭') && rows[1].trim_end().ends_with("surface ╮"), "the surface's box, its legend top right: {:?}", rows[1]);
+    assert!(rows[2].starts_with('╭') && rows[2].trim_end().ends_with("surface ╮"), "the surface's box, its legend top right: {:?}", rows[2]);
     let top = rows.iter().rposition(|l| l.starts_with("╭") && l.trim_end().ends_with("bucket ╮")).expect("the bucket's box");
     assert!(rows[top].trim_end().ends_with("bucket ╮"), "its legend top right: {:?}", rows[top]);
     assert_eq!(rows.len() - 1 - top, 4, "three text rows and its bottom border");
@@ -538,7 +538,7 @@ fn the_file_system_is_config_its_roots_on_config_directories_the_same_on_every_c
         assert!(!screen(&mut a).contains("FILE SYSTEM"));
     }
     // Config › Cauldron › Directories lists every root.
-    a.set_ctab(CTab::Config);
+    a.set_ctab(CTab::Settings);
     a.open_settings_path("directories").unwrap();
     let s = screen(&mut a);
     assert!(s.contains("▾ Roots") && s.contains("cauldron home"), "{s}");
@@ -623,7 +623,7 @@ fn s1_s2_status_is_mesh_tokens_soup_bus_and_its_strip_says_nothing_else() {
     a.set_ctab(CTab::Status);
     let s = screen(&mut a);
     let (_, p, _) = counts(&a);
-    let strip = s.lines().nth(2).unwrap();
+    let strip = s.lines().nth(3).unwrap();
     assert_eq!(strip.trim_start_matches('│').trim().trim_end_matches('│').trim(), "Ledger | Tokens | Mesh | Soup | Bus", "{strip}");
     // The Ledger is first and shown (8e4fca10 msg 457), Tokens after it.
     assert_eq!(a.sttab, StatusTab::Ledger);
@@ -682,6 +682,9 @@ fn every_count_is_on_an_axis_that_partitions_so_the_numbers_add_up() {
     // Running per account sums to the source, the sources to the strip.
     let mut a = a;
     a.set_ctab(CTab::Status);
+    // V1.7: the endpoints' band is greyed and closed at first; opened, its
+    // runs still count.
+    a.stnav.insert("tok:endpoints".into());
     a.set_sttab(StatusTab::Tokens);
     let s = render_to_text(&mut a, 120, 80).unwrap().join("\n");
     let cc = s.lines().find(|l| l.contains("Claude Code")).unwrap();
@@ -690,11 +693,21 @@ fn every_count_is_on_an_axis_that_partitions_so_the_numbers_add_up() {
         l.split("▶ ").nth(1).unwrap().split(' ').next().unwrap().parse::<usize>().unwrap()
     }).sum();
     assert!(cc.contains(&format!("▶ {per} runs")), "{cc}");
-    // A run on an inference endpoint counts on the endpoints' band
-    // (design 0199), and the sources and the endpoints add up to the strip.
+    // V1.5: Claude Code's runs are now the DAEMON's roster (`threads/non-idle`,
+    // spec step 5), not the cauldron's own ripple runs, so they no longer
+    // partition the cauldron's strip; the endpoints' still count the cauldron's.
     let or = s.lines().find(|l| l.contains("▾ Inference endpoints")).unwrap();
     let orn: usize = or.split("▶ ").nth(1).unwrap().split(' ').next().unwrap().parse().unwrap();
-    assert_eq!(per + orn, r, "the sources add up to the strip");
+    // V1-CLEAN1 (V1.5-I F4): the partition, restated on the axis it still
+    // holds on. Every running run of the cauldron is on an endpoint or on a
+    // Claude Code account; the endpoints' band counts the first, the
+    // census's Claude Code runs are the rest, and the two add up to the
+    // strip exactly. (Claude Code's band itself counts the daemon's roster
+    // since V1.5 — R2, held — so it is not a term here.)
+    let cc_accounts = ["sam-broomstick", "acct2", "acct3"];
+    let on_cc = c.iter().filter(|e| e.state == RippleState::Running && e.account.as_deref().is_some_and(|x| cc_accounts.contains(&x))).count();
+    assert!(on_cc > 0 && orn > 0, "sentinel: the seed runs work on both sides ({on_cc} on Claude Code, {orn} on endpoints)");
+    assert_eq!(orn + on_cc, r, "the endpoints' runs and the Claude Code runs add up to the strip");
     let jev = s.lines().find(|l| l.contains("• jev ")).unwrap();
     assert!(jev.contains("$12.40 of $100 / month"), "{jev}");
 }
@@ -703,6 +716,9 @@ fn every_count_is_on_an_axis_that_partitions_so_the_numbers_add_up() {
 fn a_down_threads_link_is_a_dash_never_a_zero() {
     let (mut a, _r) = open();
     a.dash.threads.link = "offline".into();
+    // V1.5: running and parked are known only while the face's ONE connection
+    // is up (`status::threads_live`), not by the seed's `"link"`.
+    a.live.store.link = tui_render::LinkState::Disconnected { reason: "the daemon went away".into(), retry_at: None };
     a.set_ctab(CTab::Status);
     a.set_sttab(StatusTab::Bus);
     let s = screen(&mut a);
@@ -724,7 +740,7 @@ fn a_cluster_counts_gate_refused_only_and_its_header_is_its_name() {
     assert_eq!(p, 1, "T-8, which the gate refused; not T-5, which Q-2 blocks");
     // N7 (msg 235: "there's no useful information there anymore"): no
     // header above the cluster's tabs — the strip is the page's first line.
-    let strip = s.lines().nth(2).unwrap();
+    let strip = s.lines().nth(3).unwrap();
     assert!(strip.split('│').nth(2).unwrap().trim_start().starts_with("Questions "), "{strip}");
 }
 

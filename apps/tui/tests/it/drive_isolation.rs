@@ -79,6 +79,10 @@ const NOT_ENDPOINT: &[(&str, &str)] = &[
     // scratch root every name it can pick is a scratch dir; and for the chat
     // face TUI_THREADS_CHASSIS_PORT supersedes it (Source::Override).
     ("CAULDRON_ENV", "picks data/<name>/ under the root; harmless once CAULDRON_HOME is isolated; superseded by TUI_THREADS_CHASSIS_PORT for the seam"),
+    // MERGE-V1e: rel/v1 classified CAULDRON_HOME here; rel/halloween's
+    // REL-1.S1c moved it to ENDPOINT (stricter: every launch must set it to a
+    // scratch root), so it lives there only. V1.2's CAULDRON_ENV_SOURCE stays.
+    ("CAULDRON_ENV_SOURCE", "V1.2: whether CAULDRON_ENV was defaulted by the router; picks which existing cauldron opens under the (isolated) CAULDRON_HOME root, never an address"),
     ("CAULDRON_ISOLATED", "the test-only isolation MARKER (REL-6a2, cauldron::live::ISOLATED_ENV): not an address, but required =1 on every launch (LAUNCH_ALSO)"),
     ("CARGO_PKG_VERSION", "compile time"),
     ("CARGO_MANIFEST_DIR", "compile time"),
@@ -1441,11 +1445,12 @@ fn every_rust_test_starts_the_face_through_the_helper() {
     // Sentinels: the scan reached the helper and found its one name, so an
     // empty `offenders` is not an empty search; and the converted spawners
     // still use it (each was a raw spawn before REL-1.S1c, or, for the four
-    // REL-3.S2 files, before MERGE-9b).
+    // REL-3.S2 files, before MERGE-9b; for V1.2's first_run_v1, before MERGE-V1e).
     assert_eq!(helper_sites, 1, "the scan did not find the helper's own `BIN` in tests/it/face.rs");
     for want in [
         "it/build_stamp.rs",
         "it/feedback_audit.rs",
+        "it/first_run_v1.rs",
         "it/opener_guard_0327.rs",
         "it/reaudit7_0256.rs",
         "it/real_data_rel3s2.rs",

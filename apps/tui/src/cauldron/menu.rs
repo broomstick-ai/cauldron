@@ -16,9 +16,11 @@
 //! override, `+` / `-` nudge a number, `h` (or a click on its ⓘ) explains a
 //! setting.
 //!
-//! Pools and accounts are FAKE: the claude_code pool is the seed's account
-//! board (`cauldron.threads.accounts`), other pools come from the seed's
-//! `cauldron.pools`, and accounts added here are kept beside the draft.
+//! Claude Code's accounts are REAL (V1.6): the threads daemon's `accounts`
+//! shape, off the face's one connection (`cauldron::accounts`), logged in and
+//! switched in or out of the pool through the daemon. The other pools are
+//! still the seed's `cauldron.pools` (greyed, R-V1 item 7), and accounts
+//! added to them here are kept beside the draft.
 
 use crate::cauldron::app::{App, CTab, Focus, Modal, Row};
 use crate::cauldron::manage::Act;
@@ -232,9 +234,6 @@ pub fn unsection(mut p: Option<SPage>) -> Option<SPage> {
 /// One line of a settings page.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Entry {
-    /// The cauldron Config's sub-tab strip: its first row. → and ← step the
-    /// tabs; a click picks one.
-    Strip,
     /// A section head: its title and its metadata. Shown as a band
     /// ([`SPage::Section`]) holding every entry up to the next head.
     Head(String, String),
@@ -355,17 +354,23 @@ pub enum CfgTab {
     Tui,
     Devices,
     Providers,
+    /// V1.1: the accounts Providers held (each source's table and its
+    /// modal), moved to a tab of their own on the global bar.
+    Accounts,
     Permissions,
 }
 
 impl CfgTab {
-    pub const ALL: [CfgTab; 5] = [CfgTab::Cauldron, CfgTab::Tui, CfgTab::Devices, CfgTab::Providers, CfgTab::Permissions];
+    /// Every settings page. V1.1: each is a root tab
+    /// ([`crate::cauldron::app::CTab::page`]); none is a sub-tab any more.
+    pub const ALL: [CfgTab; 6] = [CfgTab::Cauldron, CfgTab::Tui, CfgTab::Devices, CfgTab::Providers, CfgTab::Accounts, CfgTab::Permissions];
     /// Its name; the first one's is the cauldron's ([`App::cfg_label`]).
     pub fn label(self) -> &'static str {
         match self {
             CfgTab::Tui => "TUI",
             CfgTab::Devices => "Devices",
             CfgTab::Providers => "Providers",
+            CfgTab::Accounts => "Accounts",
             CfgTab::Permissions => "Permissions",
             CfgTab::Cauldron => "cauldron",
         }
@@ -376,6 +381,7 @@ impl CfgTab {
             CfgTab::Tui => "tui",
             CfgTab::Devices => "devices",
             CfgTab::Providers => "providers",
+            CfgTab::Accounts => "accounts",
             CfgTab::Permissions => "permissions",
             CfgTab::Cauldron => "cauldron",
         }
@@ -420,6 +426,10 @@ pub struct AcctView {
     pub label: String,
     /// Its card on the seed's account board, if it has one.
     pub seed: Option<usize>,
+    /// V1.6: its key in the threads daemon's `accounts` shape — what a verb
+    /// names it by — when it is one of the daemon's. `label` is then the key
+    /// masked (or the label he renamed it to), never an address in full.
+    pub key: Option<String>,
 }
 
 /// The pool the threads daemon manages today.
@@ -452,9 +462,54 @@ pub fn pool_label(id: &str) -> String {
     }
 }
 
-/// An account's id: its label, slugged.
+/// An account's id: its label, slugged — and, for a key that is an ADDRESS,
+/// the slug of its MASKED form ([`crate::pool::model::shown_name`]) plus a
+/// short stable digest of the key, so two addresses with the same initials
+/// still get two ids (V1-CLEAN2, V1-CLEAN1-I B1). The digest is KEYED by this
+/// install's secret ([`crate::pool::model::install_key`], V1-ACCT2): an id
+/// cannot be checked against a guessed address. The id is drawn — page
+/// titles, `i`'s settings key, `--settings` paths, a picker's options — so it
+/// must never carry the address: the slug of `qmzrtb@vxnhwk.example` was
+/// `qmzrtb-vxnhwk-example`, the whole address one Enter from a masked card.
 pub fn account_id(label: &str) -> String {
-    store::slug(label)
+    let shown = crate::pool::model::shown_name(label);
+    if shown == label {
+        return store::slug(label);
+    }
+    format!("{}-{}", store::slug(&shown), crate::pool::model::digest_hex(label))
+}
+
+/// **THE IDS ACCOUNT `label` WAS STORED UNDER BEFORE [`account_id`]** (V1-ACCT,
+/// V1-CLEAN2-I B1, V1-ACCT2). The id is a persisted settings key —
+/// `pools.{p}.accounts.{id}.*`, `cauldron.accounts.{p}.{id}.*`,
+/// `accounts.json`'s `{p}/{id}` — and an address-keyed account has had three
+/// before this one. What is found under one of them is moved to
+/// [`account_id`] once ([`crate::cauldron::settings::Settings::adopt_account_ids`]).
+///
+/// **IN PRECEDENCE ORDER** (V1-ACCT-I N1): when one account has a value under
+/// more than one, the FIRST here wins and the others are dropped with a
+/// notice — and a value already under [`account_id`] beats all of them (he
+/// set it since):
+///
+/// 1. the UNSALTED digest id (`c-e-13f65b`, V1-CLEAN2 to V1-ACCT): the newest
+///    form a face wrote, so its value is the latest write;
+/// 2. the raw key (a hand-written file): it names exactly one account;
+/// 3. the plain slug of the key (`carol-example-com`, before V1-CLEAN2): the
+///    oldest form, and one that two addresses can share
+///    (`c.l@` / `c-l@`), so it is last.
+///
+/// Empty when the id never changed (a key that is not an address).
+pub fn legacy_account_ids(label: &str) -> Vec<String> {
+    let now = account_id(label);
+    let shown = crate::pool::model::shown_name(label);
+    let unsalted = if shown == label { None } else { Some(format!("{}-{}", store::slug(&shown), crate::pool::model::unsalted_digest_hex(label))) };
+    let mut out = Vec::new();
+    for old in unsalted.into_iter().chain([label.to_string(), store::slug(label)]) {
+        if !old.is_empty() && old != now && !out.contains(&old) {
+            out.push(old);
+        }
+    }
+    out
 }
 
 /// What a subscription source sets, flat on its band (msg 235: "just
@@ -549,13 +604,10 @@ impl App {
         roots
     }
 
-    /// Show the cauldron Config's tab `t`, the selection on its strip.
+    /// Show settings page `t`: the root tab that shows it (V1.1), its first
+    /// row selected when it was not already shown.
     pub fn set_cfg_tab(&mut self, t: CfgTab) {
-        if self.cfg_tab != t {
-            self.cfg_tab = t;
-            self.field = None;
-            self.rows[SETTINGS_ROW] = 0;
-        }
+        self.set_ctab(CTab::of_page(t));
     }
 
     /// What Config tab `t` is called: the first is THIS cauldron, by its
@@ -570,15 +622,36 @@ impl App {
 
     /// The accounts of `pool`: its seed accounts, then those added here.
     pub fn accounts(&self, pool: &str) -> Vec<AcctView> {
-        let mut out: Vec<AcctView> = if pool == CLAUDE_CODE {
-            self.dash.threads.accounts.iter().enumerate().map(|(i, a)| AcctView { id: account_id(&a.label), label: a.label.clone(), seed: Some(i) }).collect()
-        } else {
+        // V1.6: Claude Code's are the daemon's, by its keys — never the
+        // seed's `global.json`. A label he gave one here is kept (a local
+        // name for an email-keyed account); nothing is added or removed
+        // here, since the daemon holds the roster.
+        if pool == CLAUDE_CODE {
+            let f = &self.settings.accounts_file;
+            let keys = self.roster_keys();
+            return keys
+                .clone()
+                .into_iter()
+                .map(|k| {
+                    let id = account_id(&k);
+                    // The drawn name, masked ONCE here: his rename (itself
+                    // through the masker, in case he typed an address), else
+                    // the key told apart from its twins (V1-ACCT).
+                    let label = match f.renamed.get(&format!("{pool}/{id}")) {
+                        Some(r) => crate::pool::model::shown_name(r),
+                        None => crate::pool::model::shown_among(&k, keys.iter().map(String::as_str)),
+                    };
+                    AcctView { id, label, seed: None, key: Some(k) }
+                })
+                .collect();
+        }
+        let mut out: Vec<AcctView> = {
             self.dash
                 .pools
                 .iter()
                 .filter(|p| p.id == pool)
                 .flat_map(|p| p.accounts.iter())
-                .map(|l| AcctView { id: account_id(l), label: l.clone(), seed: None })
+                .map(|l| AcctView { id: account_id(l), label: l.clone(), seed: None, key: None })
                 .collect()
         };
         // Seed accounts removed here are gone; renamed ones wear their new name.
@@ -590,9 +663,35 @@ impl App {
             }
         }
         for a in self.settings.added.iter().filter(|a| a.pool == pool) {
-            out.push(AcctView { id: a.id.clone(), label: a.label.clone(), seed: None });
+            out.push(AcctView { id: a.id.clone(), label: a.label.clone(), seed: None, key: None });
         }
         out
+    }
+
+    /// **WHAT ACCOUNT `id` OF `pool` IS CALLED ON SCREEN — NEVER A RAW
+    /// ADDRESS** (V1-CLEAN2, V1-CLEAN1-I B1). Its label when this face lists
+    /// it, else the daemon's key of the live card (or loading card) whose id
+    /// it is — the Status › Tokens card Enter opens — and every one of them
+    /// through [`crate::pool::model::shown_name`], the one masker. Only an id
+    /// nothing names is drawn as it is, and an id never carries an address
+    /// ([`account_id`]).
+    pub fn account_name(&self, pool: &str, id: &str) -> String {
+        use crate::pool::model::{shown_among, shown_name};
+        if let Some(x) = self.accounts(pool).into_iter().find(|x| x.id == id) {
+            // A daemon-keyed row's label is already the drawn name (masked
+            // once in `accounts`); masking it again would strip its twin
+            // mark. Any other label is masked here, once.
+            return if x.key.is_some() { x.label } else { shown_name(&x.label) };
+        }
+        if pool == CLAUDE_CODE {
+            if let Some(pl) = self.live.pool() {
+                let keys: Vec<&str> = pl.board.cards.iter().map(|c| c.label.as_str()).chain(pl.loading.iter().map(String::as_str)).collect();
+                if let Some(k) = keys.iter().find(|k| account_id(k) == id) {
+                    return shown_among(k, keys.iter().copied());
+                }
+            }
+        }
+        id.to_string()
     }
 
     /// The account board's card of `acct`, when it has one.
@@ -606,7 +705,12 @@ impl App {
     /// spend its week — its pressure is above 1. `None` while it has no
     /// weekly reading.
     pub fn opportunistic(&self, pool: &str, acct: &AcctView) -> Option<bool> {
-        let p = self.card(pool, acct)?.pressure()?;
+        // The daemon's pressure for one of its accounts (V1.6); the seed
+        // card's for the rest.
+        let p = match &acct.key {
+            Some(k) => self.live_pressure(k)?,
+            None => self.card(pool, acct)?.pressure()?,
+        };
         let ctx = Ctx::account(pool, &acct.id);
         let may = self.val("pools.{pool}.accounts.{account}.opportunistic.enabled", ctx.clone()).as_bool() && self.val("pools.{pool}.accounts.{account}.enabled", ctx).as_bool();
         Some(may && p > 1.0)
@@ -855,6 +959,11 @@ impl App {
     /// choice apart from `inherit`.
     pub fn sset(&mut self, b: &Bound, v: Val) -> Result<(), String> {
         let d = b.def();
+        // A greyed source's setting is never written here, and nothing points
+        // work at one (R-V1 item 7): what is on disk of it stays as it is.
+        if settings::greyed_key(b.key, &b.ctx) || settings::greyed_value(b.key, &v) {
+            return Err(settings::GREYED.into());
+        }
         if let (Some(cap), Val::Int(n)) = (d.cap, &v) {
             let cb = Bound::new(cap, Ctx::default());
             if let Some(m) = self.sget(&cb).val.as_int() {
@@ -888,6 +997,9 @@ impl App {
 
     /// Clear a value here: it inherits again.
     pub fn sclear(&mut self, b: &Bound) -> Result<(), String> {
+        if settings::greyed_key(b.key, &b.ctx) {
+            return Err(settings::GREYED.into());
+        }
         if b.key == "ui.sidebar_ratio" {
             self.layout.sidebar_permille = None;
             self.save_layout();
@@ -1090,7 +1202,7 @@ impl App {
     /// under each open band what it holds, a level deeper.
     pub fn entries(&self) -> Vec<Flat> {
         let root = self.cfg_tab.root();
-        let mut out = vec![Flat { depth: 0, entry: Entry::Strip, open: None, parent: None }];
+        let mut out = Vec::new();
         self.flatten(&root, 0, None, &mut out);
         out
     }
@@ -1193,7 +1305,10 @@ impl App {
     /// The column names of the table a ROW of `page` is in.
     pub fn row_head(&self, page: &SPage) -> Vec<&'static str> {
         match page {
-            SPage::Account(..) => vec!["account", "enabled", "weekly threshold", "opportunistic"],
+            // V1.6: the daemon's machine-wide switch, then the global default
+            // every cauldron inherits — two switches, named apart.
+            SPage::Account(p, _) if p == CLAUDE_CODE => vec!["account", "in the pool", "on in new cauldrons", "weekly threshold", "opportunistic"],
+            SPage::Account(..) => vec!["account", "on in new cauldrons", "weekly threshold", "opportunistic"],
             // An allowance: an account allowed here is in use only while it
             // is itself enabled (0214 A7).
             SPage::UseAccount(..) => vec!["account", "allowed here", "weekly threshold", "opportunistic"],
@@ -1210,7 +1325,7 @@ impl App {
     /// What a ROW of `page` is called: its first column.
     pub fn row_label(&self, page: &SPage) -> String {
         match page {
-            SPage::Account(p, a) | SPage::UseAccount(p, a) => self.accounts(p).into_iter().find(|x| x.id == *a).map_or_else(|| a.clone(), |x| x.label),
+            SPage::Account(p, a) | SPage::UseAccount(p, a) => self.account_name(p, a),
             SPage::Endpoint { here, id } => self.ep_name(*here, id),
             SPage::UseEndpoint(id) => self.ep_name(false, id),
             other => other.title(),
@@ -1246,11 +1361,16 @@ impl App {
             }
             SPage::Account(p, a) => {
                 let ctx = Ctx::account(p, a);
-                vec![
+                let in_pool = (p == CLAUDE_CODE).then(|| {
+                    let key = self.accounts(p).into_iter().find(|x| x.id == *a).and_then(|x| x.key).unwrap_or_default();
+                    Cell::Text(self.in_pool_words(&key))
+                });
+                in_pool.into_iter().chain([
                     Cell::Toggle(Bound::new("pools.{pool}.accounts.{account}.enabled", ctx.clone())),
                     text("pools.{pool}.accounts.{account}.budget.weekly.threshold_pct", ctx.clone()),
                     Cell::Toggle(Bound::new("pools.{pool}.accounts.{account}.opportunistic.enabled", ctx)),
-                ]
+                ])
+                .collect()
             }
             SPage::UseAccount(p, a) => {
                 let ctx = Ctx::account(p, a);
@@ -1453,10 +1573,16 @@ impl App {
             // inference endpoints (design 0199 §1).
             SPage::Tab(CfgTab::Providers) => {
                 Self::sets(&mut out, Self::BUDGET_DEFAULTS, &none);
+                out.push(self.sub(SPage::Endpoints, "Inference endpoints", self.endpoints_summary(false)));
+            }
+            // ACCOUNTS (V1.1, release plan R-V1: the global bar's
+            // "accounts"): each token source's band — its accounts' table and
+            // their modals — moved here from Providers as it was, not
+            // rebuilt (V1.6 makes it real).
+            SPage::Tab(CfgTab::Accounts) => {
                 for p in self.pool_ids() {
                     out.push(self.sub(SPage::Pool(p.clone()), &pool_label(&p), self.pool_summary(&p)));
                 }
-                out.push(self.sub(SPage::Endpoints, "Inference endpoints", self.endpoints_summary(false)));
             }
             // PERMISSIONS: what an agent may touch, and who the operator is.
             SPage::Tab(CfgTab::Permissions) => {
@@ -1543,6 +1669,13 @@ impl App {
             // its accounts' table, its settings, its detected models.
             SPage::Pool(p) => {
                 let ctx = Ctx::pool(p);
+                // V1.6: until the daemon's pool is in, say why there is no
+                // table — never an empty one that reads as no accounts.
+                if p == CLAUDE_CODE {
+                    if let crate::cauldron::accounts::Roster::Waiting(why) = self.roster() {
+                        out.push(Entry::Fact("accounts".into(), why));
+                    }
+                }
                 for a in self.accounts(p) {
                     out.push(Entry::Row(SPage::Account(p.clone(), a.id)));
                 }
@@ -1561,6 +1694,7 @@ impl App {
             // and remove.
             SPage::Account(p, a) => {
                 let ctx = Ctx::account(p, a);
+                let key = (p == CLAUDE_CODE).then(|| self.accounts(p).into_iter().find(|x| x.id == *a).and_then(|x| x.key)).flatten();
                 Self::sets(
                     &mut out,
                     &self.for_pool(p, &[
@@ -1582,8 +1716,24 @@ impl App {
                     &ctx,
                 );
                 out.push(Entry::Gap);
+                // V1.6: one of the daemon's — its pool switch and its login,
+                // each the daemon's, under its settings here.
+                if let Some(key) = &key {
+                    out.push(Entry::Fact("in the pool".into(), self.in_pool_words(key)));
+                    out.push(Entry::Fact("login".into(), self.login_words(key)));
+                    if let Some(on) = self.in_pool(key) {
+                        let label = if on { "take out of the pool" } else { "put back in the pool" };
+                        out.push(Entry::Do { act: Act::InPool { key: key.clone(), on: !on }, label: label.into(), summary: String::new() });
+                    }
+                    out.push(Entry::Do { act: Act::LogIn { key: key.clone() }, label: "log in".into(), summary: String::new() });
+                    out.push(Entry::Gap);
+                }
                 out.push(Entry::Do { act: Act::RenameAccount { pool: p.clone(), id: a.clone() }, label: "rename".into(), summary: String::new() });
-                out.push(Entry::Do { act: Act::RemoveAccount { pool: p.clone(), id: a.clone() }, label: "remove".into(), summary: String::new() });
+                // The daemon's roster is not removed from here (its delete is
+                // out of V1.6): only a seed pool's account is.
+                if key.is_none() {
+                    out.push(Entry::Do { act: Act::RemoveAccount { pool: p.clone(), id: a.clone() }, label: "remove".into(), summary: String::new() });
+                }
             }
             SPage::Local => Self::sets(
                 &mut out,
@@ -1832,11 +1982,10 @@ impl App {
         at.is_some()
     }
 
-    /// Open account `id` of `pool` on Config: Providers › its source open,
-    /// its row selected and its modal open.
+    /// Open account `id` of `pool`: Accounts › its source open, its row
+    /// selected and its modal open.
     pub fn open_account_settings(&mut self, pool: &str, id: &str) {
-        self.set_ctab(CTab::Config);
-        self.set_cfg_tab(CfgTab::Providers);
+        self.set_cfg_tab(CfgTab::Accounts);
         self.field = None;
         self.expand(SPage::Pool(pool.into()));
         let page = SPage::Account(pool.into(), id.into());
@@ -1853,7 +2002,6 @@ impl App {
     /// row on Providers, one of this cauldron's own on its tab — selected,
     /// its modal open.
     pub fn open_endpoint_settings(&mut self, here: bool, id: &str) {
-        self.set_ctab(CTab::Config);
         self.set_cfg_tab(if here { CfgTab::Cauldron } else { CfgTab::Providers });
         self.field = None;
         self.expand(if here { SPage::UseEndpoints } else { SPage::Endpoints });
@@ -2011,15 +2159,6 @@ impl App {
     pub fn settings_back(&mut self) -> bool {
         self.field = None;
         let Some(f) = self.selectable_flat().into_iter().nth(self.settings_sel()) else { return false };
-        // The strip: ← steps to the tab before; on the first, nothing.
-        if f.entry == Entry::Strip {
-            let i = CfgTab::ALL.iter().position(|t| *t == self.cfg_tab).unwrap_or(0);
-            if i > 0 {
-                self.set_cfg_tab(CfgTab::ALL[i - 1]);
-                return true;
-            }
-            return false;
-        }
         if let (Some(true), Some(band)) = (f.open, f.entry.band()) {
             self.nav_mut().set_open(band, false);
             return true;
@@ -2028,6 +2167,42 @@ impl App {
             Some(p) => self.select_band(&p),
             None => false,
         }
+    }
+
+    /// Whether Config entry `e` belongs to an inference source that is not
+    /// live ([`settings::inference_live`], R-V1 item 7): drawn greyed, still
+    /// selectable and read, and every act on it refused with a notice. A
+    /// greyed pool's band and the endpoints' bands open, and an endpoint's
+    /// row opens its modal, for reading.
+    pub fn entry_greyed(&self, e: &Entry) -> bool {
+        let live = settings::inference_live;
+        match e {
+            Entry::Sub { page, .. } | Entry::Row(page) => match page {
+                SPage::Pool(p) | SPage::Account(p, _) | SPage::UseAccount(p, _) => !live(p),
+                SPage::Endpoints | SPage::UseEndpoints | SPage::Endpoint { .. } | SPage::UseEndpoint(_) => !live("endpoints"),
+                SPage::Local => !live("local"),
+                _ => false,
+            },
+            Entry::Set(bd) | Entry::Run(bd) => settings::greyed_key(bd.key, &bd.ctx),
+            Entry::Item { list, .. } | Entry::Add(Add::Item(list)) => settings::greyed_key(list.key, &list.ctx),
+            Entry::Add(Add::Account(p)) => !live(p),
+            Entry::Do { act, .. } => match act {
+                Act::NewEndpoint { .. } | Act::AddEndpoint { .. } | Act::RemoveEndpoint { .. } => !live("endpoints"),
+                Act::RenameAccount { pool, .. } | Act::RemoveAccount { pool, .. } => !live(pool),
+                _ => false,
+            },
+            _ => false,
+        }
+    }
+
+    /// Refuse an act on greyed entry `e`, saying so: true when refused.
+    fn refuse_greyed(&mut self, e: &Entry) -> bool {
+        // Opening a band or a row's modal is reading, never refused.
+        if matches!(e, Entry::Sub { .. } | Entry::Row(_)) || !self.entry_greyed(e) {
+            return false;
+        }
+        self.notice = Some(settings::GREYED.into());
+        true
     }
 
     /// → / Enter: open a band (on an open one, step to its first line),
@@ -2059,19 +2234,6 @@ impl App {
 
     /// → / Enter on settings entry `e` (wherever it is shown).
     pub fn open_entry(&mut self, e: Entry) -> bool {
-        // The strip: → steps to the next tab; on the last, into its rows.
-        if e == Entry::Strip {
-            let i = CfgTab::ALL.iter().position(|t| *t == self.cfg_tab).unwrap_or(0);
-            match CfgTab::ALL.get(i + 1) {
-                Some(&t) => self.set_cfg_tab(t),
-                None => {
-                    if self.selectable().len() > 1 {
-                        self.set_settings_sel(1);
-                    }
-                }
-            }
-            return true;
-        }
         if let Some(band) = e.band() {
             if self.nav().is_open(&band) {
                 // Already open: on to the first line it holds.
@@ -2083,6 +2245,9 @@ impl App {
             } else {
                 self.expand(band);
             }
+            return true;
+        }
+        if self.refuse_greyed(&e) {
             return true;
         }
         match e {
@@ -2123,7 +2288,7 @@ impl App {
             Entry::Add(Add::Item(list)) => self.modal = Some(Modal::AddItem { list, name: String::new(), error: None }),
             Entry::Run(bd) => self.run(&bd),
             Entry::Do { act, .. } => self.start_act(act),
-            Entry::Strip | Entry::Item { .. } | Entry::Head(..) | Entry::Fixed(..) | Entry::Fact(..) | Entry::Gap | Entry::Para(_) | Entry::Ref { .. } => return false,
+            Entry::Item { .. } | Entry::Head(..) | Entry::Fixed(..) | Entry::Fact(..) | Entry::Gap | Entry::Para(_) | Entry::Ref { .. } => return false,
         }
         true
     }
@@ -2159,6 +2324,11 @@ impl App {
 
     /// Space on settings entry `e`.
     pub fn space_entry(&mut self, e: Entry) {
+        // A greyed row's switch is greyed with it.
+        if self.entry_greyed(&e) {
+            self.notice = Some(settings::GREYED.into());
+            return;
+        }
         match e {
             // A choice drawn as a switch (`dark · light`, an endpoint's
             // template) steps like any other switch.
@@ -2200,6 +2370,10 @@ impl App {
 
     /// `x` on settings entry `e`.
     pub fn clear_entry(&mut self, e: Entry) {
+        if self.entry_greyed(&e) {
+            self.notice = Some(settings::GREYED.into());
+            return;
+        }
         match Some(e) {
             // `x` on an endpoint's row removes it, asked first; a global one
             // in a cauldron's table is removed on Providers (design 0199 §7).
@@ -2242,6 +2416,9 @@ impl App {
 
     /// `+` / `-` on settings entry `e`.
     pub fn nudge_entry(&mut self, e: Entry, up: bool) {
+        if self.refuse_greyed(&e) {
+            return;
+        }
         let Entry::Set(bd) = e else { return };
         let cur = self.sget(&bd).val;
         if let Some(v) = settings::nudge(bd.def().ty, &cur, up) {
@@ -2416,6 +2593,13 @@ impl App {
     /// The name modal for an account or a list item was confirmed.
     pub(crate) fn add_named(&mut self) {
         match self.modal.clone() {
+            Some(Modal::AddAccount { pool, .. }) if !settings::inference_live(&pool) => {
+                self.modal = None;
+                self.notice = Some(settings::GREYED.into());
+            }
+            // V1.6: an account is added to Claude Code by logging it in,
+            // through the daemon — it is listed when the daemon lists it.
+            Some(Modal::AddAccount { pool, name, .. }) if pool == CLAUDE_CODE => self.start_login(&name),
             Some(Modal::AddAccount { pool, name, .. }) => {
                 let taken: Vec<String> = self.accounts(&pool).into_iter().map(|a| a.id).collect();
                 match self.settings.add_account(&pool, &name, |id| taken.iter().any(|t| t == id)) {
@@ -2425,7 +2609,7 @@ impl App {
                         if let Some(i) = at {
                             self.set_settings_sel(i);
                         }
-                        self.notice = Some(format!("added {} to {pool}", name.trim()));
+                        self.notice = Some(format!("added {} to {pool}", crate::pool::model::shown_name(name.trim())));
                     }
                     Err(e) => {
                         if let Some(Modal::AddAccount { error, .. }) = &mut self.modal {
@@ -2491,14 +2675,24 @@ impl App {
         let mut under: Option<SPage> = None;
         let mut segs: Vec<&str> = path.split('/').filter(|s| !s.is_empty()).collect();
         // A leading tab's slug picks the tab; else the tab whose top level
-        // has the first band.
+        // has the first band. V1.1: a band that moved tabs (a source's, from
+        // Providers to Accounts) is still found under its old tab's slug.
+        let top_band = |a: &mut App, t: CfgTab, slug: &str| {
+            a.set_cfg_tab(t);
+            a.selectable_flat().iter().any(|f| unsection(f.parent.clone()).is_none() && f.entry.band().is_some_and(|b| b.slug() == slug))
+        };
         if let Some(t) = segs.first().and_then(|s| CfgTab::parse(s)) {
-            self.set_cfg_tab(t);
             segs.remove(0);
+            if let Some(&next) = segs.first() {
+                if !top_band(self, t, next) && !CfgTab::ALL.into_iter().any(|o| top_band(self, o, next)) {
+                    self.set_cfg_tab(t);
+                }
+            } else {
+                self.set_cfg_tab(t);
+            }
         } else if let Some(first) = segs.first() {
             for t in CfgTab::ALL {
-                self.set_cfg_tab(t);
-                if self.selectable_flat().iter().any(|f| unsection(f.parent.clone()).is_none() && f.entry.band().is_some_and(|b| b.slug() == *first)) {
+                if top_band(self, t, first) {
                     break;
                 }
             }
@@ -2581,7 +2775,7 @@ impl App {
             Entry::Row(SPage::Endpoint { id, .. } | SPage::UseEndpoint(id)) => return Some(Tag::thing("endpoint", &id)),
             Entry::Sub { page, .. } | Entry::Row(page) => page.key_prefix(),
             Entry::Ref { tag, .. } => return Some(tag),
-            Entry::Strip | Entry::Do { .. } | Entry::Add(_) | Entry::Head(..) | Entry::Fixed(..) | Entry::Fact(..) | Entry::Gap | Entry::Para(_) => return None,
+            Entry::Do { .. } | Entry::Add(_) | Entry::Head(..) | Entry::Fixed(..) | Entry::Fact(..) | Entry::Gap | Entry::Para(_) => return None,
         };
         Some(crate::cauldron::tags::Tag::thing("setting", &key))
     }

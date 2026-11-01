@@ -42,7 +42,7 @@ fn env_in(root: &Path, name: &str) -> Environment {
 
 fn open(root: &Path, name: &str, persist: bool) -> App {
     std::env::set_var("CAULDRON_TYPE_ONE", "off");
-    App::open(env_in(root, name), seed_dir(), persist).expect("seed loads")
+    crate::live_pool::seeded(App::open(env_in(root, name), seed_dir(), persist).expect("seed loads"))
 }
 
 /// The fixture design cauldron, named `design`, in a fresh root.

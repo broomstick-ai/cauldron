@@ -50,7 +50,7 @@
 //! Cauldron's first row, BREWING or BANKED, asked before it flips; Config
 //! is Cauldron and Global, the token sources kept once for every cauldron
 //! (`settings::is_global`, `dash::GlobalBoard`); aggregate ripples are
-//! SPLASHES.
+//! TYPE 3s (V1.9; they were SPLASHES).
 //!
 //! His msg-186 mode (task 0167): the word at the top left is a button that
 //! switches the face between CAULDRON (the tabs above) and THREADS
@@ -86,6 +86,7 @@
 //! and the tests use.
 
 pub mod about;
+pub mod accounts;
 pub mod app;
 pub mod artifacts;
 pub mod artpage;
@@ -116,6 +117,8 @@ pub mod supervise;
 pub mod live;
 pub mod threads;
 pub mod tickets;
+// V1.8: where a human action's value goes (env file, keychain, node).
+pub mod route;
 pub mod view;
 
 use ratatui::backend::TestBackend;

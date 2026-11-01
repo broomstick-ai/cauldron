@@ -37,7 +37,7 @@ fn env_in(root: &Path, name: &str) -> Environment {
 
 fn open_in(root: &Path) -> App {
     std::env::set_var("CAULDRON_TYPE_ONE", "off");
-    App::open(env_in(root, "prod"), seed_dir(), true).expect("seed loads")
+    crate::live_pool::seeded(App::open(env_in(root, "prod"), seed_dir(), true).expect("seed loads"))
 }
 
 fn open() -> (App, PathBuf) {
@@ -110,7 +110,8 @@ fn cluster(a: &mut App, key: &str) {
 #[test]
 fn the_top_left_is_the_word_cauldron_and_its_name_as_a_dropdown_and_no_switch() {
     let (mut a, root) = open();
-    let top = screen_at(&mut a, 120, 30)[0].clone();
+    // V1.1: the environment bar is row 1, under the global bar.
+    let top = screen_at(&mut a, 120, 30)[1].clone();
     // msg 186: the switch left the top bar for Config's first row.
     // msg 235: the plain product name, then the cauldrons dropdown;
     // 8e4fca10 msg 457: only the environment, no product name.
@@ -126,7 +127,7 @@ fn the_top_left_is_the_word_cauldron_and_its_name_as_a_dropdown_and_no_switch() 
     a.handle(key(KeyCode::Esc));
     assert!(file(&root, "settings.toml").contains("enabled = false"), "Esc keeps it disabled");
     // There is no pause on a cluster any more: the only one is this.
-    a.set_ctab(CTab::Config);
+    a.set_ctab(CTab::Settings);
     assert!(!screen(&mut a).contains("paused"));
     assert!(tui::cauldron::settings::DEFS.iter().all(|d| d.key != "cluster.paused"));
 }
@@ -143,9 +144,10 @@ fn the_cauldrons_dropdown_hangs_under_the_name_left_aligned_untitled_and_says_wh
     click_hit(&mut a, Hit::Env);
     assert!(a.dropdown.is_some() && a.modal.is_none(), "a dropdown, not a modal");
     let rows = screen_at(&mut a, 120, 30);
-    let name_col = rows[0].find(" prod ").unwrap();
-    let box_col = rows[1].chars().enumerate().skip(1).find(|(_, c)| *c == '╭').map(|(i, _)| i).expect("the dropdown's corner (rounded, task 0209 D18)");
-    assert_eq!(box_col, rows[0][..name_col].chars().count(), "left edges aligned:\n{}\n{}", rows[0], rows[1]);
+    // V1.1: the name is on the environment bar, row 1; the dropdown under it.
+    let name_col = rows[1].find(" prod ").unwrap();
+    let box_col = rows[2].chars().enumerate().skip(1).find(|(_, c)| *c == '╭').map(|(i, _)| i).expect("the dropdown's corner (rounded, task 0209 D18)");
+    assert_eq!(box_col, rows[1][..name_col].chars().count(), "left edges aligned:\n{}\n{}", rows[1], rows[2]);
     let all = rows.join("\n");
     assert!(!all.to_lowercase().contains("environment"), "no title, no `environments`");
     let dev_row = rows.iter().find(|r| r.contains(" dev ")).unwrap();
@@ -154,8 +156,8 @@ fn the_cauldrons_dropdown_hangs_under_the_name_left_aligned_untitled_and_says_wh
     let prod_row = rows.iter().find(|r| r.contains("│ prod") || r.contains(" prod   ")).unwrap();
     assert!(prod_row.contains("enabled") && !prod_row.contains("disabled"), "{prod_row}");
     // At least 20 columns of name.
-    let inner = rows[2].chars().filter(|c| *c != ' ').count();
-    assert!(rows[1].chars().filter(|c| *c == '─').count() >= 20 + 4, "{} {inner}", rows[1]);
+    let inner = rows[3].chars().filter(|c| *c != ' ').count();
+    assert!(rows[2].chars().filter(|c| *c == '─').count() >= 20 + 4, "{} {inner}", rows[2]);
     // `+` is the last row, and makes one.
     press(&mut a, &[KeyCode::End, KeyCode::Enter]);
     assert!(matches!(a.modal, Some(Modal::NewCauldron { .. })) && a.dropdown.is_none());
@@ -169,12 +171,15 @@ fn the_cauldrons_dropdown_hangs_under_the_name_left_aligned_untitled_and_says_wh
 #[test]
 fn four_cauldron_tabs_with_no_numbers() {
     let (mut a, _r) = open();
-    let top = screen_at(&mut a, 120, 30)[0].clone();
+    let rows = screen_at(&mut a, 120, 30);
+    let top = rows[1].clone();
     // msg 186: "Let's change the work tab to be called contents".
-    // msg 235, renamed by 8e4fca10 msg 457: Cauldron · Threads · Status · Config.
-    assert!(top.ends_with("Cauldron | Threads | Status | Config"), "{top}");
+    // msg 235, renamed by 8e4fca10 msg 457; V1.1: two bars, Config the
+    // global one over the environment's.
+    assert!(top.ends_with("Cauldron | Threads | Status | Permissions | Settings"), "{top}");
+    assert!(rows[0].ends_with("TUI | Devices | Providers | Accounts"), "{}", rows[0]);
     let tabs = &top[top.find("Cauldron |").unwrap()..];
-    assert!(!tabs.chars().any(|c| c.is_ascii_digit()), "{tabs}");
+    assert!(!tabs.chars().any(|c| c.is_ascii_digit()) && !rows[0].chars().any(|c| c.is_ascii_digit()), "{tabs}");
     for (i, t) in CTab::ALL.into_iter().enumerate() {
         a.handle(key(KeyCode::F(i as u8 + 1)));
         assert_eq!(a.ctab, t);
@@ -206,7 +211,9 @@ fn status_shows_the_mesh_with_services_nested_token_sources_as_bands_and_running
     a.set_sttab(StatusTab::Tokens);
     let s = screen(&mut a);
     let cc = s.lines().find(|l| l.contains("Claude Code")).unwrap();
-    assert!(cc.contains("▶ 8 runs"), "{cc}");
+    // V1.5: Claude Code's runs are the DAEMON's roster (`threads/non-idle`),
+    // no longer the cauldron's own ripple runs; the stand-in daemon places none.
+    assert!(cc.contains("▶ 0 runs"), "{cc}");
     // A run on an inference endpoint counts on its endpoints' band (design 0199).
     assert!(s.lines().any(|l| l.contains("Inference endpoints") && l.contains("▶ 1 run")), "{s}");
     // The threads board's layout is gone.
@@ -229,12 +236,16 @@ fn status_shows_the_mesh_with_services_nested_token_sources_as_bands_and_running
     let s = screen(&mut a);
     let acct = s.lines().find(|l| l.contains("• acct2")).unwrap();
     assert!(acct.contains("weekly 88%") && acct.contains("AT LIMIT · back 1h 05m"), "{acct}");
-    // Its card is a TABLE of its fields (msg 186, task 0166 V6); its pressure
-    // is its own tokens left over its time left (msg 235): (1 − 0.88) over
-    // 49h / 168h.
-    assert!(s.contains("pressure      │ 0.41x") && s.contains("login         │ 4d"), "{s}");
+    // Its card is a TABLE of its fields (msg 186, task 0166 V6): a `pressure`
+    // row and a `login` row in the table's columns. What this pins is the
+    // LAYOUT — the 0.41 is the stand-in daemon's own cell read back (it fills
+    // it with (1 − 0.88) over 49h / 168h), so it proves no passthrough; that
+    // the number is the daemon's and not worked out here is
+    // `msg235_0191::s4_status_prints_the_daemons_pressure_cell_not_the_seeds_reading`
+    // (V1-CLEAN1, V1.5-I F3).
+    assert!(s.contains("pressure      │ 0.41") && s.contains("login         │ login ok · expires in 4d"), "{s}");
     press(&mut a, &[KeyCode::Right]);
-    assert!(screen(&mut a).contains("pressure      │ 0.41x"), "→ does not close it");
+    assert!(screen(&mut a).contains("pressure      │ 0.41"), "→ does not close it");
     // ← climbs to its source.
     press(&mut a, &[KeyCode::Left]);
     let v = tui::cauldron::status::view(&a, 120);
@@ -244,7 +255,7 @@ fn status_shows_the_mesh_with_services_nested_token_sources_as_bands_and_running
 #[test]
 fn there_is_no_system_tab_and_no_dreaming() {
     let (mut a, _r) = open();
-    assert_eq!(CTab::ALL.len(), 4);
+    assert_eq!(CTab::ALL.len(), 9, "V1.1: five on the environment bar, four on the global");
     for t in CTab::ALL {
         a.set_ctab(t);
         let s = screen(&mut a);
@@ -259,14 +270,15 @@ fn there_is_no_system_tab_and_no_dreaming() {
 #[test]
 fn config_is_collapsible_bands_with_no_breadcrumb() {
     let (mut a, _r) = open();
-    a.set_ctab(CTab::Config);
+    a.set_ctab(CTab::Settings);
     a.set_cfg_tab(tui::cauldron::menu::CfgTab::Cauldron);
     let s = screen(&mut a);
     assert!(!s.contains(" › "), "no breadcrumb:\n{s}");
     assert!(s.contains("▸ Directories") && s.contains("▸ Accounts") && s.contains("▸ Roles"), "{s}");
     // → opens a band where it is; ← closes it (the switch, opportunistic
     // and the sidebar come first: 0214 A8).
-    press(&mut a, &[KeyCode::Down, KeyCode::Down, KeyCode::Down, KeyCode::Down, KeyCode::Right]);
+    // V1.1: no sub-tab strip above them, so three ↓ from the first row.
+    press(&mut a, &[KeyCode::Down, KeyCode::Down, KeyCode::Down, KeyCode::Right]);
     let s = screen(&mut a);
     assert!(s.contains("▾ Accounts") && s.contains("Claude Code") && s.contains("sam-broomstick"), "{s}");
     // → on an open band steps onto its first row; ← climbs back to it.
@@ -288,7 +300,7 @@ fn config_is_collapsible_bands_with_no_breadcrumb() {
 #[test]
 fn paths_are_the_root_and_the_weights_path_and_both_are_editable() {
     let (mut a, root) = open();
-    a.set_ctab(CTab::Config);
+    a.set_ctab(CTab::Settings);
     // The two paths are the machine's (task 0209 D8): Devices › Storage ›
     // Directories; this cauldron's Directories holds every root its files live
     // under — what the Artifacts tab's FILE SYSTEM band was.
@@ -315,7 +327,7 @@ fn paths_are_the_root_and_the_weights_path_and_both_are_editable() {
 #[test]
 fn a_source_is_its_accounts_table_then_its_settings_and_a_row_switch_works() {
     let (mut a, root) = open();
-    a.set_ctab(CTab::Config);
+    a.set_ctab(CTab::Settings);
     a.open_settings_path("providers/claude_code").unwrap();
     let s = screen(&mut a);
     let t = s.find("sam-broomstick").expect("the accounts' table");
@@ -348,7 +360,35 @@ fn a_source_is_its_accounts_table_then_its_settings_and_a_row_switch_works() {
 fn an_endpoints_key_is_masked_typed_and_shown() {
     // Design 0199: a key is never shown — its prefix, dots, its last four.
     let (mut a, root) = open();
-    a.set_ctab(CTab::Config);
+    a.set_ctab(CTab::Settings);
+    a.open_settings_path("providers/endpoints/ep-2").unwrap();
+    // name, protocol, url, key: the fourth row of its modal.
+    // V1.7 (R-V1 item 7): the endpoint is greyed — its key is shown masked
+    // and is not typed into here.
+    let s = screen(&mut a);
+    assert!(s.lines().any(|l| l.contains(" key ") && l.contains("•••••••••••••••")), "masked:\n{s}");
+    press(&mut a, &[KeyCode::Down, KeyCode::Down, KeyCode::Down, KeyCode::Enter]);
+    let opened = a.field.is_some();
+    let notice = a.notice.clone();
+    // V1.7b F3: the key IS typed and Enter pressed, so "nothing written" is
+    // a claim about a key that was offered (the ungreyed body below writes
+    // exactly this key to this file).
+    typed(&mut a, "sk-or-v1-NEWKEY0000000000000000beef");
+    press(&mut a, &[KeyCode::Enter]);
+    assert!(!global_file(&root, "settings.toml").contains("NEWKEY"), "nothing written");
+    assert!(!opened, "no field opens on a greyed key");
+    assert_eq!(notice.as_deref(), Some(tui::cauldron::settings::GREYED));
+}
+
+/// V1.7b F1: the body of `an_endpoints_key_is_masked_typed_and_shown` at 59c5ec8f, verbatim — the positive
+/// spec the greyed endpoints lost (V1.7-I F1). Un-ignore when
+/// `inference_live` ungreys them; `an_endpoints_key_is_masked_typed_and_shown` above is the refusal it pairs with.
+#[test]
+#[ignore = "endpoints greyed in V1.7; restore when un-greyed"]
+fn an_endpoints_key_is_masked_typed_and_shown_ungreyed() {
+    // Design 0199: a key is never shown — its prefix, dots, its last four.
+    let (mut a, root) = open();
+    a.set_ctab(CTab::Settings);
     a.open_settings_path("providers/endpoints/ep-2").unwrap();
     // name, protocol, url, key: the fourth row of its modal.
     press(&mut a, &[KeyCode::Down, KeyCode::Down, KeyCode::Down, KeyCode::Enter]);
@@ -367,7 +407,7 @@ fn a_row_says_what_its_default_is_never_an_override() {
     // msg 235: "we should actually just say what the default is ... So don't
     // even show that it's an override. Just say what the default is."
     let (mut a, _r) = open();
-    a.set_ctab(CTab::Config);
+    a.set_ctab(CTab::Settings);
     a.open_settings_path("providers/claude_code/acct2").unwrap();
     let s = screen(&mut a);
     assert!(!s.contains("inherited ·") && !s.contains("override") && !s.contains("↑pool"), "{s}");
@@ -380,7 +420,7 @@ fn a_row_says_what_its_default_is_never_an_override() {
 #[test]
 fn max_concurrent_zero_is_zero_and_minus_one_is_unlimited() {
     let (mut a, root) = open();
-    a.set_ctab(CTab::Config);
+    a.set_ctab(CTab::Settings);
     a.open_settings_path("providers/claude_code").unwrap();
     let at = a.selectable().iter().position(|e| matches!(e, Entry::Set(b) if b.key == "pools.{pool}.max_concurrent")).unwrap();
     a.rows[SETTINGS_ROW] = at;
@@ -403,7 +443,7 @@ fn max_concurrent_zero_is_zero_and_minus_one_is_unlimited() {
 #[test]
 fn every_setting_has_an_info_icon_whose_modal_is_the_only_place_its_explanation_is() {
     let (mut a, _r) = open();
-    a.set_ctab(CTab::Config);
+    a.set_ctab(CTab::Settings);
     a.open_settings_path("storage").unwrap();
     let s = screen(&mut a);
     // Every SETTING row; a fact (`warnings cap`) is no setting.
@@ -427,7 +467,7 @@ fn every_setting_has_an_info_icon_whose_modal_is_the_only_place_its_explanation_
 #[test]
 fn the_tui_tab_has_the_two_preserve_switches_and_leaving_resets_unless_one_is_on() {
     let (mut a, _r) = open();
-    a.set_ctab(CTab::Config);
+    a.set_ctab(CTab::Settings);
     a.set_cfg_tab(tui::cauldron::menu::CfgTab::Tui);
     let s = screen(&mut a);
     for k in ["preserve Config expansion", "preserve Status expansion"] {
@@ -436,7 +476,7 @@ fn the_tui_tab_has_the_two_preserve_switches_and_leaving_resets_unless_one_is_on
     // Off: away and back, every band is closed.
     a.open_settings_path("tui/attention").unwrap();
     a.set_ctab(CTab::Cauldron);
-    a.set_ctab(CTab::Config);
+    a.set_ctab(CTab::Settings);
     assert!(a.snav.open.is_empty());
     // On: kept.
     a.open_settings_path("tui/attention").unwrap();
@@ -444,7 +484,7 @@ fn the_tui_tab_has_the_two_preserve_switches_and_leaving_resets_unless_one_is_on
     a.rows[SETTINGS_ROW] = at;
     press(&mut a, &[KeyCode::Char(' ')]);
     a.set_ctab(CTab::Status);
-    a.set_ctab(CTab::Config);
+    a.set_ctab(CTab::Settings);
     assert!(a.snav.open.contains(&SPage::Attention));
     // Status's bands reset the same way.
     a.set_ctab(CTab::Status);
@@ -482,9 +522,9 @@ fn a_retired_setting_in_his_file_is_unused_said_and_never_deleted() {
 fn the_sidebar_header_says_clusters_with_a_plus_and_every_row_has_its_plus() {
     let (mut a, _r) = open();
     let rows = screen_at(&mut a, 120, 30);
-    assert!(rows[2].starts_with("│ Clusters") && rows[2].contains("+ │"), "{}", rows[2]);
-    assert!(rows[3].starts_with("│───"), "a line under the header: {}", rows[3]);
-    assert!(rows[4].contains("Cauldron") && rows[4].contains("+ │"), "{}", rows[4]);
+    assert!(rows[3].starts_with("│ Clusters") && rows[3].contains("+ │"), "{}", rows[3]);
+    assert!(rows[4].starts_with("│───"), "a line under the header: {}", rows[4]);
+    assert!(rows[5].contains("Cauldron") && rows[5].contains("+ │"), "{}", rows[5]);
     assert!(!rows.join("\n").contains("+ new cluster"));
     // The header's `+` makes a ROOT cluster; a row's makes one under it.
     click_hit(&mut a, Hit::AddRoot);
@@ -619,16 +659,18 @@ fn a_human_action_is_a_box_of_steps_that_hold_his_hand() {
     assert!(head.contains("● open") && head.contains("d ·") && head.contains("0/2 steps"), "{head}");
     assert!(s.contains("Step 1 — create the project") && s.contains("↗ Open Supabase") && s.contains("[ done ]"));
     assert!(s.lines().any(|l| l.contains("◐ draft")), "a draft:\n{s}");
-    // 0217 B2: a field takes no value here (no destination exists, and a
-    // box that said `✓ submitted` while dropping the key was a lie): it says
-    // where to give it, and the step is marked done by hand.
-    assert!(s.contains("not taken here — give it in the human-actions app") && !s.contains("Enter submits"), "{s}");
+    // V1.8 (product spec §9 supersedes 0217 B2): a field takes its value
+    // only toward the destination its `route:` names. This fixture's secret
+    // field names none, so it is REFUSED — no input — and the step is
+    // marked done by hand.
+    assert!(s.contains("✗ refused: SUPABASE_ANON_KEY is secret and names no destination") && !s.contains("Enter submits"), "{s}");
     let parts: Vec<Item> = a.items().into_iter().filter(|i| matches!(i, Item::HaPart { serial: 5, .. })).collect();
     let done2 = *parts.last().unwrap();
     let field = parts[parts.len() - 2];
     select_item(&mut a, field);
     press(&mut a, &[KeyCode::Enter]);
-    assert!(a.notice.as_deref().is_some_and(|n| n.contains("not taken here")), "{:?}", a.notice);
+    assert!(a.notice.as_deref().is_some_and(|n| n.starts_with("refused:")), "{:?}", a.notice);
+    assert!(a.ha_entry.is_none(), "a refused field takes no keys");
     typed(&mut a, "eyJhbGciOi-secret");
     press(&mut a, &[KeyCode::Enter]);
     let t = std::fs::read_to_string(root.join("data/prod/tui/soup/tickets.json")).unwrap_or_default();
@@ -736,10 +778,10 @@ fn the_dump_is_only_on_work_takes_no_free_keys_and_a_reference_deletes_whole() {
     press(&mut a, &[KeyCode::Home, KeyCode::Right, KeyCode::Right, KeyCode::Right, KeyCode::Right, KeyCode::Delete]);
     assert_eq!(a.composer.text(), "see ", "Delete before a reference took it whole");
     // From another tab, `i` quotes into the dump and stays.
-    a.set_ctab(CTab::Config);
+    a.set_ctab(CTab::Settings);
     a.set_cfg_tab(tui::cauldron::menu::CfgTab::Cauldron);
-    press(&mut a, &[KeyCode::Down, KeyCode::Char('i')]);
-    assert_eq!(a.ctab, CTab::Config);
+    press(&mut a, &[KeyCode::Char('i')]);
+    assert_eq!(a.ctab, CTab::Settings, "`i` quotes and he stays on the page he was on");
     assert!(a.composer.text().contains("> [setting:cauldron.enabled]"), "{}", a.composer.text());
     // And it is said, though the bucket is not on this tab.
     assert!(screen(&mut a).contains("quoted [setting:cauldron.enabled] into the bucket"), "{}", screen(&mut a));

@@ -256,7 +256,7 @@ fn every_band_header_counts_with_a_noun() {
         band_metas(&s, &mut out, &format!("Status {st:?}"));
     }
     for t in tui::cauldron::menu::CfgTab::ALL {
-        a.set_ctab(CTab::Config);
+        a.set_ctab(CTab::Settings);
         a.set_cfg_tab(t);
         let s = render_to_text(&mut a, 150, 430).unwrap().join("\n");
         band_metas(&s, &mut out, &format!("Config {t:?}"));

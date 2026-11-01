@@ -146,7 +146,7 @@ fn every_screen(a: &mut App, f: &mut impl FnMut(&str, &mut App)) {
         f(&format!("Status {st:?}"), a);
     }
     for t in CfgTab::ALL {
-        a.set_ctab(CTab::Config);
+        a.set_ctab(CTab::Settings);
         a.set_cfg_tab(t);
         open_all(a);
         f(&format!("Config {t:?}"), a);

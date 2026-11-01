@@ -748,7 +748,11 @@ fn note_entry_refusal(
 ) {
     let prefix = format!("{FACE}-sub-");
     let Some(rest) = correlate.strip_prefix(prefix.as_str()) else {
-        debug!(correlate, code = r.code, "seam: an unrouted refusal: {}", r.message);
+        // The refusal's TEXT is the producer's prose and may quote a key —
+        // an account's key is its address (V1-ACCT, V1-CLEAN2-I N2). The
+        // seam is face-neutral and holds no masker, so the text never goes
+        // to the log at all: its code and length do.
+        debug!(correlate, code = r.code, message_chars = r.message.chars().count(), "seam: an unrouted refusal");
         return;
     };
     let mut parts = rest.splitn(3, '\u{1}');

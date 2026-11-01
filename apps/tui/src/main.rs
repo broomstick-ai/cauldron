@@ -17,7 +17,6 @@
 //! resolution is documented.
 
 use anyhow::{Context, Result};
-use tracing_subscriber::EnvFilter;
 
 use tui::{app, first_run, term};
 
@@ -394,12 +393,15 @@ fn init_logging(name: &str) -> Result<tracing_appender::non_blocking::WorkerGuar
     std::fs::create_dir_all(&dir).with_context(|| format!("create {}", dir.display()))?;
     let file = tracing_appender::rolling::never(&dir, name);
     let (writer, guard) = tracing_appender::non_blocking(file);
-    tracing_subscriber::fmt()
-        .with_env_filter(
-            EnvFilter::try_from_env("TUI_LOG").unwrap_or_else(|_| EnvFilter::new("info")),
-        )
-        .with_writer(writer)
-        .with_ansi(false)
+    // `TUI_LOG` as given, with the targets that see raw wire frames capped
+    // at debug: `TUI_LOG=trace` never writes a frame's body (V1-ACCT-I N4,
+    // `tui::log_filter`).
+    use tracing_subscriber::layer::SubscriberExt;
+    use tracing_subscriber::util::SubscriberInitExt;
+    use tracing_subscriber::Layer;
+    let spec = std::env::var("TUI_LOG").ok();
+    tracing_subscriber::registry()
+        .with(tracing_subscriber::fmt::layer().with_writer(writer).with_ansi(false).with_filter(tui::log_filter::face_filter(spec.as_deref())))
         .init();
     Ok(guard)
 }

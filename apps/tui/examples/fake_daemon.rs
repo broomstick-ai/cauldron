@@ -87,6 +87,9 @@
 //! against rows that are visibly not his (`tui --cauldron --dump --tab
 //! threads`). The threads are invented here and nowhere else; REL-3's demo
 //! dataset is where the teaser's will come from (release question Q-T2).
+//! V1.5 adds two made-up accounts (`demo-alpha`, `demo-beta`, distinct
+//! gauges, pressure `1.7` and `∞`) and a roster homing one running thread, so
+//! Status › Tokens can be proved the same way (`--status-tab tokens`).
 //!
 //! (`TUI_THREADS_PORT`, the legacy `/health` door, is unrelated and is left
 //! alone — setting only `TUI_THREADS_CHASSIS_PORT` is not refused; see
@@ -157,11 +160,17 @@ async fn main() {
                     println!("· {method}");
                 }
 
-                let payload = answer(&method, leaf, &seq);
-                let resp = json!({
-                    "type": "response", "correlate": id,
-                    "outcome": {"type": "success", "payload": payload},
-                });
+                // V1.6: LOGGING IN IS INERT HERE. Every step of the daemon's
+                // piped login is refused, so a face driven against this fake
+                // (the demo, `cauldron-build`) can show the refusal and can
+                // never reach a real account.
+                let outcome = if method.starts_with("accounts/login/") {
+                    json!({"type": "error", "code": "refused",
+                        "error": "this is a stand-in daemon: logging in is inert here, and no account is reached"})
+                } else {
+                    json!({"type": "success", "payload": answer(&method, leaf, &seq)})
+                };
+                let resp = json!({ "type": "response", "correlate": id, "outcome": outcome });
                 if tx.send(Message::Text(resp.to_string())).await.is_err() {
                     return;
                 }
@@ -284,11 +293,36 @@ fn demo_frames() -> Vec<Value> {
             "app": {"summary_updated": {"summary": name, "by": "tui", "ts": AT}},
         }), Value::Object(cells))
     };
+    // V1.5: two made-up accounts, with distinct gauges, for Status › Tokens
+    // (`--status-tab tokens`): the daemon's `accounts` row shape
+    // (`lib/threads/src/shapes/accounts.rs::AccountRow`), plus the roster
+    // that homes one running thread on the first.
+    let account = |name: &str, axes: &[(&str, f64)], pressure: Value| {
+        let gauge: serde_json::Map<String, Value> = axes
+            .iter()
+            .map(|(ax, pct)| (ax.to_string(), json!({"observed_pct": pct, "resets_at": "2030-01-01T00:00:00Z", "confidence": 1.0})))
+            .collect();
+        let cells: serde_json::Map<String, Value> =
+            ["registered", "share", "disabled", "gauge", "limit", "health", "credential", "pressure"].iter().map(|c| (c.to_string(), known())).collect();
+        export("accounts", name, json!({
+            "account": name, "registered": true, "share": {"share": 0.5}, "disabled": {"disabled": false},
+            "gauge": gauge, "limit": {"until": null}, "health": {"dead_since": null},
+            "credential": {"slot_state": "live", "is_live_login": false}, "pressure": pressure,
+        }), Value::Object(cells))
+    };
     let item = |seq: u64, kind: &str, text: &str| json!({"seq": seq, "kind": kind, "ts": AT, "payload": {"here": {"kind": kind, "text": text}}});
     vec![
         export("threads/recent-updates", "fleet", json!({"pool": "fleet", "threads": [
             {"id": "demo-thread-1", "at": AT, "unread": 0, "seen_seq": 0},
             {"id": "demo-thread-2", "at": AT, "unread": 0, "seen_seq": 0}]}), json!({"threads": known()})),
+        json!({"type": "shape", "shape": "accounts", "op": "read", "as_of": AT,
+            "epoch": {"init_at": AT, "reinit": 0, "lost": 0, "state": "known"},
+            "members": {"state": "known", "keys": ["demo-alpha", "demo-beta"], "complete": true}}),
+        account("demo-alpha", &[("session", 23.0), ("weekly-all", 41.0), ("weekly-fable", 12.0)], json!({"pressure": 1.7, "share": 0.5})),
+        account("demo-beta", &[("session", 67.0), ("weekly-all", 88.0)], json!({"pressure": null, "infinite": true, "share": 0.5})),
+        export("threads/non-idle", "fleet", json!({"pool": "fleet", "threads": [
+            {"id": "demo-thread-1", "account": "demo-alpha", "state": "active", "executing": true, "queued": 0, "since": AT}]}),
+            json!({"threads": known()})),
         thread("demo-thread-1", "Demo: brew the first potion"),
         thread("demo-thread-2", "Demo: label the cauldron shelf"),
         export("threads/log", "demo-thread-1", json!({"thread_id": "demo-thread-1", "events": [

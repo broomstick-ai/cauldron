@@ -5,37 +5,100 @@ Every release of cauldron is listed here, newest first. The format follows
 [Semantic Versioning](https://semver.org/). The plan for upcoming releases is in
 [ROADMAP.md](ROADMAP.md).
 
-## [Unreleased] — V1
+## [Unreleased]
 
-Planned for the release after 0.1.1:
+Planned, and not released yet. Ripples and the soup engine arrive in 0.2.0.
 
-- **Two tab bars.** A global bar on top (Config: the UI, devices, providers and
-  accounts) and an environment bar below it (Cauldron, Threads, Status,
-  Permissions).
-- **First run.** A "create your first environment" screen, then a "create your
-  first cluster" screen for a new, empty environment.
-- **Status → Ledger.** The Ledger becomes the first Status sub-tab, shown as a
-  time-ordered list of dumps. Each dump expands into its phases and the chain
-  of work it set off.
-- **Status → Tokens.** The real account pool and its usage pressure.
-- **Config → Accounts.** Accounts are global: you log in once, then switch each
-  one on or off per cauldron, with a configurable default.
-- **Inference.** Claude Code is the only provider. Every other endpoint is
-  shown greyed out.
-- **Secret human actions.** A masked input, plus a routing adapter that sends
-  the value to a graph node, the macOS keychain or an env file. A secret action
-  with no destination is rejected when it is written.
+### 0.2.0 (planned)
+
+<!-- RIPPLES: filled when the ripple executor's RV1.S16 lands -->
+
 - **Ripples live.** Dumps set off ripples, and ripples write to the soup. The
   soup engine is hardened, and the Ledger shows real ripple events. Neither is
-  in 0.1.0 or 0.1.1.
-- **Cleanup** of leftover names and states in the UI.
+  in 0.1.0, 0.1.1 or 0.1.2.
+
+### Not yet scheduled to a release
+
 - **Fix: threads daemon boot with an oversized write-ahead log.** The daemon
   will fold the log once at boot, before recovery, and its periodic fold will
-  first run at 30 seconds instead of 5 minutes. In 0.1.0 and 0.1.1, a large log
+  first run at 30 seconds instead of 5 minutes. Through 0.1.2, a large log
   left from earlier runs can stall startup until the supervisor kills the daemon.
 - **Fix: re-login re-enables a disabled account.** A verified login will lift
-  the disable and trigger a fresh usage reading. In 0.1.0 and 0.1.1, only an
+  the disable and trigger a fresh usage reading. Through 0.1.2, only an
   explicit enable clears it.
+
+## [0.1.2] — 2026-10-31
+
+The V1 interface. Ripples and the soup engine arrive in 0.2.0: nothing in
+this release acts on a dump yet.
+
+### Added
+
+- **Two tab bars.** A global bar on top, Config, holds TUI, Devices, Providers
+  and Accounts. Under it, the environment bar holds Cauldron, Threads, Status,
+  Permissions and Settings (this environment's own settings, which Config
+  called `<name> cauldron` in 0.1.x), with the environment dropdown at its
+  left. The two bars are drawn in different colors, and one tab is shown at a
+  time. The single Config tab of 0.1.x is gone.
+- **First run.** An empty install opens on one action, "+ create your first
+  cauldron", and makes nothing until you take it. A cauldron with no cluster
+  of its own opens with the sidebar's `+` selected, ready to name its first
+  cluster. When no cauldron is named, the face and `cauldron tui` open the
+  last-used one.
+- **Secret human actions.** A secret field of a human action is typed into a
+  masked input, and its value is routed to the environment's env file or the
+  macOS keychain, never into the soup. A non-secret field can also be routed
+  to the action's graph node. A secret field with no destination, two fields
+  with one name, or two fields routed to one env variable is rejected when
+  the action is written, and the face runs the same check before it draws one.
+- **`cauldron ctl`: the face, headless.** `ctl dump --env <name>` sends one
+  dump (its text on stdin) through the TUI's own send — the same line in
+  `dumps.jsonl` the send key writes; `ctl frame` prints one frame of the face
+  (`ctl frame --status-tab ledger`); `ctl node <id>` reads one node from the
+  environment's soup door at the address its seam table declares. JSON out,
+  non-zero exit on any refusal; `dump` is the only write, and the
+  `cauldron-build` demo refuses it. The face gains `--dump --send`, which
+  `ctl dump` runs. A `ctl dump` sends only its own text: the draft open in
+  your face is never read into it.
+- **Config → Accounts.** Accounts are global and come from the threads
+  daemon: the roster is the daemon's own account list, and when it is not
+  there yet the page says why (not connected, connecting, threads is down,
+  loading). Log in once, from the face: "+ add account", or an account's
+  "log in", opens a login window where you paste the code (drawn as dots).
+  Each account can be taken out of the pool or put back, and switched on or
+  off for new cauldrons; each cauldron's Settings → Accounts can inherit that
+  default or turn the account on or off for itself. Addresses are masked
+  everywhere as `a•••@e•••`, and two addresses that mask alike get a short
+  tag to tell them apart (`c•••@e••• ·d64`). Account ids are salted per
+  install, and settings saved under the old ids carry over. A login code is
+  never printed in a debug line, and the face's log keeps raw daemon frames
+  out at every log level.
+
+### Changed
+
+- **Status → Ledger, first version.** The Ledger shows dumps as a time-ordered
+  event flow, newest first; each dump expands into its phases and the tree of
+  work under it. It reads the environment's own data: a real environment,
+  `prod` included, shows its own ledger or an empty one, never sample data.
+  The `cauldron-build` demo environment carries a demo ledger.
+- **Status → Tokens reads the real account pool.** Claude Code's band shows
+  the threads daemon's accounts, their usage meters and their placement
+  pressure, over the face's one connection to the daemon, instead of sample
+  data. Values not read yet show as loading, never as missing.
+- **Inference: Claude Code is the only live inference source.** Codex, the
+  other token sources, every endpoint and every template are shown greyed out,
+  never hidden, and acting on one is refused with a notice. What you already
+  wrote for an endpoint is kept.
+- **Cleanup.** The ripple kind once called "splash" is now "type 3" (stored as
+  `type_three`; policies that say `shell` still read). Threads no longer show
+  an "absent" status: a value that is not there is left blank, and one not
+  read yet shows `…`.
+- **Threads tab, honest when the daemon never answered.** A Threads tab whose
+  daemon was dialled but never reached now reads "threads is down · it has not
+  answered yet" instead of claiming to show what it last said.
+- **Isolation: every never-dial port is refused.** An isolated face (see
+  0.1.1) refuses an environment that declares threads on any port the egress
+  check never dials, and says so in its own words.
 
 ## [0.1.1] — 2026-10-31
 

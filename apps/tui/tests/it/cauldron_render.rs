@@ -49,7 +49,7 @@ fn open(root: &Path, name: &str) -> App {
     // Hermetic: no test here may make a billed type-one call, whatever is on
     // PATH (a cluster made here seeds; tests/it/seed_live.rs is the live proof).
     std::env::set_var("CAULDRON_TYPE_ONE", "off");
-    App::open(env_in(root, name), seed_dir(), true).expect("seed loads")
+    crate::live_pool::seeded(App::open(env_in(root, name), seed_dir(), true).expect("seed loads"))
 }
 
 fn app() -> App {
@@ -661,7 +661,110 @@ fn no_cauldron_tab_carries_a_legend_on_any_band_or_page() {
 fn no_config_band_confirm_or_picker_carries_a_cut_explanation() {
     use tui::cauldron::menu::{Entry, Nav};
     let mut a = app();
-    a.set_ctab(CTab::Config);
+    a.set_ctab(CTab::Settings);
+    // Both tabs (msg 186), every band open.
+    let mut opened = 0;
+    let mut s = String::new();
+    let mut modals = 0;
+    for t in tui::cauldron::menu::CfgTab::ALL {
+        a.set_cfg_tab(t);
+        opened += open_every_config_band(&mut a);
+        let one = config_text(&a);
+        assert_clean(&sweep(&mut a), &format!("Config › {}, every band open, on screen", t.label()));
+        assert_clean(&one, &format!("Config › {}, every band open", t.label()));
+        // (`on disk pressure` is a setting: collect when the disk is full.)
+        let bare = one.replace("on disk pressure", "");
+        for w in STATUS_ON_CONFIG {
+            assert!(!bare.contains(w), "Config › {}: `{w}` is status, not config:\n{one}", t.label());
+        }
+        s.push_str(&one);
+        // Every table row's modal (msg 235), swept the same way.
+        let rows: Vec<tui::cauldron::menu::SPage> = a.selectable().into_iter().filter_map(|e| if let Entry::Row(p) = e { Some(p) } else { None }).collect();
+        for p in rows {
+            a.open_row(p.clone());
+            let m = sweep(&mut a);
+            assert_clean(&m, &format!("Config › {}, the modal of {p:?}", t.label()));
+            let inside: String = m.lines().filter(|l| l.contains('┃')).collect::<Vec<_>>().join("\n");
+            for w in STATUS_ON_CONFIG {
+                assert!(!inside.contains(w), "{p:?}'s modal: `{w}` is status, not config:\n{m}");
+            }
+            a.modal = None;
+            modals += 1;
+        }
+        // Every `+ add endpoint`'s modal (design 0199 §3, §4), as each
+        // template and each local server draws it.
+        let adds: Vec<tui::cauldron::manage::Act> = a.selectable().into_iter().filter_map(|e| match e {
+            Entry::Do { act: act @ tui::cauldron::manage::Act::NewEndpoint { .. }, .. } => Some(act),
+            _ => None,
+        }).collect();
+        // V1.7 (R-V1 item 7): `+ add endpoint` is greyed and inert — it
+        // opens no add modal and drafts nothing.
+        for act in adds {
+            let here = matches!(act, tui::cauldron::manage::Act::NewEndpoint { here: true });
+            a.notice = None;
+            a.start_act(act.clone());
+            assert!(a.modal.is_none() && a.notice.as_deref() == Some(tui::cauldron::settings::GREYED), "{:?}", a.modal);
+            assert!(a.settings.endpoint_ids(here).iter().all(|id| id != "ep-0"));
+        }
+    }
+    assert!(modals > 30, "{modals} row modals swept");
+    // An account, a role and a service are a table's ROW now, opened in a
+    // modal, not a band (msg 235).
+    assert!(opened > 30, "{opened}");
+    // A table row's `›` ends its row; a breadcrumb's sits between words.
+    assert!(!s.match_indices(" › ").any(|(i, _)| s[i + " › ".len()..].chars().next().is_some_and(char::is_alphanumeric)), "no breadcrumb:\n{s}");
+    // A value from the cauldron's own level is the default (msg 165).
+    assert!(!s.contains("inherited · cauldron") && s.contains("default"), "{s}");
+    // No planned token source (design 0199: they are endpoint templates).
+    assert!(!s.contains("planned"), "{s}");
+    // Every setting's explanation is in its Help modal, never on the page.
+    let mut helped = 0;
+    let mut every: Vec<Entry> = Vec::new();
+    for t in tui::cauldron::menu::CfgTab::ALL {
+        a.set_cfg_tab(t);
+        every.extend(a.selectable());
+    }
+    for e in every {
+        let (Entry::Set(bd) | Entry::Run(bd)) = e else { continue };
+        let text = tui::cauldron::settings::help(bd.def());
+        let head: String = text.chars().take(36).collect();
+        if head.chars().count() < 36 {
+            continue;
+        }
+        assert!(!s.contains(&head), "{}: its explanation is on the page: {head}", bd.key);
+        a.open_help(&bd);
+        let Some(Modal::Help { text: t, .. }) = &a.modal else { panic!("{:?}", a.modal) };
+        assert_eq!(t, &text);
+        a.modal = None;
+        helped += 1;
+    }
+    assert!(helped > 40, "{helped}");
+    a.snav = Nav::cauldron();
+    // Every confirm: a body, and no key hints.
+    use tui::cauldron::manage::Act;
+    for act in [Act::DeleteCluster("X-1".into()), Act::RemoveAccount { pool: "claude_code".into(), id: "acct2".into() }, Act::UnregisterRepo("harness".into())] {
+        a.start_act(act.clone());
+        let s = sweep(&mut a);
+        assert!(matches!(a.modal, Some(Modal::Confirm { .. })), "{act:?}");
+        assert_clean(&s, &format!("{act:?}"));
+        a.modal = None;
+    }
+}
+
+/// No Config band explains itself (msg 55, msg 165; audit 0118 F37): the
+/// cauldron's Config with EVERY band open, and every confirm a management
+/// act asks. A setting's explanation is
+/// in its Help modal and nowhere on the page.
+///
+/// V1.7b F1: the body of `no_config_band_confirm_or_picker_carries_a_cut_explanation` at 59c5ec8f, verbatim — the positive
+/// spec the greyed endpoints lost (V1.7-I F1). Un-ignore when
+/// `inference_live` ungreys them; `no_config_band_confirm_or_picker_carries_a_cut_explanation` above is the refusal it pairs with.
+#[test]
+#[ignore = "endpoints greyed in V1.7; restore when un-greyed"]
+fn no_config_band_confirm_or_picker_carries_a_cut_explanation_ungreyed() {
+    use tui::cauldron::menu::{Entry, Nav};
+    let mut a = app();
+    a.set_ctab(CTab::Settings);
     // Both tabs (msg 186), every band open.
     let mut opened = 0;
     let mut s = String::new();
@@ -898,9 +1001,10 @@ fn the_cluster_strip_is_the_pages_first_row_and_the_content_starts_under_it_on_e
         a.set_ktab(t);
         let rows = render_to_text(&mut a, 120, 40).unwrap();
         let page = |y: usize| rows[y].split('│').nth(2).unwrap_or("").trim().to_string();
-        assert!(rows[1].starts_with('╭') && rows[1].contains(" surface "), "{t:?} the surface box: {:?}", rows[1]);
-        assert!(page(2).starts_with("Questions "), "{t:?} strip: {:?}", rows[2]);
-        assert!(!page(3).is_empty() && !page(3).chars().all(|c| c == '─'), "{t:?}: no rule, no blank under the tabs: {:?}", rows[3]);
+        // V1.1: two bars over it, so the box starts on row 2.
+        assert!(rows[2].starts_with('╭') && rows[2].contains(" surface "), "{t:?} the surface box: {:?}", rows[2]);
+        assert!(page(3).starts_with("Questions "), "{t:?} strip: {:?}", rows[3]);
+        assert!(!page(4).is_empty() && !page(4).chars().all(|c| c == '─'), "{t:?}: no rule, no blank under the tabs: {:?}", rows[4]);
     }
 }
 
@@ -1228,15 +1332,17 @@ fn headless_writes_nothing() {
 fn the_top_bar_is_cauldron_its_name_then_the_tabs_and_names_no_workspace() {
     let mut a = app();
     let rows = render_to_text(&mut a, 120, 40).unwrap();
-    let top = &rows[0];
+    // V1.1: the environment bar is row 1, the global bar row 0.
+    assert!(rows[0].ends_with("TUI | Devices | Providers | Accounts"), "{}", rows[0]);
+    let top = &rows[1];
     let words: Vec<&str> = top.split_whitespace().collect();
     // No switch (msg 186: it is Config's first row now).
     // msg 235: the plain product name, the cauldrons dropdown, the tabs;
     // 8e4fca10 msg 457: the product name is gone, the environment leads.
     assert_eq!(&words[..3], &["prod", "▾", "Cauldron"], "{top}");
     assert_eq!(top.matches("Cauldron").count(), 1, "only the tab says Cauldron: {top}");
-    assert!(top.ends_with("Cauldron | Threads | Status | Config"), "{top}");
-    for gone in ["Cluster ·", "Energy", "Ripples", "Mesh", "Settings", "Soup", "System", "Services", "Contents"] {
+    assert!(top.ends_with("Cauldron | Threads | Status | Permissions | Settings"), "{top}");
+    for gone in ["Cluster ·", "Energy", "Ripples", "Mesh", "Settings ›", "Soup", "System", "Services", "Contents", "Config"] {
         assert!(!top.contains(gone), "{gone}: {top}");
     }
     for tab in CTab::ALL {
@@ -1268,9 +1374,9 @@ fn clicking_the_name_opens_the_cauldrons_dropdown() {
     assert_clean(&s, "the cauldrons dropdown");
     // It hangs under the name, left-aligned with it.
     let (r, _) = *a.hits.iter().find(|(_, h)| *h == Hit::Env).unwrap();
-    let name: String = rows[0].chars().skip(r.x as usize).take(r.width as usize).collect();
+    let name: String = rows[1].chars().skip(r.x as usize).take(r.width as usize).collect();
     assert_eq!(name.split_whitespace().collect::<Vec<_>>(), ["prod", "▾"]);
-    assert_eq!(a.dropdown_anchor, (r.x, 1));
+    assert_eq!((r.y, a.dropdown_anchor), (1, (r.x, 2)), "V1.1: on the environment bar, row 1");
 }
 
 #[test]
@@ -1332,11 +1438,11 @@ fn plus_in_the_dropdown_names_a_cauldron_creates_it_and_lands_on_its_config() {
     a.handle(key(KeyCode::Enter));
     assert!(a.modal.is_none(), "{:?}", a.modal);
     assert_eq!(a.env.name, "trial");
-    assert_eq!(a.ctab, CTab::Config, "a new cauldron opens on its Config");
+    assert_eq!(a.ctab, CTab::Settings, "a new cauldron opens on its Settings");
     assert!(root.join("data/trial").is_dir(), "created on disk by the explicit new");
     assert!(a.composer.is_blank(), "its own draft");
     let s = screen(&mut a);
-    let top = s.lines().next().unwrap();
+    let top = s.lines().nth(1).unwrap();
     assert!(top.contains(" trial "), "{top}");
     assert!(s.contains("created trial"), "{s}");
 
@@ -1389,25 +1495,29 @@ fn shift_tab_steps_cauldron_tabs_f_keys_jump_and_cmd_is_unbound() {
         a.handle(cmd(c));
         assert_eq!(a.ctab, CTab::Cauldron, "⌘{c} moved a tab");
     }
+    // V1.1: F1 … F9 are the environment bar's five, then the global bar's four.
     a.handle(key(KeyCode::F(4)));
-    assert_eq!(a.ctab, CTab::Config);
-    a.handle(key(KeyCode::F(5))); // no fifth tab: nothing
-    assert_eq!(a.ctab, CTab::Config);
+    assert_eq!(a.ctab, CTab::Permissions);
     a.handle(key(KeyCode::F(9)));
-    assert_eq!(a.ctab, CTab::Config);
+    assert_eq!(a.ctab, CTab::Accounts);
+    a.handle(key(KeyCode::F(10))); // no tenth tab: nothing
+    assert_eq!(a.ctab, CTab::Accounts);
     a.handle(key(KeyCode::F(1)));
     assert_eq!(a.ctab, CTab::Cauldron);
     // Shift-Tab: legacy CSI Z, the kitty form (BackTab + SHIFT), and Tab +
     // SHIFT as some stacks report it — each steps to the next, wrapping.
-    // msg 235: Surface · Threads · Status · Config.
     a.handle(key(KeyCode::BackTab));
     assert_eq!(a.ctab, CTab::Threads);
     a.handle(with(KeyCode::BackTab, KeyModifiers::SHIFT));
     assert_eq!(a.ctab, CTab::Status);
     a.handle(with(KeyCode::Tab, KeyModifiers::SHIFT));
-    assert_eq!(a.ctab, CTab::Config);
+    assert_eq!(a.ctab, CTab::Permissions);
+    for _ in 0..5 {
+        a.handle(key(KeyCode::BackTab));
+    }
+    assert_eq!(a.ctab, CTab::Accounts);
     a.handle(key(KeyCode::BackTab));
-    assert_eq!(a.ctab, CTab::Cauldron, "wraps through four");
+    assert_eq!(a.ctab, CTab::Cauldron, "wraps through nine");
     // From inside the bucket too, and nothing is typed.
     a.handle(key(KeyCode::Char('a')));
     a.handle(key(KeyCode::BackTab));
@@ -1543,7 +1653,8 @@ fn status_and_config_render_and_their_rows_quote_into_the_dump_without_leaving()
     let s = screen(&mut a);
     let acct2 = s.lines().find(|l| l.contains("• acct2")).expect(&s);
     assert!(acct2.contains("AT LIMIT · back 1h 05m"), "{acct2}");
-    assert!(s.contains("▸ Codex") && s.contains("▾ Inference endpoints") && s.contains("▾ Claude Code"), "{s}");
+    // V1.7: every source but Claude Code is greyed and closed at first.
+    assert!(s.contains("▸ Codex") && s.contains("▸ Inference endpoints") && s.contains("▾ Claude Code"), "{s}");
     assert!(!s.contains("THREADS") && !s.contains("8e4fca10  Cauldron interface"), "no threads table: {s}");
     // No bucket on this tab.
     assert!(!s.contains(" bucket "), "{s}");
@@ -1584,7 +1695,7 @@ fn status_and_config_render_and_their_rows_quote_into_the_dump_without_leaving()
     a.rows[0] = status_row(&a, "cfg:claude_code/acct2");
     a.handle(key(KeyCode::Enter));
     use tui::cauldron::menu::{Entry, SPage};
-    assert_eq!(a.ctab, CTab::Config);
+    assert_eq!(a.ctab, CTab::Accounts, "an account's config ▸ lands on Accounts");
     let acct2 = SPage::Account("claude_code".into(), "acct2".into());
     assert_eq!(a.settings_entry(), Some(Entry::Row(acct2.clone())));
     assert!(matches!(&a.modal, Some(Modal::Settings { page, .. }) if *page == acct2), "{:?}", a.modal);
@@ -1597,10 +1708,10 @@ fn status_and_config_render_and_their_rows_quote_into_the_dump_without_leaving()
     // Config: five tabs (msg 235), THIS cauldron's last and named for it;
     // what no cluster claims is on Status › Soup, not here.
     a.set_ctab(CTab::Cauldron);
-    a.set_ctab(CTab::Config);
+    a.set_ctab(CTab::Settings);
     a.set_cfg_tab(tui::cauldron::menu::CfgTab::Cauldron);
     let s = screen(&mut a);
-    assert!(s.contains(" prod cauldron | TUI | Devices | Providers | Permissions ") && s.contains("▸ Directories") && s.contains("▸ Accounts") && !s.contains("▸ TUI"), "{s}");
+    assert!(s.contains("Permissions | Settings") && s.contains("▸ Directories") && s.contains("▸ Accounts") && !s.contains("▸ TUI"), "{s}");
     assert!(!s.contains("Unclaimed") && !s.contains("UNCLAIMED") && !s.contains("Mesh devices"), "{s}");
     a.set_ctab(CTab::Status);
     a.set_sttab(tui::cauldron::status::StatusTab::Soup);
@@ -1624,7 +1735,7 @@ fn status_and_config_render_and_their_rows_quote_into_the_dump_without_leaving()
 /// and Config stays there, and `a` goes to Work's dump.
 #[test]
 fn down_at_the_last_row_of_a_cauldron_tab_stays_and_a_goes_to_works_dump() {
-    for tab in [CTab::Status, CTab::Config] {
+    for tab in [CTab::Status, CTab::Settings] {
         let mut a = app();
         a.set_ctab(tab);
         a.handle(key(KeyCode::End));
@@ -1917,7 +2028,7 @@ fn an_unclaimed_region_is_reached_from_status_soup_and_from_no_cluster() {
         assert!(a.corpus.cluster_regions(&scope).iter().all(|x| x.region != region(&a, "R-9")));
     }
     // Moved off Config (msg 186): Status › Soup.
-    a.set_ctab(CTab::Config);
+    a.set_ctab(CTab::Settings);
     assert!(!screen(&mut a).contains("Mesh devices"));
     a.set_ctab(CTab::Status);
     a.set_sttab(tui::cauldron::status::StatusTab::Soup);
@@ -2594,7 +2705,7 @@ fn cells(a: &mut App) -> ratatui::buffer::Buffer {
 
 #[test]
 fn the_selected_row_on_status_and_config_is_one_line_carrying_the_selection() {
-    for tab in [CTab::Status, CTab::Config] {
+    for tab in [CTab::Status, CTab::Settings] {
         let mut a = app();
         a.set_ctab(tab);
         // Mesh's rows (Status opens on Tokens, whose accounts are cards,

@@ -28,13 +28,22 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
     palette::set_theme(app.theme());
     app.hits.clear();
     let area = frame.area();
-    let [top, body] = Layout::vertical([Constraint::Length(1), Constraint::Min(1)]).areas(area);
+    // V1.1: two tab bars, the global one on top and the environment's
+    // under it.
+    let [top, body] = Layout::vertical([Constraint::Length(2), Constraint::Min(1)]).areas(area);
     frame.render_widget(Block::new().style(palette::base()), area);
+    if app.first_run.is_some() {
+        draw_first_run(frame, app, area);
+        if app.modal.is_some() {
+            draw_modal(frame, app, area);
+        }
+        return;
+    }
     draw_top(frame, app, top);
     match app.ctab {
         CTab::Cauldron => draw_surface(frame, app, body),
         CTab::Threads => draw_threads(frame, app, body),
-        CTab::Status | CTab::Config => draw_dash(frame, app, body),
+        _ => draw_dash(frame, app, body),
     }
     if app.dropdown.is_some() {
         draw_dropdown(frame, app, area);
@@ -44,17 +53,91 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
     }
 }
 
-/// At the top left: the ENVIRONMENT, and nothing before it — the cauldron's
-/// name as the cauldrons dropdown (msg 165) — then the cauldron tabs on the
-/// right, no numbers. The product's name that once led it (msg 235: "Let's
-/// turn it back to just the name of the product, cauldron") is gone: 8e4fca10
-/// msg 457, "Let's remove the product name from the top left and just have
-/// the environment up there at the top left." (The first tab is named
-/// Cauldron now; a second `Cauldron` beside it would say nothing.)
+/// The words of the first-run screen's one action (V1.2: his "create your
+/// first environment", in the face's word for one).
+pub const FIRST_RUN_ACTION: &str = "+ create your first cauldron";
+
+/// **THE FIRST-RUN SCREEN** (V1.2): no environment exists, so there is no
+/// name for the top left and no tab to show — the frame is empty but for
+/// one centred action, selected. No sentence, no logo, no welcome (§1).
+fn draw_first_run(frame: &mut Frame, app: &mut App, area: Rect) {
+    let label = format!(" {FIRST_RUN_ACTION} ");
+    let w = (display_width(&label) as u16).min(area.width);
+    let at = Rect { x: area.x + (area.width - w) / 2, y: area.y + area.height / 2, width: w, height: 1.min(area.height) };
+    let style = palette::code().add_modifier(Modifier::BOLD).bg(palette::c().sel_bg);
+    frame.render_widget(Paragraph::new(Line::from(Span::styled(label, style))), at);
+    app.first_run_at = at;
+}
+
+/// **THE TWO TAB BARS** (V1.1; release plan R-V1 item 1, product spec
+/// §12: *"two tab bars like on top of each other ... different colors, like
+/// the global above and then the environment below"*). Row 0 is the GLOBAL
+/// bar — what was Config: TUI · Devices · Providers · Accounts — on
+/// [`look::global_bar_bg`]; row 1 the ENVIRONMENT bar on [`look::env_bar_bg`]:
+/// the environment's dropdown at its left (it scopes that bar), then
+/// Cauldron · Threads · Status · Permissions · Settings. No caption names
+/// either bar, no tab carries a number, and exactly one tab of the two bars
+/// is lit: the one shown.
 fn draw_top(frame: &mut Frame, app: &mut App, area: Rect) {
+    let [global, envr] = Layout::vertical([Constraint::Length(1), Constraint::Length(1)]).areas(area);
+    draw_global_bar(frame, app, global);
+    draw_env_bar(frame, app, envr);
+}
+
+/// The tabs `tabs` flush right in `r` on `bg`, `sep_w` 3 (` | `) or 1
+/// (`|`), each recorded as its click target.
+fn draw_tabs(frame: &mut Frame, app: &mut App, r: Rect, tabs: &[CTab], labels: &[String], sep_w: usize, bg: ratatui::style::Color) {
+    let sep = || Span::styled(if sep_w == 3 { format!(" {} ", look::STRIP_SEP) } else { look::STRIP_SEP.to_string() }, palette::muted().bg(bg));
+    let mut x = r.x;
+    let mut spans = Vec::new();
+    for (i, t) in tabs.iter().copied().enumerate() {
+        if i > 0 {
+            spans.push(sep());
+            x += sep_w as u16;
+        }
+        let style = if t == app.ctab {
+            palette::ink().add_modifier(Modifier::BOLD | Modifier::UNDERLINED)
+        } else {
+            palette::muted()
+        };
+        let label = labels[i].clone();
+        let w = display_width(&label) as u16;
+        spans.push(Span::styled(label, style.bg(bg)));
+        if x < r.right() {
+            app.hits.push((Rect { x, y: r.y, width: w.min(r.right() - x), height: 1 }, Hit::CTab(t)));
+        }
+        x += w;
+    }
+    frame.render_widget(Paragraph::new(Line::from(spans)).style(Style::new().bg(bg)), r);
+}
+
+/// Row 0: the global bar, its tabs flush right as the environment bar's
+/// are, roomy (` | `, a column of margin) while that fits, else tight.
+fn draw_global_bar(frame: &mut Frame, app: &mut App, area: Rect) {
+    let bg = look::global_bar_bg();
+    frame.render_widget(Block::new().style(Style::new().bg(bg)), area);
+    let labels: Vec<String> = CTab::GLOBAL.iter().map(|t| app.named(t.label())).collect();
+    let words_w = labels.iter().map(|l| display_width(l)).sum::<usize>();
+    let gaps = labels.len() - 1;
+    let roomy = words_w + 3 * gaps + 1;
+    let (sep_w, tabs_w) = if roomy <= area.width as usize { (3usize, roomy) } else { (1, words_w + gaps) };
+    let rw = (tabs_w as u16).min(area.width);
+    let r = Rect { x: area.right().saturating_sub(rw), width: rw, ..area };
+    draw_tabs(frame, app, r, &CTab::GLOBAL, &labels, sep_w, bg);
+}
+
+/// Row 1: the environment bar. At its left the ENVIRONMENT, and nothing
+/// before it — the cauldron's name as the cauldrons dropdown (msg 165) —
+/// then its tabs on the right, no numbers. The product's name that once led
+/// it (msg 235: "Let's turn it back to just the name of the product,
+/// cauldron") is gone: 8e4fca10 msg 457, "Let's remove the product name from
+/// the top left and just have the environment up there at the top left."
+fn draw_env_bar(frame: &mut Frame, app: &mut App, area: Rect) {
+    let bg = look::env_bar_bg();
+    frame.render_widget(Block::new().style(Style::new().bg(bg)), area);
     // Menu items are parted by a `|` (b964d571 msg 23), as on every strip.
     let env = app.env.name.clone();
-    let labels: Vec<String> = CTab::ALL.iter().map(|t| app.named(t.label())).collect();
+    let labels: Vec<String> = CTab::ENV.iter().map(|t| app.named(t.label())).collect();
     let words_w = labels.iter().map(|l| display_width(l)).sum::<usize>();
     let gaps = labels.len() - 1;
     // The tabs NEVER crop while they can fit (re-audit 10 D8): roomy — ` | `
@@ -66,13 +149,12 @@ fn draw_top(frame: &mut Frame, app: &mut App, area: Rect) {
     let roomy = words_w + 3 * gaps + 1;
     let fits = display_width(&full) + 3 + 1 + roomy <= area.width as usize;
     let (sep_w, tabs_w, gap) = if fits { (3usize, roomy, 1u16) } else { (1, words_w + gaps, 0) };
-    let sep = move || Span::styled(if sep_w == 3 { format!(" {} ", look::STRIP_SEP) } else { look::STRIP_SEP.to_string() }, palette::muted());
     // What the tabs, the ` ▾ ` and the name's own two spaces leave it.
     let room = (area.width as usize).saturating_sub(tabs_w + 3 + gap as usize + 2);
     let name = if display_width(&env) <= room { full } else { format!(" {} ", crop(&env, room.max(1))) };
     // One column of margin, as the tabs keep on the right, while it fits.
     let lead: u16 = u16::from(display_width(&name) + 3 + 1 + gap as usize + tabs_w <= area.width as usize);
-    let mut left = vec![Span::raw(" ".repeat(lead as usize))];
+    let mut left = vec![Span::styled(" ".repeat(lead as usize), Style::new().bg(bg))];
     left.push(Span::styled(name.clone(), palette::ink().add_modifier(Modifier::BOLD).bg(palette::c().code_bg)));
     left.push(Span::styled(" ▾ ", palette::ink().bg(palette::c().chevron_bg)));
     let env_x = area.x + lead;
@@ -84,28 +166,8 @@ fn draw_top(frame: &mut Frame, app: &mut App, area: Rect) {
     let left_w = env_x - area.x + env_w + gap;
     let rw = (tabs_w as u16).min(area.width.saturating_sub(left_w));
     let r = Rect { x: area.right().saturating_sub(rw), width: rw, ..area };
-    let mut x = r.x;
-    let mut right = Vec::new();
-    for (i, t) in CTab::ALL.into_iter().enumerate() {
-        if i > 0 {
-            right.push(sep());
-            x += sep_w as u16;
-        }
-        let style = if t == app.ctab {
-            palette::ink().add_modifier(Modifier::BOLD | Modifier::UNDERLINED)
-        } else {
-            palette::muted()
-        };
-        let label = labels[i].clone();
-        let w = display_width(&label) as u16;
-        right.push(Span::styled(label, style));
-        if x < r.right() {
-            app.hits.push((Rect { x, y: area.y, width: w.min(r.right() - x), height: 1 }, Hit::CTab(t)));
-        }
-        x += w;
-    }
-    frame.render_widget(Paragraph::new(Line::from(left)).style(palette::base()), area);
-    frame.render_widget(Paragraph::new(Line::from(right)).style(palette::base()), r);
+    frame.render_widget(Paragraph::new(Line::from(left)).style(Style::new().bg(bg)), area);
+    draw_tabs(frame, app, r, &CTab::ENV, &labels, sep_w, bg);
 }
 
 /// The cauldrons dropdown: NOT a modal (msg 165: "It shouldn't even use the
@@ -498,7 +560,7 @@ fn draw_dash(frame: &mut Frame, app: &mut App, area: Rect) {
         }
         // A Config row may take more than one line (a refusal under it):
         // the ▌ marks all of them.
-        CTab::Config => {
+        crate::cauldron::app::page_tabs!() => {
             let n = app.selectable().len();
             let at = crate::cauldron::menu::SETTINGS_ROW;
             if app.rows[at] >= n {
@@ -558,7 +620,7 @@ fn draw_dash(frame: &mut Frame, app: &mut App, area: Rect) {
     // but a table's row and a button draw their own (msg 235: the button,
     // "not like a whole row").
     let sel = ranges.get(app.row()).cloned();
-    let own = app.ctab == CTab::Config && app.settings_entry().is_some_and(|e| e.is_button() || matches!(e, Entry::Row(_)));
+    let own = app.ctab.is_page() && app.settings_entry().is_some_and(|e| e.is_button() || matches!(e, Entry::Row(_)));
     frame.render_widget(Paragraph::new(lines).scroll((top as u16, 0)).style(palette::base()), inner);
     if let (Some(r), false) = (sel, own) {
         paint_rows(frame, inner, r, top, app.focus != Focus::Input);
@@ -652,18 +714,6 @@ fn flat_lines(app: &App, entries: &[Flat], width: usize, sel: Option<usize>, mod
         }
         let start = out.len();
         match &f.entry {
-            // The Config tab's own tabs (msg 186), on the strip's background
-            // (msg 235).
-            Entry::Strip => {
-                let labels: Vec<String> = crate::cauldron::menu::CfgTab::ALL.iter().map(|t| app.named(&app.cfg_label(*t))).collect();
-                let shown = crate::cauldron::menu::CfgTab::ALL.iter().position(|t| *t == app.cfg_tab).unwrap_or(0);
-                let lit = app.focus == Focus::Content;
-                let (line, zs) = look::strip(&labels, shown, lit, lit && app.rows[crate::cauldron::menu::SETTINGS_ROW] == 0, width);
-                for (i, (x, zw)) in zs.into_iter().enumerate() {
-                    hotspots.push((out.len(), x, zw, Hit::Strip(i as u8)));
-                }
-                out.push(line);
-            }
             // A head drawn flat (a page of entries shown in place): THE band
             // line, open (`flatten` makes it a band on a Config tab).
             Entry::Head(t, meta) => {
@@ -844,7 +894,8 @@ fn flat_lines(app: &App, entries: &[Flat], width: usize, sel: Option<usize>, mod
                 };
                 // `add endpoint` is dim while the endpoint lacks what its
                 // template needs, the reason beside it (design 0199 §3).
-                let waiting = matches!(&f.entry, Entry::Do { act: crate::cauldron::manage::Act::AddEndpoint { .. }, summary, .. } if !summary.is_empty());
+                // A greyed source's button is dim and inert (R-V1 item 7).
+                let waiting = app.entry_greyed(&f.entry) || matches!(&f.entry, Entry::Do { act: crate::cauldron::manage::Act::AddEndpoint { .. }, summary, .. } if !summary.is_empty());
                 let b = if waiting { look::button_dim(&words, selected) } else { look::button(&words, selected) };
                 let at = if modal && matches!(f.entry, Entry::Add(Add::Item(_))) { format!("{lead}{}", " ".repeat(lw)) } else { lead.clone() };
                 hotspots.push((out.len(), display_width(&at), display_width(&b.content), press_hit(row_i)));
@@ -872,6 +923,18 @@ fn flat_lines(app: &App, entries: &[Flat], width: usize, sel: Option<usize>, mod
             Entry::Para(text) => {
                 for para in text.split('\n') {
                     wrap(&mut out, para, width, 4 + ind.len(), palette::ink2());
+                }
+            }
+        }
+        // An entry of a greyed inference source (R-V1 item 7) is drawn as
+        // Codex's band is, muted, every line of it — never hidden. A
+        // refusal said under it keeps its red.
+        if app.entry_greyed(&f.entry) {
+            for line in &mut out[start..] {
+                for sp in &mut line.spans {
+                    if sp.style.fg.is_some() && sp.style.fg != Some(palette::c().red) {
+                        sp.style = sp.style.fg(palette::c().muted).remove_modifier(Modifier::BOLD);
+                    }
                 }
             }
         }
@@ -1089,6 +1152,35 @@ fn draw_modal_body(frame: &mut Frame, app: &mut App, area: Rect) {
             for r in wrap_plain(&text, tw) {
                 lines.push(Line::from(Span::styled(r, palette::ink())));
             }
+            let inner = modal_box(frame, app, area, w, lines.len() as u16 + 4, &title);
+            frame.render_widget(Paragraph::new(lines).style(palette::base()), inner);
+        }
+        // V1.6: a login through the threads daemon. The code he types is
+        // drawn as one dot a character — never as itself.
+        Modal::Login { title, stage, code, .. } => {
+            use crate::cauldron::accounts::{stage_lines, LoginStage};
+            let w = 72u16.min(area.width.saturating_sub(4));
+            let tw = (w as usize).saturating_sub(6).max(10);
+            let mut lines: Vec<Line> = Vec::new();
+            for (text, alarm) in stage_lines(&stage) {
+                for r in wrap_plain(&text, tw) {
+                    lines.push(Line::from(Span::styled(r, if alarm { palette::red() } else { palette::ink() })));
+                }
+            }
+            let hint = match &stage {
+                LoginStage::AwaitCode { .. } => {
+                    lines.push(Line::from(vec![
+                        Span::styled("› ", palette::amber()),
+                        Span::styled("•".repeat(code.chars().count()), palette::ink()),
+                        Span::styled("▏", palette::amber()),
+                    ]));
+                    "Enter sign in · Esc cancel the login"
+                }
+                LoginStage::Done { .. } => "Enter or Esc close",
+                _ => "Esc cancel the login",
+            };
+            lines.push(Line::default());
+            lines.push(Line::from(Span::styled(hint, palette::muted())));
             let inner = modal_box(frame, app, area, w, lines.len() as u16 + 4, &title);
             frame.render_widget(Paragraph::new(lines).style(palette::base()), inner);
         }
@@ -1597,55 +1689,65 @@ mod tests {
         a.hits.iter().filter_map(|(r, h)| if let Hit::CTab(t) = h { Some((*t, *r)) } else { None }).collect()
     }
 
-    /// Row 0 at `w`: the text, and whether every tab is whole — on screen
-    /// and as a click target as wide as its label.
-    fn top(a: &mut App, w: u16) -> (String, bool) {
-        let row = crate::cauldron::render_to_text(a, w, 24).unwrap().remove(0);
+    /// Row `y` at `w`: the text, and whether every tab of that row's bar is
+    /// whole — on screen and as a click target as wide as its label, on that
+    /// row. V1.1: row 0 the global bar, row 1 the environment bar.
+    fn bar_row(a: &mut App, w: u16, y: usize) -> (String, bool) {
+        let row = crate::cauldron::render_to_text(a, w, 24).unwrap().remove(y);
         let hits = tab_hits(a);
-        let whole = CTab::ALL.iter().all(|t| {
+        let tabs: &[CTab] = if y == 0 { &CTab::GLOBAL } else { &CTab::ENV };
+        let whole = tabs.iter().all(|t| {
             let label = a.named(t.label());
             let lw = display_width(&label) as u16;
-            row.contains(&label) && hits.iter().any(|(h, r)| h == t && r.width == lw && r.right() <= w)
+            row.contains(&label) && hits.iter().any(|(h, r)| h == t && r.width == lw && r.right() <= w && r.y as usize == y)
         });
         (row, whole)
     }
 
-    /// Re-audit 10 D8: at 40 columns the root strip is whole, prod and
-    /// design, and the environment still leads it — whole where the strip
-    /// leaves room, else its NAME crops and never a tab (`draw_top`'s rule).
-    /// REL-6's `Threads` is a column wider than `Agents` was, so `design`
-    /// is whole from 41 columns.
+    fn top(a: &mut App, w: u16) -> (String, bool) {
+        bar_row(a, w, 1)
+    }
+
+    /// Re-audit 10 D8, with V1.1's bars: at 60 columns (V1.1 spec item 7)
+    /// both bars are whole, prod and design, and the environment still leads
+    /// its bar — whole where the bar leaves room, else its NAME crops and
+    /// never a tab (`draw_env_bar`'s rule).
     #[test]
-    fn d8_the_root_tabs_never_crop_at_40_columns() {
+    fn d8_the_root_tabs_never_crop_at_60_columns() {
         for env in ["prod", "design"] {
             let mut a = app(env);
-            let (row, whole) = top(&mut a, 40);
+            let (row, whole) = top(&mut a, 60);
             assert!(whole, "{env}: {row:?}");
-            assert!(row.ends_with("Cauldron|Threads|Status|Config"), "{env}: {row:?}");
-            assert!(row.trim_start().starts_with(&env[..3]), "{env}: the environment leads: {row:?}");
-            let w = if env == "prod" { 40 } else { 41 };
-            let (row, _) = top(&mut a, w);
-            assert!(row.contains(&format!(" {env} ")), "{env}: the environment whole at {w}: {row:?}");
+            assert!(row.ends_with("Cauldron|Threads|Status|Permissions|Settings"), "{env}: {row:?}");
+            assert!(row.trim_start().starts_with(&format!("{env} ")), "{env}: the environment leads, whole: {row:?}");
+            let (row, whole) = bar_row(&mut a, 60, 0);
+            assert!(whole && row.ends_with("TUI | Devices | Providers | Accounts"), "{env}: {row:?}");
             // Wide, the roomy strip it always had.
             let (row, whole) = top(&mut a, 120);
-            assert!(whole && row.ends_with("Cauldron | Threads | Status | Config"), "{env}: {row:?}");
+            assert!(whole && row.ends_with("Cauldron | Threads | Status | Permissions | Settings"), "{env}: {row:?}");
         }
     }
 
-    /// The sweep, 30..=200 columns: wherever the four tabs and the dropdown
-    /// can share the row at all (the tight strip and ` x ▾ `), every tab is
-    /// whole; a long environment name crops, the tabs never do.
+    /// The sweep, 30..=200 columns: wherever the environment bar's tabs and
+    /// the dropdown can share the row at all (the tight strip and ` x ▾ `),
+    /// every tab is whole; a long environment name crops, the tabs never do.
+    /// The global bar is whole wherever its tight strip fits.
     #[test]
     fn d8_tabs_whole_at_every_width_they_can_fit() {
         for env in ["prod", "design", "a-very-long-environment-name"] {
             let mut a = app(env);
-            let tight = CTab::ALL.iter().map(|t| display_width(&a.named(t.label()))).sum::<usize>() + 3;
+            let tight = CTab::ENV.iter().map(|t| display_width(&a.named(t.label()))).sum::<usize>() + CTab::ENV.len() - 1;
+            let gtight = CTab::GLOBAL.iter().map(|t| display_width(&a.named(t.label()))).sum::<usize>() + CTab::GLOBAL.len() - 1;
             for w in 30..=200u16 {
                 let (row, whole) = top(&mut a, w);
                 if w as usize >= tight + 3 + 3 {
                     assert!(whole, "{env} at {w}: {row:?}");
                 }
                 assert!(row.contains('▾'), "{env} at {w}: the dropdown is always there: {row:?}");
+                let (row, whole) = bar_row(&mut a, w, 0);
+                if w as usize >= gtight {
+                    assert!(whole, "{env} at {w}: {row:?}");
+                }
             }
         }
     }

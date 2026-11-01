@@ -33,7 +33,8 @@ fn env_in(root: &Path, name: &str) -> Environment {
 
 fn app() -> App {
     std::env::set_var("CAULDRON_TYPE_ONE", "off");
-    App::open(env_in(&scratch_root(), "prod"), seed_dir(), true).expect("opens")
+    // V1.6: Claude Code's accounts are the daemon's; the fixture stands in.
+    crate::live_pool::seeded(App::open(env_in(&scratch_root(), "prod"), seed_dir(), true).expect("opens"))
 }
 
 fn key(code: KeyCode) -> Event {
@@ -82,21 +83,20 @@ fn click_label(a: &mut App, on: &str, label: &str) {
 fn item1_every_strip_parts_its_items_with_a_bar_and_every_label_still_clicks() {
     let mut a = app();
     let r = rows(&mut a);
-    // The top tabs.
-    let (_, top) = row_with(&r, " | Threads ");
-    assert!(top.contains("Cauldron | Threads | Status | Config"), "{top}");
+    // The top tabs: the environment bar, and the global bar over it (V1.1).
+    let (y, top) = row_with(&r, " | Threads ");
+    assert!(top.contains("Cauldron | Threads | Status | Permissions | Settings"), "{top}");
+    assert_eq!(y, 1);
+    assert!(r[0].contains("TUI | Devices | Providers | Accounts"), "{}", r[0]);
     // The cluster tabs.
     let (_, kt) = row_with(&r, " | Actions ");
     assert!(kt.contains(" | Details"), "{kt}");
-    // Config: the cauldron's own tab can no longer read as two tabs.
-    a.set_ctab(CTab::Config);
-    let r = rows(&mut a);
-    let (_, cfg) = row_with(&r, "prod cauldron");
-    assert!(cfg.contains(" prod cauldron | ") || cfg.contains(" | prod cauldron "), "{cfg}");
-    assert!(cfg.contains(" TUI | Devices | Providers | Permissions "), "{cfg}");
-    // Every Config label is still its own hotspot, past the bars.
-    for (label, want) in [("Permissions", tui::cauldron::menu::CfgTab::Permissions), ("TUI", tui::cauldron::menu::CfgTab::Tui), ("prod cauldron", tui::cauldron::menu::CfgTab::Cauldron)] {
-        click_label(&mut a, "Devices", label);
+    // Config is the global bar now (V1.1): every label on it is still its
+    // own hotspot, past the bars, and so is each settings tab of the
+    // environment bar.
+    a.set_ctab(CTab::Settings);
+    for (on, label, want) in [("Devices", "Providers", tui::cauldron::menu::CfgTab::Providers), ("Devices", "TUI", tui::cauldron::menu::CfgTab::Tui), (" | Threads ", "Permissions", tui::cauldron::menu::CfgTab::Permissions), (" | Threads ", "Settings", tui::cauldron::menu::CfgTab::Cauldron)] {
+        click_label(&mut a, on, label);
         assert_eq!(a.cfg_tab, want, "a click on {label}");
     }
     // Status.
@@ -128,20 +128,17 @@ fn item2_the_cauldrons_config_tab_is_first_and_config_opens_on_it() {
     use tui::cauldron::menu::CfgTab;
     assert_eq!(CfgTab::ALL[0], CfgTab::Cauldron);
     let mut a = app();
-    a.set_ctab(CTab::Config);
-    assert_eq!(a.cfg_tab, CfgTab::Cauldron, "Config opens on its first tab");
+    // V1.1: the cauldron's own page is the environment bar's Settings, and
+    // ⇧Tab from it is the global bar's first, TUI.
+    a.set_ctab(CTab::Settings);
+    assert_eq!(a.cfg_tab, CfgTab::Cauldron, "Settings is the cauldron's page");
     let r = rows(&mut a);
-    let (_, cfg) = row_with(&r, "prod cauldron |");
-    assert!(cfg.contains(" prod cauldron | TUI | Devices | Providers | Permissions "), "{cfg}");
-    // The cauldron's own rows are what is shown under it.
-    assert!(r.iter().any(|l| l.contains("cauldron enabled") || l.contains("Accounts")), "{}", r.join("\n"));
-    // The strip's keys walk it in its new order: → from the first is TUI, ←
-    // back is the cauldron again, and ← on the first stays.
+    // The cauldron's own rows are what is shown under it: its switch first.
+    assert!(r[3].contains("cauldron enabled"), "{}", r.join("\n"));
+    assert!(!r.iter().any(|l| l.contains("prod cauldron |")), "no sub-tab strip: {}", r.join("\n"));
     a.focus = tui::cauldron::app::Focus::Content;
-    press(&mut a, KeyCode::Right);
-    assert_eq!(a.cfg_tab, CfgTab::Tui);
-    press(&mut a, KeyCode::Left);
-    assert_eq!(a.cfg_tab, CfgTab::Cauldron);
+    press(&mut a, KeyCode::BackTab);
+    assert_eq!((a.ctab, a.cfg_tab), (CTab::Tui, CfgTab::Tui));
     // A --config-tab path still names each by its slug.
     assert_eq!(CfgTab::parse("cauldron"), Some(CfgTab::Cauldron));
     assert_eq!(CfgTab::parse("tui"), Some(CfgTab::Tui));
@@ -181,7 +178,7 @@ fn item3_allowed_here_is_a_tri_state_that_inherits_the_accounts_own_switch() {
     assert!(!a.account_allowed("claude_code", &acct));
     // The cauldron's tab draws it: the accounts table's `allowed here` column.
     a.sset(&enabled, Val::Bool(true)).unwrap();
-    a.set_ctab(CTab::Config);
+    a.set_ctab(CTab::Settings);
     a.snav.set_open(tui::cauldron::menu::SPage::Use, true);
     let r = rows(&mut a);
     let (_, head) = row_with(&r, "allowed here");
@@ -709,8 +706,10 @@ fn adversarial_nothing_he_types_is_lost_across_every_new_control() {
     let kept = a.composer.text();
     // The cauldron's strip, the status strip, the cluster tabs, the switch,
     // the copy: none of them touches the bucket.
-    a.set_ctab(CTab::Config);
-    click_label(&mut a, "| TUI |", "TUI");
+    // V1.1: the global bar, where Config's strip went.
+    a.set_ctab(CTab::Settings);
+    click_label(&mut a, "TUI | Devices", "TUI");
+    assert_eq!(a.ctab, CTab::Tui);
     a.set_ctab(CTab::Status);
     click_label(&mut a, " | Soup | ", "Bus");
     a.set_ctab(CTab::Cauldron);

@@ -125,13 +125,14 @@ pub fn kind_word(k: &str) -> &str {
     match k {
         "type_one" => "type one",
         "type_two" => "type two",
-        "shell" => "splash",
+        // `shell` is what runs recorded before V1.9 say.
+        "type_three" | "shell" => "type 3",
         _ => "",
     }
 }
 
 /// What wakes a ripple, short: `dump.received`, `transaction_committed · idle 10m`;
-/// a ripple no trigger wakes is `called` (a splash calls it).
+/// a ripple no trigger wakes is `called` (a type 3 calls it).
 pub fn wakes(r: &RippleDef) -> String {
     let w: Vec<String> = r.triggers.iter().filter(|t| t.enabled).map(|t| if t.on == "schedule" { t.schedule.clone() } else { t.on.clone() }).collect();
     if w.is_empty() {
@@ -317,7 +318,7 @@ fn kind_str(k: Kind) -> String {
     match k {
         Kind::TypeOne => "type_one",
         Kind::TypeTwo => "type_two",
-        Kind::Shell => "shell",
+        Kind::TypeThree => "type_three",
     }
     .to_string()
 }
@@ -354,7 +355,7 @@ fn ripple_page(p: &mut P, id: &str) -> String {
     rows.push(("enabled".to_string(), vec![ink(if r.enabled { "yes" } else { "no" })]));
     rows.push(("runs".to_string(), vec![ink(format!("{} today · {} this week", st.today, st.week))]));
     p.table(rows);
-    // `0 triggers` is all it says: its CALLED BY band names the splash.
+    // `0 triggers` is all it says: its CALLED BY band names the type 3.
     p.head("Triggers", vec![muted(count(r.triggers.len(), "trigger", "triggers"))]);
     for (ti, t) in r.triggers.iter().enumerate() {
         p.link(vec![bold(format!("{}  ", t.on)), ink2(condition(t))], vec![muted(if t.enabled { "" } else { "disabled" })], BusPage::Trigger { ripple: r.id.clone(), trigger: ti, event: None });
@@ -511,13 +512,13 @@ fn step_page(p: &mut P, id: &str, path: &[usize]) -> String {
 
 // ── the ledger's executions ────────────────────────────────────────────────
 
-/// A ripple's TYPE as he says it: `① type 1`, `③ type 3 · splash`.
+/// A ripple's TYPE as he says it: `① type 1`, `③ type 3`.
 fn type_words(k: Kind) -> String {
     let g = crate::cauldron::ledger::type_glyph(k);
     match k {
         Kind::TypeOne => format!("{g} type 1"),
         Kind::TypeTwo => format!("{g} type 2"),
-        Kind::Shell => format!("{g} type 3 · splash"),
+        Kind::TypeThree => format!("{g} type 3"),
     }
 }
 
@@ -606,7 +607,7 @@ fn exec_page(p: &mut P, seq: u64, path: &[usize]) -> String {
         // A type 3: its steps in order, as a step function — from start to
         // end down one rail, each step its state, its word, what it did, how
         // long; the ripples a step ran hang off it, each a link.
-        Kind::Shell => {
+        Kind::TypeThree => {
             p.head("Steps", vec![muted(count(e.steps.len(), "step", "steps"))]);
             p.line(Line::from(vec![Span::raw("  "), muted("◉ start")]));
             let nw = e.steps.iter().map(|s| display_width(&s.name)).max().unwrap_or(4).min(20);

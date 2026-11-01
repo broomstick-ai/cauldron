@@ -40,6 +40,13 @@ anyhow = { workspace = true }
 sha2 = { workspace = true }
 # R9.C7: reads a declaration's `[quiet]` section out of its text.
 toml = { workspace = true }
+# RV1.S12a: `ctl node` reads one soup node over the soup's websocket door —
+# the handshake runs over a stream `env::egress::connect_tcp` admitted (the
+# lockfile already holds 0.24 through tokio-tungstenite) — and reads the
+# door's outcome with shapewire's own wire types (the consumer floor: no
+# tokio, no axum, no env).
+tungstenite = "0.24"
+shapewire = { path = "../libs/shapewire", default-features = false }
 
 # REL-6a5: the `it` binary exports CAULDRON_ISOLATED=1 at load, so every
 # `cauldron` child a test spawns is isolated and refuses his real root, his

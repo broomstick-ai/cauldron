@@ -40,7 +40,7 @@ fn open(root: &Path) -> App {
     // Hermetic: no test here may make a billed type-one call, whatever is on
     // PATH (a cluster made here seeds; tests/it/seed_live.rs is the live proof).
     std::env::set_var("CAULDRON_TYPE_ONE", "off");
-    App::open(env_in(root, "prod"), seed_dir(), true).expect("seed loads")
+    crate::live_pool::seeded(App::open(env_in(root, "prod"), seed_dir(), true).expect("seed loads"))
 }
 
 fn key(code: KeyCode) -> Event {
@@ -108,7 +108,7 @@ fn manage(a: &mut App, g: usize, k: u8) {
 }
 
 fn cauldron_settings(a: &mut App, path: &str) {
-    a.set_ctab(CTab::Config);
+    a.set_ctab(CTab::Settings);
     a.focus = Focus::Content;
     a.snav = tui::cauldron::menu::Nav::cauldron();
     a.rows[SETTINGS_ROW] = 0;
@@ -190,17 +190,18 @@ fn a_settings_edit_an_account_and_a_pool_in_one_face_reach_another() {
     b.sync();
     assert_eq!(b.sget(&bd).val, now);
     // An account added, an inference endpoint added (design 0199).
-    a.settings.add_account("claude_code", "fresh one", |_| false).unwrap();
+    // V1.6: on a seed pool — Claude Code's roster is the daemon's.
+    a.settings.add_account("codex", "fresh one", |_| false).unwrap();
     a.settings.draft_endpoint(false, "local");
     let ep = a.settings.add_endpoint(false).unwrap();
     b.sync();
-    assert!(b.accounts("claude_code").iter().any(|x| x.label == "fresh one"));
+    assert!(b.accounts("codex").iter().any(|x| x.label == "fresh one"));
     assert!(b.settings.endpoint_ids(false).contains(&ep), "{ep}");
     // The token sources are GLOBAL (msg 186): ANOTHER cauldron's face reads
     // the same account, the same threshold — and keeps its own switches.
     std::fs::create_dir_all(root.join("data/dev")).unwrap();
     let mut d = App::open(env_in(&root, "dev"), seed_dir(), true).unwrap();
-    assert!(d.accounts("claude_code").iter().any(|x| x.label == "fresh one"));
+    assert!(d.accounts("codex").iter().any(|x| x.label == "fresh one"));
     assert_eq!(d.sget(&bd).val, now);
     let wk = tui::cauldron::menu::Bound::new("pools.{pool}.budget.weekly.threshold_pct", tui::cauldron::settings::Ctx::pool("claude_code"));
     a.sset(&wk, tui::cauldron::settings::Val::Int(55)).unwrap();
@@ -345,6 +346,62 @@ fn an_account_renames_and_removes_with_its_settings_and_a_pool_is_added() {
         Entry::Do { label, .. } => label,
         _ => String::new(),
     }).collect();
+    // V1.6: one of the daemon's accounts — its pool switch and its login are
+    // the daemon's; it is renamed here (a label) and never removed here.
+    assert_eq!(buttons, ["take out of the pool", "log in", "rename"]);
+    modal_do(&mut a, "rename");
+    a.handle(key(KeyCode::Enter));
+    assert!(matches!(&a.modal, Some(Modal::Name { .. })), "{:?}", a.modal);
+    a.handle(Event::Key(KeyEvent::new(KeyCode::Char('u'), KeyModifiers::CONTROL)));
+    typed(&mut a, "Backup card");
+    a.handle(key(KeyCode::Enter));
+    assert!(matches!(&a.modal, Some(Modal::Settings { .. })), "the rename goes back to the account's modal: {:?}", a.modal);
+    let acct = a.accounts("claude_code").into_iter().find(|x| x.id == "acct3").unwrap();
+    assert_eq!(acct.label, "Backup card");
+    assert!(screen(&mut a).contains("┏ Claude Code · Backup card "), "{}", screen(&mut a));
+    let note = tui::cauldron::menu::Bound::new("pools.{pool}.accounts.{account}.note", tui::cauldron::settings::Ctx::account("claude_code", "acct3"));
+    assert!(a.sget(&note).val != tui::cauldron::settings::Val::Str(String::new()), "its settings stay through a rename");
+    // V1.6: no `remove` here for one of the daemon's accounts (its roster is
+    // the daemon's); the name he gave it outlives a restart.
+    let b = open(&root);
+    assert_eq!(b.accounts("claude_code").into_iter().find(|x| x.id == "acct3").map(|x| x.label).as_deref(), Some("Backup card"));
+    a.handle(key(KeyCode::Esc));
+    assert!(a.modal.is_none(), "{:?}", a.modal);
+    // An account added here removes outright.
+    a.settings.add_account("claude_code", "temp", |_| false).unwrap();
+    a.settings.remove_account("claude_code", "temp").unwrap();
+    assert!(a.settings.added.is_empty());
+    // No `+ add token source` (design 0199): what is not a subscription is
+    // an inference endpoint, added from a template.
+    cauldron_settings(&mut a, "providers");
+    assert!(!screen(&mut a).contains("+ add token source"));
+    cauldron_settings(&mut a, "providers/endpoints");
+    // V1.7 (R-V1 item 7): `+ add endpoint` is greyed — pressed, it says so,
+    // opens nothing and adds nothing.
+    let before = a.settings.endpoint_ids(false).len();
+    select_do(&mut a, "+ add endpoint");
+    a.handle(key(KeyCode::Enter));
+    assert!(a.modal.is_none(), "{:?}", a.modal);
+    assert_eq!(a.notice.as_deref(), Some(tui::cauldron::settings::GREYED));
+    assert_eq!(a.settings.endpoint_ids(false).len(), before);
+}
+
+/// V1.7b F1: the body of `an_account_renames_and_removes_with_its_settings_and_a_pool_is_added` at 59c5ec8f, verbatim — the positive
+/// spec the greyed endpoints lost (V1.7-I F1). Un-ignore when
+/// `inference_live` ungreys them; `an_account_renames_and_removes_with_its_settings_and_a_pool_is_added` above is the refusal it pairs with.
+#[test]
+#[ignore = "endpoints greyed in V1.7; restore when un-greyed"]
+fn an_account_renames_and_removes_with_its_settings_and_a_pool_is_added_ungreyed() {
+    let root = scratch_root();
+    let mut a = open(&root);
+    // Rename a seed account, from its row's modal: its id (and its
+    // settings) stay. Every action there is a button (msg 235).
+    cauldron_settings(&mut a, "providers/claude_code/acct3");
+    assert!(matches!(&a.modal, Some(Modal::Settings { .. })), "{:?}", a.modal);
+    let buttons: Vec<String> = a.modal_selectable(&SPage::Account("claude_code".into(), "acct3".into())).into_iter().filter(|e| e.is_button()).map(|e| match e {
+        Entry::Do { label, .. } => label,
+        _ => String::new(),
+    }).collect();
     assert_eq!(buttons, ["rename", "remove"]);
     modal_do(&mut a, "rename");
     a.handle(key(KeyCode::Enter));
@@ -411,11 +468,11 @@ fn i_on_a_settings_row_quotes_its_setting() {
     let mut a = open(&root);
     // A row quotes its setting (the first under THIS cauldron's strip: its
     // switch, msg 186); a band header the prefix it governs.
+    // V1.1: no sub-tab strip above it, so it is the page's first row.
     cauldron_settings(&mut a, "cauldron");
-    a.handle(key(KeyCode::Down));
     a.handle(key(KeyCode::Char('i')));
     assert_eq!(a.composer.text(), "> [setting:cauldron.enabled]");
-    assert_eq!(a.ctab, CTab::Config, "the quote goes into the dump; he stays on Config");
+    assert_eq!(a.ctab, CTab::Settings, "the quote goes into the dump; he stays on Settings");
     a.composer = tui_render::compose::Composer::new();
     cauldron_settings(&mut a, "providers/claude_code");
     assert!(a.select_setting("pools.{pool}.budget.weekly.threshold_pct"));
@@ -609,7 +666,7 @@ fn right_on_an_unclaimed_repo_expands_its_band_and_an_unclaimed_region_expands_t
     let s = render_to_text(&mut a, 400, 60).unwrap().join("\n");
     assert!(!s.contains(&body[..body.len().min(40)]) && s.contains("▸ R-9"), "{s}");
     // Config holds none of it any more.
-    a.set_ctab(CTab::Config);
+    a.set_ctab(CTab::Settings);
     assert!(!a.selectable().iter().any(|e| matches!(e, Entry::Sub { page: SPage::Region(_) | SPage::Repo(_), .. })));
 }
 

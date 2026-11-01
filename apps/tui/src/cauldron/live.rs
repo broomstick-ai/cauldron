@@ -512,9 +512,13 @@ impl Door {
             (None, _) | (Some(_), None) => Endpoint::resolve(env, isolated, None),
             (Some(why), Some(_)) => {
                 let port = crate::cauldron_env::resolve_in(env)?.port;
-                if PROD_PORTS.contains(&port) {
+                // REL-6e F2: the egress gate's own never-dial list (his live
+                // daemons AND tts 3652), so every port it refuses even when
+                // given is refused HERE, in the Door's words, before `admit`.
+                if env::egress::NEVER_PORTS.contains(&port) {
+                    let his = env::egress::NEVER_PORTS.map(|p| p.to_string()).join("/");
                     return Err(format!(
-                        "refused: environment `{}` declares threads on port {port}, a live daemon of his (3651/3653/3753/9010), and this face is isolated ({why})",
+                        "refused: environment `{}` declares threads on port {port}, a live daemon of his ({his}), and this face is isolated ({why})",
                         env.name
                     ));
                 }
@@ -546,12 +550,42 @@ pub struct Live {
     sent: Vec<(String, Result<Option<u64>, String>)>,
     /// Sends issued and not yet answered, by thread.
     pub sending: HashMap<String, String>,
+    /// V1.5: shape frames a test folded into a DETACHED Live by hand
+    /// ([`Live::fold_by_hand`]) — the mirror [`Live::pool`] reads when there
+    /// is no connection. Never set on a connected Live.
+    by_hand: Option<crate::seam::held::Held>,
+    /// V1.6: what the daemon answered the account verbs this face said
+    /// ([`Live::account`]), for Config › Accounts to fold in.
+    acct_tx: std::sync::mpsc::Sender<AccountReply>,
+    acct_rx: std::sync::mpsc::Receiver<AccountReply>,
+    /// **THE POOL AS OF THE LAST TICK** (V1-ACCT2, V1-ACCT-I B1): read off
+    /// the seam's mirror once per [`Live::drain`], and what [`Live::pool`]
+    /// answers until the next. The mirror is folded on the connection's
+    /// thread, so two reads of it inside one frame could see two rosters:
+    /// the Config page drew 22 rows and then `App::dash_rows` counted 24
+    /// (`view.rs`'s "drawn rows and App::dash_rows disagree"), and in a
+    /// release build the selection and hit-map index a different list from
+    /// the one drawn. Every read between two ticks now sees one pool.
+    ticked: Option<Pool>,
+}
+
+/// **WHAT THE DAEMON ANSWERED AN ACCOUNT VERB** (V1.6): the ack's payload (a
+/// login's `session_id` and `url`, its `ok`), or the refusal. `tag` is the
+/// caller's, so a reply to a login he has left is known for what it is.
+/// Never the code he pasted.
+#[derive(Debug, Clone)]
+pub struct AccountReply {
+    pub tag: u64,
+    /// `begin`, `complete`, `cancel` or `in_pool`.
+    pub verb: &'static str,
+    pub result: Result<serde_json::Value, String>,
 }
 
 impl Live {
     /// A store with no connection: what `App::open` holds until the face
     /// starts one, and what a test feeds facts into by hand.
     pub fn detached(home: String) -> Self {
+        let (acct_tx, acct_rx) = std::sync::mpsc::channel();
         Live {
             store: Store::new(String::new(), home),
             rx: None,
@@ -563,6 +597,10 @@ impl Live {
             drafts: false,
             sent: Vec::new(),
             sending: HashMap::new(),
+            by_hand: None,
+            acct_tx,
+            acct_rx,
+            ticked: None,
         }
     }
 
@@ -645,6 +683,7 @@ impl Live {
         self.rx = Some(rx);
         self.handle = Some(handle);
         self.why_not = None;
+        self.ticked = self.mirror_pool();
         Ok(())
     }
 
@@ -657,6 +696,12 @@ impl Live {
     /// state ordered with the frames.
     pub fn is_up(&self) -> bool {
         matches!(self.store.link, LinkState::Connected)
+    }
+
+    /// Whether this connection's daemon EVER answered (its welcome named a
+    /// boot): the store keeps `boot_id` across a disconnect (REL-6e F3).
+    pub fn was_reached(&self) -> bool {
+        self.store.boot_id.is_some()
     }
 
     /// Whether the daemon was reached and then lost (the stale state).
@@ -695,6 +740,11 @@ impl Live {
     /// **EMPTY THE CHANNEL, NEVER WAIT ON IT.** Applies at most
     /// [`DRAIN_BATCH`] events and returns how many; the caller paints once
     /// for the batch.
+    ///
+    /// It is also the ONE point the account pool moves for this face: the
+    /// mirror is read once here ([`Live::pool`] answers from that read until
+    /// the next tick), and a pool that changed counts as one more thing to
+    /// paint.
     pub fn drain(&mut self) -> usize {
         let mut n = 0;
         while n < DRAIN_BATCH {
@@ -705,6 +755,13 @@ impl Live {
             };
             n += 1;
             self.apply(ev);
+        }
+        if self.handle.is_some() {
+            let now = self.mirror_pool();
+            if now != self.ticked {
+                self.ticked = now;
+                n += 1;
+            }
         }
         n
     }
@@ -766,9 +823,193 @@ impl Live {
         Ok(())
     }
 
+    /// **SAY ONE ACCOUNT VERB** (V1.6) through this face's one connection;
+    /// its answer comes back on [`Live::take_account_replies`] with `tag`.
+    /// Refused, with the reason, while the link is not up — never queued.
+    pub fn account(&mut self, v: crate::acts::AccountVerb, tag: u64) -> Result<(), String> {
+        if !self.is_started() {
+            return Err(self.why_not.clone().unwrap_or_else(|| "not connected to a threads daemon".into()));
+        }
+        let (Some(rt), Some(h)) = (&self.rt, &self.handle) else {
+            return Err("not connected to a threads daemon".into());
+        };
+        // The seam's own link state, not only the store's: the pool this
+        // page draws is read straight off the seam's mirror, so a roster on
+        // screen means the seam is up even before the store's link event is
+        // drained (measured: a flip right after the roster arrived was
+        // refused as "not connected").
+        if !(self.is_up() || h.is_live()) {
+            return Err("the threads daemon is not connected right now".into());
+        }
+        let verb = match &v {
+            crate::acts::AccountVerb::LoginBegin { .. } => "begin",
+            crate::acts::AccountVerb::LoginComplete { .. } => "complete",
+            crate::acts::AccountVerb::LoginCancel { .. } => "cancel",
+            crate::acts::AccountVerb::InPool { .. } => "in_pool",
+        };
+        let (h, tx) = (h.clone(), self.acct_tx.clone());
+        rt.spawn(async move {
+            let result = h.account(v).await.map(|ack| ack.payload);
+            let _ = tx.send(AccountReply { tag, verb, result });
+        });
+        Ok(())
+    }
+
+    /// The account verbs the daemon answered since the last call.
+    pub fn take_account_replies(&mut self) -> Vec<AccountReply> {
+        self.acct_rx.try_iter().collect()
+    }
+
     /// The sends the daemon answered since the last call.
     pub fn take_sent(&mut self) -> Vec<(String, Result<Option<u64>, String>)> {
         std::mem::take(&mut self.sent)
+    }
+}
+
+// ──────────────────────────────────────────────────────────────────────────
+//  V1.5: the account pool, for Status › Tokens
+// ──────────────────────────────────────────────────────────────────────────
+
+/// **A CELL THE PRODUCER MARKED** while a command changes it (consumer §7,
+/// `docs/PENDING-PROMISES.md`): read, never written, timed out or inferred.
+/// The cell's own `CellState` stays `Known`; the VALUE is the mark.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Mark {
+    Pending { op: String, since: String, until: Option<String> },
+    RecheckFailed { op: String, reason: String },
+}
+
+impl Mark {
+    /// The mark a cell's value carries, if it carries one: `state` is
+    /// `pending` or `recheck_failed` AND `op` is present.
+    pub fn of(v: &serde_json::Value) -> Option<Mark> {
+        let s = |k: &str| v.get(k).and_then(serde_json::Value::as_str).map(str::to_string);
+        let op = s("op")?;
+        match v.get("state")?.as_str()? {
+            "pending" => Some(Mark::Pending { op, since: s("started_at").unwrap_or_else(|| "—".into()), until: s("deadline_at") }),
+            "recheck_failed" => Some(Mark::RecheckFailed { op, reason: s("reason").unwrap_or_else(|| "no reason given".into()) }),
+            _ => None,
+        }
+    }
+
+    /// What the face says for it — never the last real value (consumer §7).
+    /// The producer's words (`op`, `reason`) may quote an account key: they
+    /// pass the one masker here, so no surface draws them raw (V1-ACCT-I N5).
+    pub fn words(&self) -> String {
+        crate::pool::model::masked_text(&match self {
+            Mark::Pending { op, since, until: Some(u) } => format!("pending {op} since {since} until {u}"),
+            Mark::Pending { op, since, until: None } => format!("pending {op} since {since}"),
+            Mark::RecheckFailed { reason, .. } => format!("recheck failed: {reason}"),
+        })
+    }
+}
+
+/// **WHAT THIS FACE'S ONE CONNECTION HOLDS OF THE ACCOUNT POOL** — the
+/// standing `accounts` and `threads/non-idle` mirrors the seam already holds
+/// (`seam::held::STANDING`), folded into the pool board's cards by
+/// [`crate::pool::model::project`]: the meters, the daemon's `pressure` and
+/// the placement are the pool board's reading, not re-derived here. No
+/// subscription is added for it (CON-37) and `accounts/gauge-history` is not
+/// asked for.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Pool {
+    /// An `accounts` export, or a complete membership, has arrived. Until
+    /// then the pool is LOADING — never empty, never `0`.
+    pub known: bool,
+    pub board: crate::pool::model::Board,
+    /// Accounts the producer named that have no row here yet: drawn loading.
+    pub loading: Vec<String>,
+    /// Each account's marked cells (§7), by cell name.
+    pub marks: std::collections::BTreeMap<String, std::collections::BTreeMap<String, Mark>>,
+    /// Each account's `credential.subscription_type` (`max`, `pro`), when the
+    /// daemon knows it.
+    pub subscriptions: std::collections::BTreeMap<String, String>,
+}
+
+/// [`Live::pool`] over one held mirror set, at `now` (which only drops a limit
+/// that has passed, as the pool board does).
+pub fn pool_of(h: &crate::seam::held::Held, now: chrono::DateTime<Utc>) -> Pool {
+    use crate::pool::model::{project, Fold, ACCOUNTS, FLEET, NON_IDLE, SUMMARY, THREADS};
+    let mut accounts = Fold::new(ACCOUNTS);
+    let mut non_idle = Fold::new(NON_IDLE);
+    let mut marks: std::collections::BTreeMap<String, std::collections::BTreeMap<String, Mark>> = Default::default();
+    let mut loading = Vec::new();
+    let mut subscriptions = std::collections::BTreeMap::new();
+    let mut known = false;
+    if let Some(m) = h.mirror(ACCOUNTS) {
+        known = m.exported() || m.members().complete();
+        accounts.exported = m.exported();
+        accounts.dead = m.dead_reason().map(str::to_string);
+        if m.shared().is_object() {
+            accounts.shared = m.shared().clone();
+        }
+        for k in m.keys() {
+            let row = m.row(&k).clone();
+            if let Some(o) = row.as_object() {
+                for (cell, v) in o {
+                    if let Some(mk) = Mark::of(v) {
+                        marks.entry(k.clone()).or_default().insert(cell.clone(), mk);
+                    }
+                }
+            }
+            if let Some(t) = row.pointer("/credential/subscription_type").and_then(serde_json::Value::as_str) {
+                subscriptions.insert(k.clone(), t.to_string());
+            }
+            accounts.rows.insert(k, row);
+        }
+        for k in m.members().keys() {
+            if k != "default" && !accounts.rows.contains_key(&k) {
+                loading.push(k);
+            }
+        }
+    }
+    if let Some(m) = h.mirror(NON_IDLE) {
+        if matches!(m.key_state(FLEET), shapewire::mirror::KeyState::Held) {
+            non_idle.rows.insert(FLEET.to_string(), m.row(FLEET).clone());
+            non_idle.exported = true;
+        }
+    }
+    let board = project(&accounts, &non_idle, &Fold::new(THREADS), &Fold::new(SUMMARY), now);
+    Pool { known, board, loading, marks, subscriptions }
+}
+
+impl Live {
+    /// **THE ACCOUNT POOL, OFF THIS FACE'S ONE CONNECTION** (V1.5): read
+    /// under the seam's lock, which no task holds across I/O. `None` when
+    /// there is no connection (and nothing was folded by hand) —
+    /// [`Live::why_not`] says why.
+    ///
+    /// Connected, it is the pool as of the last tick ([`Live::drain`]), never
+    /// a fresh read: a frame reads it many times (the rows it draws, then
+    /// `App::dash_rows`, the selection, the hit-map), and every one of those
+    /// must see the same roster (V1-ACCT-I B1).
+    pub fn pool(&self) -> Option<Pool> {
+        match (&self.handle, &self.by_hand) {
+            (Some(_), _) => self.ticked.clone(),
+            (None, Some(held)) => Some(pool_of(held, Utc::now())),
+            (None, None) => None,
+        }
+    }
+
+    /// The seam's mirror as it is THIS instant, folded on the connection's
+    /// thread. Never drawn from: [`Live::drain`] reads it once per tick, and
+    /// a test reads it to see a frame that has arrived and not yet been
+    /// ticked in.
+    pub fn mirror_pool(&self) -> Option<Pool> {
+        match (&self.handle, &self.by_hand) {
+            (Some(h), _) => Some(h.read(|held| pool_of(held, Utc::now()))),
+            (None, Some(held)) => Some(pool_of(held, Utc::now())),
+            (None, None) => None,
+        }
+    }
+
+    /// Fold one shape frame into a DETACHED Live by hand — what a test that
+    /// needs no socket feeds [`Live::pool`] with. A connected Live ignores it:
+    /// its mirror is the seam's.
+    pub fn fold_by_hand(&mut self, frame: &serde_json::Value) {
+        if self.handle.is_none() {
+            self.by_hand.get_or_insert_with(crate::seam::held::Held::new).fold(frame);
+        }
     }
 }
 
@@ -810,6 +1051,16 @@ impl crate::cauldron::app::App {
             },
         };
         self.attach_live(live);
+    }
+
+    /// **WHETHER THE SHOWN TAB READS THE DAEMON** — Threads, and Status ›
+    /// Tokens (V1.5: the account pool is the same connection's). The launch
+    /// and the live loop start the one connection the first time this holds.
+    pub fn shows_live(&self) -> bool {
+        use crate::cauldron::app::CTab;
+        // V1.6: Config › Accounts lists the daemon's accounts, and an
+        // environment's Settings tab switches them on or off for itself.
+        self.ctab == CTab::Threads || (self.ctab == CTab::Status && self.sttab == crate::cauldron::status::StatusTab::Tokens) || matches!(self.ctab, CTab::Accounts | CTab::Settings)
     }
 
     /// Put `live` behind the face: its project indexes read (the list's
@@ -865,6 +1116,13 @@ mod constructor_tests {
         let (_, b_prod) = two_envs(47_101, 3653);
         let why = pointed.endpoint_with(&b_prod, Some("t"), admit_all).unwrap_err();
         assert!(why.contains("port 3653") && why.contains("refused"), "{why}");
+        // REL-6e F2: every port the egress gate never dials (tts 3652 too) is
+        // refused by the Door itself, in its words, even when admitted.
+        for p in env::egress::NEVER_PORTS {
+            let (_, b_never) = two_envs(47_101, p);
+            let why = pointed.endpoint_with(&b_never, Some("t"), admit_all).unwrap_err();
+            assert!(why.contains(&format!("declares threads on port {p}, a live daemon of his")), "{p}: {why}");
+        }
         // Isolated, never pointed: refused on both, whatever the gate says.
         let unpointed = Door::of_launch(true, &a, None);
         for e in [&a, &b] {

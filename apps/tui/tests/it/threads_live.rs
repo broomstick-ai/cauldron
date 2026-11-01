@@ -473,7 +473,7 @@ fn g5_the_daemon_down_keeps_the_rows_blocks_the_send_and_resubscribes_on_return(
 /// old name — refused typed, resolved stored; `cauldron` still opens.
 #[test]
 fn g6_the_tab_is_threads_and_agents_is_its_old_name() {
-    assert_eq!(CTab::ALL.map(CTab::label), ["Cauldron", "Threads", "Status", "Config"]);
+    assert_eq!(CTab::ENV.map(CTab::label), ["Cauldron", "Threads", "Status", "Permissions", "Settings"]);
     assert_eq!(CTab::parse("threads"), Some(CTab::Threads));
     assert_eq!(CTab::parse("agents"), None, "agents is not a tab's name");
     assert_eq!(CTab::renamed("agents"), Some(CTab::Threads));
@@ -494,7 +494,7 @@ fn g7_leaving_and_returning_to_the_tab_dials_once() {
     let home = home();
     let mut a = face(fake.port, &home);
     pump(&mut a, "B", |a| a.threads.rows.iter().any(|t| t.id == B));
-    for t in [CTab::Status, CTab::Threads, CTab::Config, CTab::Threads] {
+    for t in [CTab::Status, CTab::Threads, CTab::Settings, CTab::Threads] {
         a.set_ctab(t);
         a.start_live();
         screen(&mut a);
@@ -534,9 +534,17 @@ fn g8_his_live_ports_and_real_home_are_refused_and_a_fake_is_not() {
 /// A scratch cauldron root whose prod declaration puts threads at `port`.
 /// What an UNPOINTED face would resolve to — so a fallback to the
 /// environment's own daemon reaches a fake this test owns, never his.
+///
+/// MERGE-V1i: the root also HAS a `prod` environment (`data/prod/`). On
+/// rel/halloween `prod` was exempt from `confirm_environment`, so a dump of
+/// an environment-less root still opened `prod`; V1.2 (Q-F1) removed that
+/// exemption and sends a root with NO environment to the first-run screen,
+/// which has no Threads tab to refuse or draw. These tests are about a
+/// Threads dump of an environment that exists, so the fixture now says so.
 fn root_declaring(port: u16) -> PathBuf {
     let root = scratch("decl");
     std::fs::create_dir_all(root.join("services")).unwrap();
+    std::fs::create_dir_all(root.join("data").join("prod")).unwrap();
     std::fs::write(
         root.join("services").join("threads.toml"),
         format!(
@@ -1353,15 +1361,36 @@ fn dump_switching(root: &Path, home: &Path, alpha_port: u16) -> std::process::Ou
 fn rel6d_switching_cauldron_the_threads_tab_shows_the_new_environments_threads() {
     let rt = rt();
     let alpha = rt.block_on(Fake::start(vec![serving_one(ALPHA_T, ALPHA_NAME), serving_one(ALPHA_T, ALPHA_NAME)]));
-    let bravo = rt.block_on(Fake::start(vec![serving_one(BRAVO_T, BRAVO_NAME), serving_one(BRAVO_T, BRAVO_NAME)]));
+    // REL-6f G2: bravo holds every connection, before its handshake, until
+    // the face has closed every alpha connection — it waits on that EVENT
+    // (alpha's server side seeing the face's EOF), not on two clocks. The
+    // bound is a failure bound only, and under the dump's 3000 ms settle, so
+    // a face that keeps alpha open until it exits (a leaked runtime) is
+    // caught while it is still running.
+    const SWITCH_CLOSES_ALPHA_WITHIN: Duration = Duration::from_millis(1500);
+    let bravo = rt.block_on(Fake::start_gated(
+        vec![serving_one(BRAVO_T, BRAVO_NAME), serving_one(BRAVO_T, BRAVO_NAME)],
+        alpha.all_closed_gate(SWITCH_CLOSES_ALPHA_WITHIN),
+    ));
     assert_ne!(alpha.port, bravo.port);
     let root = root_with_two(alpha.port, bravo.port);
     let home = home();
     let out = dump_switching(&root, &home, alpha.port);
     let s = String::from_utf8_lossy(&out.stdout);
-    assert_eq!(out.status.code(), Some(0), "stderr: {}\n{s}", String::from_utf8_lossy(&out.stderr));
     // SENTINEL: the launch really read alpha's daemon first.
     assert!(alpha.connections() >= 1, "the launch never reached alpha's daemon: {:#?}", alpha.log());
+    // REL-6e F1, REL-6f G2: the switch TORE DOWN alpha's connection while the
+    // face was still running — bravo's gate opened on alpha's closes, and no
+    // bravo connection waited out the bound.
+    assert_eq!(
+        bravo.gate_timed_out(),
+        0,
+        "alpha's connection outlived the switch: bravo was dialled and alpha was still open {SWITCH_CLOSES_ALPHA_WITHIN:?} later (after the face exited: {} of {} alpha connections closed)",
+        alpha.peer_closed(),
+        alpha.connections()
+    );
+    assert!(bravo.gate_opened() >= 1, "sentinel: bravo was dialled and its gate opened on alpha's closes: {:#?}", bravo.log());
+    assert_eq!(out.status.code(), Some(0), "stderr: {}\n{s}", String::from_utf8_lossy(&out.stderr));
     assert!(!s.contains("no threads endpoint"), "the switch dropped the threads door:\n{s}");
     assert!(s.contains(BRAVO_NAME), "the Threads tab does not show bravo's thread after the switch:\n{s}");
     assert!(!s.contains(ALPHA_NAME), "the Threads tab still shows alpha's thread after the switch:\n{s}");
@@ -1371,6 +1400,8 @@ fn rel6d_switching_cauldron_the_threads_tab_shows_the_new_environments_threads()
     // granted, counts every dial.
     let ungranted = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
     let up = ungranted.local_addr().unwrap().port();
+    // MERGE-V1j: REL-6a8 replaced `granted_ports()` (a port set) with
+    // `granted()` (bound listeners, each `addr:port@pid`).
     assert!(!env::egress::granted().iter().any(|g| g.addr.port() == up), "sentinel: the bare listener is not granted");
     ungranted.set_nonblocking(true).unwrap();
     let alpha2 = rt.block_on(Fake::start(vec![serving_one(ALPHA_T, ALPHA_NAME), serving_one(ALPHA_T, ALPHA_NAME)]));
@@ -1379,7 +1410,62 @@ fn rel6d_switching_cauldron_the_threads_tab_shows_the_new_environments_threads()
     let s = String::from_utf8_lossy(&out.stdout);
     assert_eq!(out.status.code(), Some(0), "stderr: {}\n{s}", String::from_utf8_lossy(&out.stderr));
     assert!(alpha2.connections() >= 1, "sentinel: the launch reached alpha's daemon");
-    assert!(s.contains("no threads daemon") && s.contains("refused") && s.contains(&format!("127.0.0.1:{up}")), "the switched face did not say why it has no daemon:\n{s}");
+    // The refusal names the port: REL-6a6 wrote `port N`; REL-6a8's gate
+    // (`admit_url_with`) names the address, `127.0.0.1:N` (MERGE-V1j).
+    assert!(
+        s.contains("no threads daemon") && s.contains("refused") && (s.contains(&format!("port {up}")) || s.contains(&format!("127.0.0.1:{up}"))),
+        "the switched face did not say why it has no daemon:\n{s}"
+    );
     assert!(!s.contains(ALPHA_NAME), "alpha's thread was carried into bravo:\n{s}");
     assert!(matches!(ungranted.accept(), Err(e) if e.kind() == std::io::ErrorKind::WouldBlock), "the ungranted port was dialled");
+}
+
+// ── REL-6f G1: `reached`, through a real link ─────────────────────────────
+
+/// **REL-6f G1: "DOWN" SAYS WHAT THE LINK ACTUALLY SAW.** The tab's
+/// `reached` comes from the connection (`live.was_reached()`, a welcome's
+/// `boot_id`), through a real seam link on a port this process bound and
+/// granted:
+///
+/// - a scratch fake that welcomed the face, then went down: the line says
+///   "showing what it last said";
+/// - a scratch listener (bound and granted here, REL-6a8) that takes every
+///   TCP dial and closes it before any welcome: the line says "it has not
+///   answered yet", and never "last said".
+#[test]
+fn rel6f_g1_down_after_a_welcome_shows_what_it_last_said_and_down_before_one_says_it_has_not_answered() {
+    const LAST_SAID: &str = "threads is down · showing what it last said";
+    const NOT_ANSWERED: &str = "threads is down · it has not answered yet";
+    let rt = rt();
+    let home = home();
+
+    // Reached: welcomed, then down.
+    let fake = rt.block_on(Fake::start(vec![serving()]));
+    let mut a = face(fake.port, &home);
+    pump(&mut a, "the link to come up", |a| a.threads.link == threads::Link::Up && !a.threads.rows.is_empty());
+    fake.stop();
+    pump(&mut a, "the link to go down", |a| a.threads.link == threads::Link::Down);
+    let s = screen(&mut a);
+    assert!(s.contains(LAST_SAID) && !s.contains("not answered"), "a daemon that welcomed the face:\n{s}");
+    drop(a);
+
+    // Never reached: a listener this process bound and granted, which closes
+    // every dial before the handshake.
+    let mute = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let addr = mute.local_addr().unwrap();
+    env::egress::grant_addr(addr).expect("grant the scratch listener");
+    let dials = std::sync::Arc::new(AtomicUsize::new(0));
+    let d = dials.clone();
+    std::thread::spawn(move || {
+        for sock in mute.incoming() {
+            d.fetch_add(1, Ordering::SeqCst);
+            drop(sock);
+        }
+    });
+    let mut a = face(addr.port(), &home);
+    pump(&mut a, "the link to go down", |a| a.threads.link == threads::Link::Down);
+    assert!(dials.load(Ordering::SeqCst) >= 1, "sentinel: the face dialled the scratch listener");
+    assert!(!a.live.was_reached(), "sentinel: no welcome was ever sent");
+    let s = screen(&mut a);
+    assert!(s.contains(NOT_ANSWERED) && !s.contains("last said"), "a daemon that never answered:\n{s}");
 }

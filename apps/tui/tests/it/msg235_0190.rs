@@ -35,7 +35,7 @@ fn env_in(root: &Path, name: &str) -> Environment {
 
 fn open(root: &Path) -> App {
     std::env::set_var("CAULDRON_TYPE_ONE", "off");
-    App::open(env_in(root, "prod"), seed_dir(), true).expect("seed loads")
+    crate::live_pool::seeded(App::open(env_in(root, "prod"), seed_dir(), true).expect("seed loads"))
 }
 
 fn key(code: KeyCode) -> Event {
@@ -124,12 +124,12 @@ fn n10_a_double_click_on_a_title_renames_it_on_screen_for_the_developer() {
     a.handle(key(KeyCode::Enter));
     assert!(a.modal.is_none());
     let s = screen(&mut a);
-    assert!(s.lines().nth(1).unwrap().contains(" pot "), "the legend says the new word: {s}");
+    assert!(s.lines().nth(2).unwrap().contains(" pot "), "the legend says the new word: {s}");
     // Kept for every face on the machine, never in a cauldron's data.
     let file = root.join("data").join("shared").join("tui").join("dev_names.json");
     assert!(std::fs::read_to_string(&file).unwrap().contains("\"pot\""), "{}", file.display());
     let mut b = open(&root);
-    assert!(screen(&mut b).lines().nth(1).unwrap().contains(" pot "));
+    assert!(screen(&mut b).lines().nth(2).unwrap().contains(" pot "));
     // A root tab, and the sidebar's title, too.
     double_click(&mut a, Hit::CTab(CTab::Threads));
     assert!(matches!(&a.modal, Some(Modal::DevRename { key, .. }) if key == "Threads"), "{:?}", a.modal);
@@ -145,7 +145,7 @@ fn n10_a_double_click_on_a_title_renames_it_on_screen_for_the_developer() {
     double_click(&mut a, Hit::Title(Title::Surface));
     a.handle(Event::Key(KeyEvent::new(KeyCode::Char('u'), KeyModifiers::CONTROL)));
     a.handle(key(KeyCode::Enter));
-    assert!(screen(&mut a).lines().nth(1).unwrap().contains(" surface "));
+    assert!(screen(&mut a).lines().nth(2).unwrap().contains(" surface "));
     // Only the word on screen: the tab's key and flag are what they were.
     assert_eq!(CTab::parse("cauldron"), Some(CTab::Cauldron));
 }
@@ -192,5 +192,5 @@ fn s3_tokens_is_one_band_per_source_with_no_band_around_them() {
     assert_eq!(acct.parent.as_deref(), Some("tok:claude_code"));
     let s = screen(&mut a);
     assert!(!s.lines().any(|l| l.contains("▾ Tokens") || l.contains("▸ Tokens")), "{s}");
-    assert!(s.lines().nth(3).unwrap().contains("▾ Claude Code"), "the first source is the first band: {s}");
+    assert!(s.lines().nth(4).unwrap().contains("▾ Claude Code"), "the first source is the first band: {s}");
 }

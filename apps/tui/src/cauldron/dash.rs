@@ -26,7 +26,12 @@ use serde::Deserialize;
 pub struct GlobalBoard {
     #[serde(default, rename = "_note")]
     pub note: Option<String>,
-    /// Claude Code's accounts and their usage (the threads board's).
+    /// Claude Code's accounts and their usage (the threads board's). V1.5:
+    /// Status › Tokens no longer reads these — it draws the daemon's pool off
+    /// the face's one connection (`live::Live::pool`). V1.6: nor does
+    /// Config's account roster (`menu::App::accounts` reads the daemon's,
+    /// `accounts::App::roster`). Nothing in the face draws these any more; they
+    /// stay only for the fixture tests that stand them in for the daemon.
     #[serde(default)]
     pub accounts: Vec<Account>,
     #[serde(default)]

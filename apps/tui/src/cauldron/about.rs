@@ -63,6 +63,9 @@ pub fn fact(label: &str) -> String {
         "used by" => "The roles of this cauldron whose work goes to this endpoint.",
         "key" => "The endpoint's key, set on the Providers tab: only how it begins and its last four are ever shown.",
         "budget" => "The key's budget, the wallet every cauldron draws from, set on the Providers tab.",
+        "in the pool" => "Whether the threads daemon places work on this account at all — for every cauldron on this machine. The daemon's own switch, read off its pool; it changes when the daemon says it has.",
+        "login" => "This account's login, as the threads daemon last checked it. `log in` signs it in again, once, for the whole machine.",
+        "accounts" => "Why no account is listed yet: the account pool is the threads daemon's, and it has not answered.",
         _ => "",
     };
     if !says.is_empty() {
@@ -80,6 +83,9 @@ pub fn act(a: &Act) -> String {
         Act::DeleteCluster(_) => "Delete this cluster and every cluster under it. It asks first.".into(),
         Act::RenameAccount { .. } => "Rename this account: the label shown everywhere. Its login is untouched.".into(),
         Act::RemoveAccount { pool, .. } => format!("Take this account out of {}. It asks first; its login directory is kept.", pool_label(pool)),
+        Act::InPool { on: false, .. } => "Take this account out of the threads daemon's pool, for every cauldron on this machine: nothing new is placed on it, and what runs on it finishes. It asks first.".into(),
+        Act::InPool { on: true, .. } => "Put this account back in the threads daemon's pool, for every cauldron on this machine. It asks first.".into(),
+        Act::LogIn { .. } => "Log this account in once, for the whole machine, through the threads daemon: it gives an address to sign in at and takes back the code.".into(),
         Act::NewEndpoint { here: false } => "Add an inference endpoint every cauldron may spend: pick a template, give it its key, and it fills in the rest.".into(),
         Act::NewEndpoint { here: true } => "Add an inference endpoint only this cauldron sees: pick a template, give it its key, and it fills in the rest.".into(),
         Act::AddEndpoint { .. } => "Add the endpoint as it is filled in. It waits for what its template needs: a name, a url, and — for a provider's API — its key.".into(),
@@ -90,6 +96,7 @@ pub fn act(a: &Act) -> String {
         Act::Enable(_) => "Enable or disable this cauldron. It asks first.".into(),
         Act::Service { op, .. } => format!("{} this service. It asks first, and it is recorded in the supervision log below as requested by you.", match op { crate::cauldron::supervise::Op::Restart => "Restart", crate::cauldron::supervise::Op::Stop => "Stop", crate::cauldron::supervise::Op::Rollback => "Roll back" }),
         Act::Gc => "Collect now: shows what a pass would reclaim from this face's own files and asks first.".into(),
+        Act::HaSubmit { .. } => "Submit this step: each value typed goes to the destination its field names — an env file, the keychain or the action's node. It asks first, by field names only.".into(),
     }
 }
 
@@ -109,7 +116,7 @@ impl App {
             Entry::Add(Add::Item(list)) => (crate::cauldron::menu::add_words(list), format!("Put an item on {}.", list.def().label)),
             Entry::Do { act: a, label, .. } => (label.trim_start_matches("+ ").to_string(), act(a)),
             Entry::Ref { tag, label, .. } => (label.clone(), format!("{label}. `i` quotes it into the bucket as {}.", tag.render())),
-            Entry::Strip | Entry::Gap | Entry::Para(_) => return None,
+            Entry::Gap | Entry::Para(_) => return None,
         })
     }
 }

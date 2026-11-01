@@ -49,7 +49,7 @@ fn open(root: &Path, name: &str) -> App {
     // Hermetic: no test here may make a billed type-one call, whatever is on
     // PATH (a cluster made here seeds; tests/it/seed_live.rs is the live proof).
     std::env::set_var("CAULDRON_TYPE_ONE", "off");
-    App::open(env_in(root, name), seed_dir(), true).expect("seed loads")
+    crate::live_pool::seeded(App::open(env_in(root, name), seed_dir(), true).expect("seed loads"))
 }
 
 fn key(code: KeyCode) -> Event {
@@ -121,7 +121,7 @@ fn down_to(a: &mut App, label: &str) {
 
 /// The cauldron's Config with every band closed, then `path` opened.
 fn config(a: &mut App, path: &str) {
-    a.set_ctab(CTab::Config);
+    a.set_ctab(CTab::Settings);
     a.snav = Nav::cauldron();
     a.rows[SETTINGS_ROW] = 0;
     if !path.is_empty() {
@@ -188,7 +188,7 @@ fn every_setting_that_inherits_is_tri_state_and_the_rest_two() {
     // msg 235: "if there's an inherent option on any setting in any config
     // menu ... we're going to have inherit, on, and off".
     let mut a = open(&scratch_root(), "prod");
-    a.handle(key(KeyCode::F(4)));
+    a.handle(key(KeyCode::F(5)));
     config(&mut a, "providers/claude_code");
     assert_row(&mut a, "opportunistic", "opportunistic inherit on off");
     assert_row(&mut a, "failover", "failover on off default on");
@@ -213,7 +213,7 @@ fn a_row_says_its_default_and_reverts_only_while_it_differs() {
     // that revert button, then it will revert to the default."
     let root = scratch_root();
     let mut a = open(&root, "prod");
-    a.handle(key(KeyCode::F(4)));
+    a.handle(key(KeyCode::F(5)));
     config(&mut a, "devices/storage");
     assert_row(&mut a, "archive before delete", "archive before delete on off default off");
     assert!(!row(&mut a, "archive before delete").contains('↺'));
@@ -246,7 +246,7 @@ fn a_row_says_its_default_and_reverts_only_while_it_differs() {
 fn a_click_on_an_option_picks_it() {
     let root = scratch_root();
     let mut a = open(&root, "prod");
-    a.handle(key(KeyCode::F(4)));
+    a.handle(key(KeyCode::F(5)));
     config(&mut a, "providers/claude_code");
     // The source's own (the shared default of the same name stands flat at
     // the head of Providers, task 0209 D4).
@@ -279,14 +279,10 @@ fn a_click_on_an_option_picks_it() {
 fn a_source_is_its_accounts_table_its_settings_flat_and_its_models() {
     let root = scratch_root();
     let mut a = open(&root, "prod");
-    a.handle(key(KeyCode::F(4)));
-    // Config › Providers ▾ Claude Code, by keys: → on the strip to
-    // Providers (the cauldron's tab first, b964d571 msg 23), → opens a band.
-    a.rows[SETTINGS_ROW] = 0;
-    a.handle(key(KeyCode::Right));
-    a.handle(key(KeyCode::Right));
-    a.handle(key(KeyCode::Right));
-    assert_eq!(a.cfg_tab, tui::cauldron::menu::CfgTab::Providers);
+    // Accounts ▾ Claude Code, by keys (V1.1: the sources moved from
+    // Providers to the global bar's Accounts, F9): → opens a band.
+    a.handle(key(KeyCode::F(9)));
+    assert_eq!(a.cfg_tab, tui::cauldron::menu::CfgTab::Accounts);
     down_to(&mut a, "Claude Code");
     a.handle(key(KeyCode::Right));
     assert!(a.snav.is_open(&SPage::Pool("claude_code".into())));
@@ -294,11 +290,15 @@ fn a_source_is_its_accounts_table_its_settings_flat_and_its_models() {
     // just show me a flattened list of all of the settings ... the exception
     // being models".
     let inside: Vec<Entry> = a.page_entries(&SPage::Pool("claude_code".into()));
-    assert!(matches!(&inside[0], Entry::Row(p) if *p == acct("sam-broomstick")), "{inside:?}");
+    // V1.6: the daemon's accounts, in the daemon's order (its keys).
+    let rows: Vec<&Entry> = inside.iter().take_while(|e| matches!(e, Entry::Row(_))).collect();
+    assert_eq!(rows, vec![&Entry::Row(acct("acct2")), &Entry::Row(acct("acct3")), &Entry::Row(acct("sam-broomstick"))], "{inside:?}");
     assert!(inside.iter().all(|e| !matches!(e, Entry::Sub { label, .. } if label == "Defaults" || label == "Accounts" || label == "Opportunistic mode")), "no Defaults, Accounts or Opportunistic band");
     assert!(inside.iter().any(|e| matches!(e, Entry::Fixed(t, _) if t == "Models")));
-    assert_row(&mut a, "account", "account enabled weekly threshold opportunistic");
-    assert_row(&mut a, "sam-broomstick", "sam-broomstick inherit on off 80 % inherit on off ›");
+    // V1.6: the daemon's in-pool switch, then the global default every
+    // cauldron inherits — two switches, named apart.
+    assert_row(&mut a, "account", "account in the pool on in new cauldrons weekly threshold opportunistic");
+    assert_row(&mut a, "sam-broomstick", "sam-broomstick in inherit on off 80 % inherit on off ›");
     // prod's own DEFAULT of 80 (F41: in code, not seed data): no ↺.
     assert!(!row(&mut a, "weekly threshold").contains('↺'));
     assert!(a.select_setting("pools.{pool}.budget.weekly.threshold_pct"));
@@ -314,35 +314,32 @@ fn a_source_is_its_accounts_table_its_settings_flat_and_its_models() {
     // Every account's row follows.
     assert_row(&mut a, "acct2", "70 %");
 
-    // A new account joins the source: written with no settings of its own.
+    // V1.6: a new account joins Claude Code by LOGGING IN through the threads
+    // daemon — named, then `begin` — and is listed when the daemon lists it.
+    // This face has no connection (a stand-in pool folded by hand), so the
+    // login says it was not started, and nothing is written here.
     down_to(&mut a, "+ add account");
     a.handle(key(KeyCode::Enter));
     assert!(matches!(a.modal, Some(Modal::AddAccount { .. })), "{:?}", a.modal);
     assert!(screen(&mut a).contains("Add an account to Claude Code"));
     typed(&mut a, "cc9");
     a.handle(key(KeyCode::Enter));
-    assert!(a.modal.is_none(), "{:?}", a.modal);
-    assert!(matches!(a.settings_entry(), Some(Entry::Row(page)) if page == acct("cc9")), "the new account's row is selected");
-    assert_row(&mut a, "cc9", "cc9 inherit on off 70 % inherit on off ›");
-    assert!(global_file(&root, "accounts.json").contains("\"id\": \"cc9\""));
-    assert!(!global_file(&root, "settings.toml").contains("cc9"), "a new account writes no settings");
+    assert!(matches!(&a.modal, Some(Modal::Login { stage: tui::cauldron::accounts::LoginStage::Done { ok: false, .. }, .. })), "{:?}", a.modal);
+    assert!(screen(&mut a).contains("not started"), "{}", screen(&mut a));
+    a.handle(key(KeyCode::Esc));
+    assert!(!a.accounts("claude_code").iter().any(|x| x.id == "cc9"), "an account listed that the daemon never listed");
+    assert!(!global_file(&root, "accounts.json").contains("cc9"), "a login writes no local account");
 
-    // Change the source's value again: the new account follows.
+    // Change the source's value again: every account follows.
     assert!(a.select_setting("pools.{pool}.budget.weekly.threshold_pct"));
     a.handle(key(KeyCode::Char('+')));
-    assert_row(&mut a, "cc9", "75 %");
+    assert_row(&mut a, "acct2", "75 %");
 
     // The source's accounts switched off: every account inheriting it is.
+    assert!(a.account_on("claude_code", "acct2"));
     down_to(&mut a, "accounts enabled");
     a.handle(key(KeyCode::Char(' ')));
-    assert!(!a.account_on("claude_code", "cc9"));
-    assert!(a.account_on("claude_code", "sam-broomstick") == a.account_on("claude_code", "sam-broomstick"));
-    down_to(&mut a, "+ add account");
-    a.handle(key(KeyCode::Enter));
-    typed(&mut a, "cc9");
-    a.handle(key(KeyCode::Enter));
-    let Some(Modal::AddAccount { error, .. }) = &a.modal else { panic!("{:?}", a.modal) };
-    assert!(error.as_deref().unwrap_or("").contains("already in Claude Code"), "{error:?}");
+    assert!(!a.account_on("claude_code", "acct2"));
 }
 
 #[test]
@@ -352,7 +349,7 @@ fn a_subscription_sources_models_are_detected_and_switched_never_added() {
     // default, each one of them will be on" — an always-expanded band.
     let root = scratch_root();
     let mut a = open(&root, "prod");
-    a.handle(key(KeyCode::F(4)));
+    a.handle(key(KeyCode::F(5)));
     config(&mut a, "providers/claude_code");
     assert_row(&mut a, "Models", "• Models 4 of 4 on");
     for m in ["haiku", "sonnet", "opus", "fable"] {
@@ -370,7 +367,7 @@ fn a_subscription_sources_models_are_detected_and_switched_never_added() {
     // Codex gets the same (msg 235: "make similar changes").
     config(&mut a, "providers/codex");
     assert_row(&mut a, "Models", "• Models 3 of 3 on");
-    assert_row(&mut a, "account", "account enabled weekly threshold opportunistic");
+    assert_row(&mut a, "account", "account on in new cauldrons weekly threshold opportunistic");
 }
 
 // ── an account: a row, its modal ─────────────────────────────────────────────
@@ -384,7 +381,7 @@ fn a_row_opens_its_modal_at_one_click_and_its_settings_work_there() {
     // configurable row in anything that I call a table".
     let root = scratch_root();
     let mut a = open(&root, "prod");
-    a.handle(key(KeyCode::F(4)));
+    a.handle(key(KeyCode::F(5)));
     config(&mut a, "providers/claude_code");
     let i = a.selectable().iter().position(|e| *e == Entry::Row(acct("acct2"))).unwrap();
     render_to_text(&mut a, 120, 80).unwrap();
@@ -453,7 +450,7 @@ fn a_rows_switch_works_on_the_row() {
     // actually change it. It's just an illusion" — now it is a switch.
     let root = scratch_root();
     let mut a = open(&root, "prod");
-    a.handle(key(KeyCode::F(4)));
+    a.handle(key(KeyCode::F(5)));
     config(&mut a, "cauldron/accounts");
     let i = a.selectable().iter().position(|e| matches!(e, Entry::Row(SPage::UseAccount(_, x)) if x == "acct2")).unwrap();
     render_to_text(&mut a, 120, 80).unwrap();
@@ -494,7 +491,7 @@ fn settings_survive_a_restart_and_stay_in_their_environment() {
     std::fs::create_dir_all(root.join("data/dev")).unwrap();
     {
         let mut a = open(&root, "prod");
-        a.handle(key(KeyCode::F(4)));
+        a.handle(key(KeyCode::F(5)));
         a.open_settings_path("machine").unwrap();
         down_to(&mut a, "RAM max");
         a.handle(key(KeyCode::Char('+')));
@@ -512,7 +509,7 @@ fn settings_survive_a_restart_and_stay_in_their_environment() {
         assert!(matches!(&a.modal, Some(Modal::Settings { .. })), "the pick goes back to the role's modal: {:?}", a.modal);
     }
     let mut a = open(&root, "prod");
-    a.handle(key(KeyCode::F(4)));
+    a.handle(key(KeyCode::F(5)));
     a.open_settings_path("machine").unwrap();
     assert_row(&mut a, "RAM max", &format!("RAM max {} GB default {ram} GB", ram + 1));
     assert!(row(&mut a, "RAM max").contains('↺'));
@@ -523,7 +520,7 @@ fn settings_survive_a_restart_and_stay_in_their_environment() {
     // belongs in global") — dev reads the same value; a role is THIS
     // cauldron's own, so dev's curator is its default.
     let mut d = open(&root, "dev");
-    d.handle(key(KeyCode::F(4)));
+    d.handle(key(KeyCode::F(5)));
     d.open_settings_path("machine").unwrap();
     assert_row(&mut d, "RAM max", &format!("RAM max {} GB", ram + 1));
     d.open_settings_path("roles").unwrap();
@@ -536,7 +533,7 @@ fn settings_survive_a_restart_and_stay_in_their_environment() {
     // The headless dump reads it all and writes nothing.
     let before = global_file(&root, "settings.toml");
     let mut h = App::open(env_in(&root, "prod"), seed_dir(), false).unwrap();
-    h.handle(key(KeyCode::F(4)));
+    h.handle(key(KeyCode::F(5)));
     h.open_settings_path("machine").unwrap();
     down_to(&mut h, "RAM max");
     h.handle(key(KeyCode::Char('+')));
@@ -550,7 +547,7 @@ fn settings_survive_a_restart_and_stay_in_their_environment() {
 fn settings_bands_navigate_by_the_one_philosophy() {
     let root = scratch_root();
     let mut a = open(&root, "prod");
-    a.handle(key(KeyCode::F(4)));
+    a.handle(key(KeyCode::F(5)));
     a.set_cfg_tab(tui::cauldron::menu::CfgTab::Devices);
     // No breadcrumb: every band header is on the page, closed.
     let s = screen(&mut a);
@@ -591,7 +588,7 @@ fn settings_bands_navigate_by_the_one_philosophy() {
     a.handle(key(KeyCode::Left));
     assert!(!a.snav.is_open(&SPage::Storage), "← collapses it");
     a.handle(key(KeyCode::Left));
-    assert_eq!((a.ctab, a.rows[SETTINGS_ROW]), (CTab::Config, at), "← never leaves the tab");
+    assert_eq!((a.ctab, a.rows[SETTINGS_ROW]), (CTab::Devices, at), "← never leaves the tab");
 
     // Rule 6: ⌥↓ / ⌥↑ jump between the sections of what is open.
     a.handle(key(KeyCode::Right));
@@ -615,13 +612,13 @@ fn settings_bands_navigate_by_the_one_philosophy() {
     assert_eq!((a.focus, a.rows[SETTINGS_ROW]), (Focus::Content, last));
     // Rule 7: Esc does nothing here, and never quits.
     a.handle(key(KeyCode::Esc));
-    assert_eq!((a.ctab, a.focus), (CTab::Config, Focus::Content));
+    assert_eq!((a.ctab, a.focus), (CTab::Devices, Focus::Content));
     assert!(!a.quit);
     // `a` goes to the dump, on Work; coming back, the bands are reset
     // (ui.preserve.config is off by default).
     a.handle(key(KeyCode::Char('a')));
     assert_eq!((a.ctab, a.focus), (CTab::Cauldron, Focus::Input));
-    a.handle(key(KeyCode::F(4)));
+    a.handle(key(KeyCode::F(5)));
     assert!(a.snav.open.is_empty() && a.rows[SETTINGS_ROW] == 0, "{:?}", a.snav);
 
     // A toggle row: Space, Enter and → each flip it.
@@ -736,8 +733,10 @@ fn every_setting_in_the_design_is_in_a_band() {
     for here in [false, true] {
         for t in ["openrouter", "local"] {
             a.settings.draft_endpoint(here, t);
-            let explicit = tui::cauldron::menu::ep_bound(here, tui::cauldron::settings::DRAFT_EP, "models");
-            a.sset(&explicit, Val::Str("explicit".into())).unwrap();
+            // V1.7: an endpoint is never set through the face; the draft's
+            // `models = explicit` goes straight into the store it lives in.
+            let k = format!("{}.{}.models", tui::cauldron::settings::endpoint_prefix(here), tui::cauldron::settings::DRAFT_EP);
+            if here { a.settings.cauldron.vals.insert(k, Val::Str("explicit".into())); } else { a.settings.global.vals.insert(k, Val::Str("explicit".into())); }
             for e in a.page_entries(&SPage::Endpoint { here, id: tui::cauldron::settings::DRAFT_EP.into() }) {
                 match e {
                     Entry::Set(b) => {
@@ -786,7 +785,9 @@ fn every_setting_in_the_design_is_in_a_band() {
     // msg 235: "the first setting `cauldron enabled`").
     assert!(matches!(a.page_entries(&tui::cauldron::menu::CfgTab::Cauldron.root()).first(), Some(Entry::Set(b)) if b.key == "cauldron.enabled"));
     // A cauldron's narrowed list of a global endpoint's models.
-    a.sset(&Bound::new("cauldron.use.{ep}.narrow", Ctx::ep("ep-2")), Val::Bool(true)).unwrap();
+    // (V1.7: greyed, so set in the store directly — the face refuses it.)
+    a.settings.cauldron.vals.insert("cauldron.use.ep-2.narrow".into(), Val::Bool(true));
+    assert!(a.sget(&Bound::new("cauldron.use.{ep}.narrow", Ctx::ep("ep-2"))).val.as_bool());
     for e in a.page_entries(&SPage::UseEndpoint("ep-2".into())) {
         if let Entry::Add(tui::cauldron::menu::Add::Item(b)) = e {
             seen.insert(b.key);
@@ -996,7 +997,7 @@ fn the_status_tokens_band_shows_what_the_settings_say() {
     let v = tui::cauldron::status::view(&a, 120);
     a.rows[0] = v.items.iter().position(|i| i.key == "cfg:claude_code/acct3").expect("config ▸ under acct3");
     a.handle(key(KeyCode::Enter));
-    assert_eq!(a.ctab, CTab::Config);
+    assert_eq!(a.ctab, CTab::Accounts, "an account's config ▸ lands on the global bar's Accounts");
     assert_eq!(a.settings_entry(), Some(Entry::Row(acct("acct3"))));
     assert!(matches!(&a.modal, Some(Modal::Settings { page, .. }) if *page == acct("acct3")), "{:?}", a.modal);
     // Switched on there (its `off` steps to `inherit`, which is on), Status
@@ -1011,7 +1012,7 @@ fn the_status_tokens_band_shows_what_the_settings_say() {
 // ── C9: inference endpoints (msg 235; design 0199; task 0192) ──────────────
 
 fn cfg(a: &mut App, path: &str) {
-    a.set_ctab(CTab::Config);
+    a.set_ctab(CTab::Settings);
     a.focus = Focus::Content;
     a.snav = Nav::cauldron();
     a.rows[SETTINGS_ROW] = 0;
@@ -1083,6 +1084,81 @@ fn c9_providers_holds_the_endpoints_table_and_no_openrouter_source() {
 /// enforces it, its management key — and nothing secret reaches the screen.
 #[test]
 fn c9_an_endpoints_row_switches_and_its_modal_holds_every_row() {
+    let mut a = open(&scratch_root(), "prod");
+    cfg(&mut a, "providers/endpoints");
+    let gem = SPage::Endpoint { here: false, id: "ep-4".into() };
+    a.rows[SETTINGS_ROW] = a.selectable().iter().position(|e| *e == Entry::Row(gem.clone())).unwrap();
+    assert!(!a.sget(&ep(false, "ep-4", "enabled")).val.as_bool());
+    // V1.7 (R-V1 item 7): every endpoint is greyed — Space on its row is
+    // refused, said, and writes nothing; the seed's `enabled = false` is
+    // still read, never deleted (task 0209 D1).
+    let g0 = global_text(&a);
+    a.handle(key(KeyCode::Char(' ')));
+    assert!(!a.sget(&ep(false, "ep-4", "enabled")).val.as_bool(), "Space on a greyed endpoint switches nothing");
+    assert_eq!(a.notice.as_deref(), Some(tui::cauldron::settings::GREYED));
+    assert_eq!(global_text(&a), g0, "nothing written");
+    assert!(!global_text(&a).contains("FAKE"), "{}", global_text(&a));
+    // Its modal.
+    cfg(&mut a, "providers/endpoints/ep-1");
+    assert!(matches!(&a.modal, Some(Modal::Settings { page: SPage::Endpoint { here: false, id }, .. }) if id == "ep-1"));
+    let s = screen(&mut a);
+    assert!(s.contains("Endpoint · jev · global"), "{s}");
+    for (k, v) in [
+        ("template", "OpenRouter"),
+        ("url", "https://openrouter.ai/api/v1 default openrouter.ai/api/v1"),
+        ("key", "sk-or-v1-••••••••••••••••c81e set"),
+        ("headers", "1 header"),
+        ("budget", "$100 default off ↺"),
+        ("budget period", "daily weekly monthly none inherits monthly"),
+        ("enforced by", "openrouter · cauldron meter"),
+        ("max concurrent", "4 inherits unlimited ↺"),
+        ("management key", "sk-or-v1-••••••••••••••••4f9c set"),
+        ("used by", "type one · secondary"),
+    ] {
+        assert_row(&mut a, &format!(" {k} "), &format!("{k} {v}"));
+    }
+    assert!(s.contains("· X-OpenRouter-Title: Cauldron") && s.contains("· anthropic/claude-sonnet-4.5"), "{s}");
+    assert!(s.contains("+ add header") && s.contains("+ add model") && s.contains("remove endpoint"), "{s}");
+    assert!(!s.contains("FAKE0000"), "no key on screen: {s}");
+    // V1.7: its modal is read, never edited — `+ add model` opens nothing,
+    // x takes nothing off, a strip's option is not picked, and the file is
+    // byte-identical after all of it.
+    let g0 = global_text(&a);
+    let list0 = a.sget(&ep(false, "ep-1", "model_list")).val;
+    msel(&mut a, |e| matches!(e, Entry::Add(tui::cauldron::menu::Add::Item(b)) if b.key.ends_with("model_list")));
+    a.handle(key(KeyCode::Enter));
+    assert!(matches!(a.modal, Some(Modal::Settings { .. })), "no add modal over a greyed endpoint: {:?}", a.modal);
+    assert_eq!(a.notice.as_deref(), Some(tui::cauldron::settings::GREYED));
+    msel(&mut a, |e| matches!(e, Entry::Item { text, .. } if text == "anthropic/claude-sonnet-4.5"));
+    a.handle(key(KeyCode::Char('x')));
+    a.handle(key(KeyCode::Char('x')));
+    assert_eq!(a.sget(&ep(false, "ep-1", "model_list")).val, list0, "x takes nothing off a greyed endpoint");
+    // A key is never reverted or cleared away: x on it does nothing.
+    msel(&mut a, is_set("key"));
+    a.handle(key(KeyCode::Char('x')));
+    assert!(a.sis_set(&ep(false, "ep-1", "key")));
+    // A click on a strip's option is refused.
+    msel(&mut a, is_set("budget_period"));
+    screen(&mut a);
+    let Some(Modal::Settings { sel, .. }) = a.modal.clone() else { unreachable!() };
+    let r = a.hits.iter().find(|(_, h)| *h == Hit::MOpt { row: sel as u16, cell: 0, opt: 1 }).map(|(r, _)| *r).expect("the strip's `weekly` hotspot");
+    a.handle(Event::Mouse(MouseEvent { kind: MouseEventKind::Down(MouseButton::Left), column: r.x, row: r.y, modifiers: KeyModifiers::NONE }));
+    assert_eq!(a.sget(&ep(false, "ep-1", "budget_period")).val, Val::Str("monthly".into()), "not picked");
+    assert!(a.ep_dollars(false, "ep-1", &Val::Int(100)).ends_with("/ month"));
+    assert_eq!(global_text(&a), g0, "a greyed endpoint's modal writes nothing");
+}
+
+/// C9: a row's switch works on the row (msg 235: no illusions) and its
+/// modal holds every row of the endpoint — the key masked, its template a
+/// fact, its headers and models editable lines, its budget and period, what
+/// enforces it, its management key — and nothing secret reaches the screen.
+///
+/// V1.7b F1: the body of `c9_an_endpoints_row_switches_and_its_modal_holds_every_row` at 59c5ec8f, verbatim — the positive
+/// spec the greyed endpoints lost (V1.7-I F1). Un-ignore when
+/// `inference_live` ungreys them; `c9_an_endpoints_row_switches_and_its_modal_holds_every_row` above is the refusal it pairs with.
+#[test]
+#[ignore = "endpoints greyed in V1.7; restore when un-greyed"]
+fn c9_an_endpoints_row_switches_and_its_modal_holds_every_row_ungreyed() {
     let mut a = open(&scratch_root(), "prod");
     cfg(&mut a, "providers/endpoints");
     let gem = SPage::Endpoint { here: false, id: "ep-4".into() };
@@ -1160,6 +1236,52 @@ fn c9_an_endpoints_row_switches_and_its_modal_holds_every_row() {
 fn c9_an_endpoint_is_added_from_a_template_and_forgotten_on_esc() {
     let mut a = open(&scratch_root(), "prod");
     cfg(&mut a, "providers/endpoints");
+    let g0 = global_text(&a);
+    // V1.7 (R-V1 item 7): `+ add endpoint` is greyed and inert — Enter on
+    // it opens no add modal, says why, and writes nothing.
+    a.rows[SETTINGS_ROW] = a.selectable().iter().position(|e| matches!(e, Entry::Do { label, .. } if label == "+ add endpoint")).unwrap();
+    a.handle(key(KeyCode::Enter));
+    assert!(a.modal.is_none(), "{:?}", a.modal);
+    assert_eq!(a.notice.as_deref(), Some(tui::cauldron::settings::GREYED));
+    // The endpoint model is kept for when they ungrey: a draft still
+    // prefills every row from its template, in this face only.
+    a.settings.draft_endpoint(false, "gemini");
+    assert_eq!(a.sget(&ep(false, "ep-0", "url")).val, Val::Str("https://generativelanguage.googleapis.com/v1beta/openai/".into()));
+    assert_eq!(a.ep_name(false, "ep-0"), "gemini");
+    a.settings.draft_endpoint(false, "openai");
+    assert_eq!(a.sget(&ep(false, "ep-0", "url")).val, Val::Str("https://api.openai.com/v1".into()));
+    // A url is a url.
+    let u = ep(false, "ep-0", "url");
+    assert!(tui::cauldron::settings::parse_input(u.def().ty, "openrouter.ai").is_err());
+    assert!(tui::cauldron::settings::parse_input(u.def().ty, "http://192.0.2.40:11434/v1").is_ok());
+    // A row of the draft is not set here, and `add endpoint` is refused:
+    // nothing minted, nothing written.
+    let t = ep(false, "ep-0", "template");
+    a.set_option(&t, 5);
+    assert_eq!(a.sget(&t).val, Val::Str("openai".into()), "a greyed template is not picked");
+    a.start_act(tui::cauldron::manage::Act::AddEndpoint { here: false });
+    assert_eq!(a.notice.as_deref(), Some(tui::cauldron::settings::GREYED));
+    assert_eq!(a.settings.endpoint_ids(false).len(), 5);
+    assert_eq!(global_text(&a), g0, "nothing written");
+    a.settings.discard_draft();
+    assert!(!a.sis_set(&t), "forgotten");
+}
+
+/// C9 (msg 235: "when you're creating a new one we can have a modal where
+/// it's like you're selecting like open router ... you can select like a
+/// local one"): `+ add endpoint` opens the add modal over a template strip;
+/// the template fills every row not typed into and keeps every row typed;
+/// it adds only once its template has what it needs; it is never written
+/// before it is added, and Esc forgets it.
+///
+/// V1.7b F1: the body of `c9_an_endpoint_is_added_from_a_template_and_forgotten_on_esc` at 59c5ec8f, verbatim — the positive
+/// spec the greyed endpoints lost (V1.7-I F1). Un-ignore when
+/// `inference_live` ungreys them; `c9_an_endpoint_is_added_from_a_template_and_forgotten_on_esc` above is the refusal it pairs with.
+#[test]
+#[ignore = "endpoints greyed in V1.7; restore when un-greyed"]
+fn c9_an_endpoint_is_added_from_a_template_and_forgotten_on_esc_ungreyed() {
+    let mut a = open(&scratch_root(), "prod");
+    cfg(&mut a, "providers/endpoints");
     a.rows[SETTINGS_ROW] = a.selectable().iter().position(|e| matches!(e, Entry::Do { label, .. } if label == "+ add endpoint")).unwrap();
     a.handle(key(KeyCode::Enter));
     let s = screen(&mut a);
@@ -1213,6 +1335,36 @@ fn c9_an_endpoint_is_added_from_a_template_and_forgotten_on_esc() {
 #[test]
 fn c9_a_local_endpoint_takes_its_url_and_key_from_its_server() {
     let mut a = open(&scratch_root(), "prod");
+    // V1.7: refused here, as on Providers.
+    a.start_act(tui::cauldron::manage::Act::NewEndpoint { here: true });
+    assert!(a.modal.is_none() && a.notice.as_deref() == Some(tui::cauldron::settings::GREYED), "{:?}", a.modal);
+    // The model, kept for when endpoints ungrey: a local draft's url and key
+    // come from its server.
+    a.settings.draft_endpoint(true, "local");
+    assert_eq!(a.sget(&ep(true, "ep-0", "key")).val, Val::Str("ollama".into()));
+    assert_eq!(a.draft_missing(true), None, "ollama's stand-in key satisfies it");
+    a.settings.cauldron.vals.insert("cauldron.endpoints.ep-0.server".into(), Val::Str("vllm".into()));
+    assert_eq!(a.sget(&ep(true, "ep-0", "url")).val, Val::Str("http://localhost:8000/v1".into()));
+    assert_eq!(a.sget(&ep(true, "ep-0", "key")).val, Val::Unset, "vLLM's key is optional");
+    // A price takes cents; set here, it is refused as greyed.
+    let p = ep(true, "ep-0", "price_out");
+    assert!(tui::cauldron::settings::parse_input(p.def().ty, "0.15").is_ok());
+    assert_eq!(a.sset(&p, tui::cauldron::settings::parse_input(p.def().ty, "0.15").unwrap()), Err(tui::cauldron::settings::GREYED.to_string()));
+    assert!(tui::cauldron::settings::parse_input(p.def().ty, "-1").is_err());
+    a.settings.discard_draft();
+}
+
+/// C9 (design 0199 §4): the local template has a server strip that fills its
+/// url and its key rule — Ollama's client needs a key its server ignores —
+/// prices its tokens, and takes no headers.
+///
+/// V1.7b F1: the body of `c9_a_local_endpoint_takes_its_url_and_key_from_its_server` at 59c5ec8f, verbatim — the positive
+/// spec the greyed endpoints lost (V1.7-I F1). Un-ignore when
+/// `inference_live` ungreys them; `c9_a_local_endpoint_takes_its_url_and_key_from_its_server` above is the refusal it pairs with.
+#[test]
+#[ignore = "endpoints greyed in V1.7; restore when un-greyed"]
+fn c9_a_local_endpoint_takes_its_url_and_key_from_its_server_ungreyed() {
+    let mut a = open(&scratch_root(), "prod");
     a.start_act(tui::cauldron::manage::Act::NewEndpoint { here: true });
     a.set_option(&ep(true, "ep-0", "template"), 4);
     let s = screen(&mut a);
@@ -1239,6 +1391,70 @@ fn c9_a_local_endpoint_takes_its_url_and_key_from_its_server() {
 /// a NARROWER model list, its metered cap, threshold, max concurrent.
 #[test]
 fn c9_this_cauldron_uses_global_endpoints_and_registers_its_own() {
+    let mut a = open(&scratch_root(), "prod");
+    cfg(&mut a, "cauldron/endpoints");
+    assert_row(&mut a, "▾ Inference endpoints", "6 endpoints · 4 used here · 1 added here");
+    assert_row(&mut a, "endpoint ", "endpoint scope url metered cap use here");
+    assert_row(&mut a, "jev ", "jev global openrouter.ai/api/v1 $60 / month inherit on off ›");
+    assert_row(&mut a, "scratch-vllm ", "scratch-vllm here localhost:8000/v1 off on off ›");
+    // V1.7: every endpoint is greyed here too — `use here` is refused, said
+    // on its row; Space on the row and `x` on it change nothing.
+    let g0 = global_text(&a);
+    let gem = Bound::new("cauldron.use.{ep}.enabled", Ctx::ep("ep-4"));
+    a.set_option(&gem, 1);
+    assert_eq!(a.toggle_of(&gem).selected, 0, "still inherit");
+    assert_row(&mut a, "✗", "✗ greyed: Claude Code is the only inference source");
+    a.rows[SETTINGS_ROW] = a.selectable().iter().position(|e| *e == Entry::Row(SPage::UseEndpoint("ep-4".into()))).unwrap();
+    a.handle(key(KeyCode::Char(' ')));
+    assert_eq!(a.toggle_of(&gem).selected, 0, "Space on a greyed row steps nothing");
+    a.handle(key(KeyCode::Char('x')));
+    assert_eq!(a.notice.as_deref(), Some(tui::cauldron::settings::GREYED));
+    // jev's modal here, read.
+    cfg(&mut a, "cauldron/endpoints/ep-1");
+    let s = screen(&mut a);
+    assert!(s.contains("Endpoint · jev · prod cauldron · global"), "{s}");
+    assert_row(&mut a, " metered cap ", "metered cap $60 / month default off ↺");
+    assert_row(&mut a, " url ", "url https://openrouter.ai/api/v1 inherits openrouter.ai/api/v1");
+    assert_row(&mut a, " key ", "key sk-or-v1-••••••••••••••••c81e");
+    assert_row(&mut a, " budget ", "budget $100 / month · openrouter");
+    assert!(s.contains("open in Providers") && !s.contains("management key") && !s.contains("remove endpoint"), "{s}");
+    // Narrowing is refused: the key's list stands.
+    let narrow = Bound::new("cauldron.use.{ep}.narrow", Ctx::ep("ep-1"));
+    let models0 = a.ep_models_here(false, "ep-1");
+    a.set_option(&narrow, 1);
+    assert_eq!(a.ep_models_here(false, "ep-1"), models0);
+    assert!(!a.sis_set(&narrow));
+    // open in Providers is reading: the endpoint's own modal there.
+    msel(&mut a, |e| matches!(e, Entry::Do { label, .. } if label == "open in Providers"));
+    a.handle(key(KeyCode::Enter));
+    assert_eq!(a.cfg_tab, tui::cauldron::menu::CfgTab::Providers);
+    assert!(matches!(&a.modal, Some(Modal::Settings { page: SPage::Endpoint { here: false, id }, .. }) if id == "ep-1"), "{:?}", a.modal);
+    // Its own endpoint: `x` asks nothing and removes nothing.
+    cfg(&mut a, "cauldron/endpoints");
+    a.rows[SETTINGS_ROW] = a.selectable().iter().position(|e| *e == Entry::Row(SPage::Endpoint { here: true, id: "ep-6".into() })).unwrap();
+    a.handle(key(KeyCode::Char('x')));
+    assert!(a.modal.is_none(), "{:?}", a.modal);
+    assert_eq!(a.settings.endpoint_ids(true), ["ep-6"]);
+    assert_eq!(global_text(&a), g0, "nothing written");
+    // Another cauldron sees the global ones, not prod's own, and its own caps.
+    std::fs::create_dir_all(a.env.root.join("data/dev")).unwrap();
+    let d = open(&a.env.root, "dev");
+    assert_eq!(d.seen_endpoints().len(), 5);
+    assert_eq!(d.sget(&Bound::new("cauldron.use.{ep}.metered_cap_usd", Ctx::ep("ep-1"))).val, Val::Off);
+}
+
+/// C9 (design 0199 §5, §6): THIS cauldron's table is every endpoint it can
+/// see — the global ones with a tri-state `use here` and its metered cap,
+/// its own with a plain switch — and a global one's modal sets only what a
+/// cauldron may: use here (never on where Providers has it off), its url,
+/// a NARROWER model list, its metered cap, threshold, max concurrent.
+///
+/// V1.7b F1: the body of `c9_this_cauldron_uses_global_endpoints_and_registers_its_own` at 59c5ec8f, verbatim — the positive
+/// spec the greyed endpoints lost (V1.7-I F1). Un-ignore when
+/// `inference_live` ungreys them; `c9_this_cauldron_uses_global_endpoints_and_registers_its_own` above is the refusal it pairs with.
+#[test]
+#[ignore = "endpoints greyed in V1.7; restore when un-greyed"]
+fn c9_this_cauldron_uses_global_endpoints_and_registers_its_own_ungreyed() {
     let mut a = open(&scratch_root(), "prod");
     cfg(&mut a, "cauldron/endpoints");
     assert_row(&mut a, "▾ Inference endpoints", "6 endpoints · 4 used here · 1 added here");
@@ -1308,7 +1524,41 @@ fn c9_this_cauldron_uses_global_endpoints_and_registers_its_own() {
 /// table's source column names it, its picker offers the endpoints used
 /// here, and a model picker offers the endpoints' models.
 #[test]
-fn c9_a_role_is_bound_to_an_endpoint() {
+fn c9_a_role_is_not_bound_to_a_greyed_endpoint() {
+    let mut a = open(&scratch_root(), "prod");
+    cfg(&mut a, "cauldron/roles");
+    // A role is named in words (0214 A9).
+    assert_row(&mut a, "type one · secondary", "type one · secondary jev none jev ›");
+    let r = Bound::new("roles.{role}.endpoint", Ctx::role("writer"));
+    let refs = a.choices(&r);
+    assert_eq!(refs[0], "none");
+    assert!(refs.iter().any(|x| x == "jev · openrouter.ai/api/v1") && !refs.iter().any(|x| x.starts_with("general")) && !refs.iter().any(|x| x.starts_with("gemini")), "only the endpoints used here: {refs:?}");
+    cfg(&mut a, "cauldron/roles/writer");
+    msel(&mut a, is_set("endpoint"));
+    a.handle(key(KeyCode::Enter));
+    let Some(Modal::Picker { options, .. }) = a.modal.clone() else { panic!("{:?}", a.modal) };
+    let i = options.iter().position(|o| o.starts_with("studio-box")).unwrap();
+    for _ in 0..i {
+        a.handle(key(KeyCode::Down));
+    }
+    a.handle(key(KeyCode::Enter));
+    // V1.7: no role is bound to a greyed endpoint — the pick is refused.
+    assert_ne!(a.sget(&r).val, Val::Str("ep-5".into()), "not bound to a greyed endpoint");
+    assert!(a.refusal.as_ref().is_some_and(|(_, w)| w == tui::cauldron::settings::GREYED), "{:?}", a.refusal);
+    let models = a.choices(&Bound::new("roles.{role}.model", Ctx::role("writer")));
+    assert!(models.iter().any(|m| m == "qwen3:32b") && models.iter().any(|m| m == "anthropic/claude-sonnet-4.5"), "{models:?}");
+}
+
+/// C9 (design 0199 D8): a metered role is bound to an endpoint; the Roles
+/// table's source column names it, its picker offers the endpoints used
+/// here, and a model picker offers the endpoints' models.
+///
+/// V1.7b F1: the body of `c9_a_role_is_bound_to_an_endpoint` at 59c5ec8f, verbatim — the positive
+/// spec the greyed endpoints lost (V1.7-I F1). Un-ignore when
+/// `inference_live` ungreys them; `c9_a_role_is_not_bound_to_a_greyed_endpoint` above is the refusal it pairs with.
+#[test]
+#[ignore = "endpoints greyed in V1.7; restore when un-greyed"]
+fn c9_a_role_is_bound_to_an_endpoint_ungreyed() {
     let mut a = open(&scratch_root(), "prod");
     cfg(&mut a, "cauldron/roles");
     // A role is named in words (0214 A9).
@@ -1379,6 +1629,11 @@ fn c9_status_shows_each_endpoints_spend_and_opens_its_config() {
     let mut a = open(&scratch_root(), "prod");
     a.set_ctab(CTab::Status);
     a.set_sttab(tui::cauldron::status::StatusTab::Tokens);
+    // V1.7: the endpoints' band is greyed and closed at first, as Codex's
+    // is; opened, what it reads is all still there.
+    let s = render_to_text(&mut a, 120, 140).unwrap().join("\n");
+    assert!(s.lines().any(|l| l.contains("▸ Inference endpoints")), "{s}");
+    a.stnav.insert("tok:endpoints".into());
     let s = render_to_text(&mut a, 120, 140).unwrap().join("\n");
     assert!(!s.contains("OpenRouter"), "{s}");
     assert!(s.lines().any(|l| l.contains("▾ Inference endpoints") && l.contains("6 endpoints") && l.contains("4 used here")), "{s}");
@@ -1390,6 +1645,6 @@ fn c9_status_shows_each_endpoints_spend_and_opens_its_config() {
     a.rows[0] = v.items.iter().position(|i| i.key == "cfg:ep/ep-1").unwrap();
     a.focus = Focus::Content;
     a.handle(key(KeyCode::Enter));
-    assert_eq!(a.ctab, CTab::Config);
+    assert_eq!(a.ctab, CTab::Providers, "a global endpoint's config ▸ lands on Providers");
     assert!(matches!(&a.modal, Some(Modal::Settings { page: SPage::Endpoint { here: false, id }, .. }) if id == "ep-1"), "{:?}", a.modal);
 }

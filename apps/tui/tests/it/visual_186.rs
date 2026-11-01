@@ -42,7 +42,7 @@ fn env_in(root: &Path, name: &str) -> Environment {
 fn open() -> (App, PathBuf) {
     std::env::set_var("CAULDRON_TYPE_ONE", "off");
     let root = scratch_root();
-    (App::open(env_in(&root, "prod"), seed_dir(), true).expect("seed loads"), root)
+    (crate::live_pool::seeded(App::open(env_in(&root, "prod"), seed_dir(), true).expect("seed loads")), root)
 }
 
 fn key(code: KeyCode) -> Event {
@@ -85,7 +85,7 @@ fn every_screen(a: &mut App, mut f: impl FnMut(&str, &mut App)) {
     a.set_ctab(CTab::Threads);
     crate::live_fixture::feed(a);
     f("Threads", a);
-    a.set_ctab(CTab::Config);
+    a.set_ctab(CTab::Settings);
     f("Config", a);
 }
 
@@ -226,7 +226,7 @@ fn v4_v6_enumerations_line_up_and_an_opened_item_is_a_table() {
 #[test]
 fn v7_every_config_item_has_its_tip_in_the_rightmost_column() {
     let (mut a, _r) = open();
-    a.set_ctab(CTab::Config);
+    a.set_ctab(CTab::Settings);
     // The TUI tab (Config opens on the cauldron's since b964d571 msg 23).
     a.set_cfg_tab(tui::cauldron::menu::CfgTab::Tui);
     for _ in 0..12 {
@@ -273,7 +273,7 @@ fn a5_the_toggle_is_segmented_and_the_old_knob_is_gone() {
         let s = screen(a);
         assert!(!s.contains("──●") && !s.contains("●──"), "{what}: the old knob:\n{s}");
     });
-    a.set_ctab(CTab::Config);
+    a.set_ctab(CTab::Settings);
     a.set_cfg_tab(tui::cauldron::menu::CfgTab::Cauldron);
     let s = screen(&mut a);
     assert!(s.lines().any(|l| l.contains("cauldron enabled") && l.contains(" enabled  disabled ")), "{s}");
@@ -287,7 +287,7 @@ fn a5_the_toggle_is_segmented_and_the_old_knob_is_gone() {
 #[test]
 fn s1_a_modal_has_a_thick_border_a_box_inside_and_its_own_colour() {
     let (mut a, _r) = open();
-    a.set_ctab(CTab::Config);
+    a.set_ctab(CTab::Settings);
     a.handle(Event::Key(KeyEvent::new(KeyCode::Char('t'), KeyModifiers::CONTROL)));
     assert!(matches!(a.modal, Some(Modal::Confirm { .. })), "{:?}", a.modal);
     let rows = render_to_text(&mut a, 120, 40).unwrap();

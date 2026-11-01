@@ -49,6 +49,8 @@ pub mod alias;
 pub mod cli_config;
 pub mod decl;
 pub mod egress;
+// V1.2c: which cauldron the CAULDRON face opens — one rule for router and face.
+pub mod face;
 pub mod fingerprint;
 pub mod guard;
 pub mod hold;

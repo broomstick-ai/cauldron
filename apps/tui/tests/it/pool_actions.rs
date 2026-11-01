@@ -118,3 +118,26 @@ async fn dump_draws_the_fixture_pool() {
         assert!(s.contains(want), "missing {want:?}:\n{s}");
     }
 }
+
+/// **V1-ACCT, V1-CLEAN2-I N1**: `perform`'s own route through the masker. The
+/// fixture refuses an act it does not serve with `unknown method:
+/// accounts/<key>/pool_share_set` — the daemon quoting the raw key back. The
+/// note `perform` returns carries the refusal (sentinel: its method's verb)
+/// with the key drawn by the one masker, never whole. Driven through the real
+/// client against the fixture on an ephemeral port; the address is a
+/// made-up `example.com` one.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_refusal_quoting_the_key_comes_back_masked_through_perform() {
+    const ADDR: &str = "quill@example.com";
+    let fx = pool_fixture::serve().await;
+    let (tx, _rx) = mpsc::channel(256);
+    let h = client::spawn(fx.url.clone(), tx);
+    let a = Action::SetShare(ADDR.into(), Some(0.5));
+    let out = tokio::time::timeout(Duration::from_secs(5), perform(&h, &a)).await.expect("perform answers");
+    let Outcome::Done(note, _) = out else { panic!("a share act is a daemon request: {out:?}") };
+    let sent: Vec<String> = fx.requests.lock().unwrap().iter().map(|(m, _)| m.clone()).collect();
+    assert!(sent.contains(&format!("accounts/{ADDR}/pool_share_set")), "sentinel: the raw key went to the daemon: {sent:?}");
+    assert!(note.contains("refused") && note.contains("pool_share_set"), "sentinel: the note is the daemon's refusal: {note}");
+    assert!(!note.contains(ADDR) && !note.contains("quill"), "the key is drawn whole: {note}");
+    assert!(note.contains(&tui::pool::model::shown_name(ADDR)), "the key is drawn by the one masker: {note}");
+}

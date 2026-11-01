@@ -25,8 +25,8 @@ release](#what-is-in-this-release) has the details.
 - **The soup is a knowledge graph.** Everything an environment knows goes
   into one typed graph, with structure, regions and discoverability, so
   agents can find context without having it pasted in again. (The soup
-  engine arrives with ripples in V1, the next release; it is not in this
-  release. See [What is in this release](#what-is-in-this-release).)
+  engine arrives with ripples, coming in 0.2.0; it is not in this build yet.
+  See [What is in this release](#what-is-in-this-release).)
 - **The surface is your view into the cauldron.** You dump ideas, feedback
   and half-formed thoughts into it. You collect text, pastes and references in the
   **bucket** and **dump** it onto the surface. Every dump is recorded in the
@@ -37,8 +37,8 @@ release](#what-is-in-this-release) has the details.
   constraints, objectives and milestones. Clusters can be nested: a cluster
   can sit inside another.
 - **Ripples are short-lived agents that ripple out from your brain dumps,
-  curate the soup and complete your tasks.** (Not in this release. Ripples
-  arrive in V1, the next release; see [ROADMAP.md](ROADMAP.md).)
+  curate the soup and complete your tasks.** (Not in this build yet. Ripples
+  are coming in 0.2.0; see [ROADMAP.md](ROADMAP.md).)
 
 ## Why
 
@@ -67,12 +67,11 @@ the focus is design and intent, not the agents' output.
 - **The Ledger shows what happened beneath the surface:** every dump, and the
   chain of actions that resulted from it.
 
-In this release, questions and actions already appear at their cluster and every dump
-is recorded in the Ledger. V1, the next release, makes the Ledger a
-time-ordered list of dumps that each expand into the chain of work they set
-off. Agents raising questions and actions, and tasks resuming when they are
-answered, arrive with ripples in V1, the next release (see
-[ROADMAP.md](ROADMAP.md)).
+In this release, questions and actions already appear at their cluster, and
+the Ledger is a time-ordered list of dumps, newest first, each expanding into
+its phases and the work under it. Agents raising questions and actions, and
+tasks resuming when they are answered, arrive with ripples, coming in 0.2.0
+(see [ROADMAP.md](ROADMAP.md)).
 
 ## What holds it up
 
@@ -102,6 +101,12 @@ for your family. They don't mix: each environment's data is its own, under
 
 ## What is in this release
 
+This is **0.1.2**, the V1 interface: two tab bars, a first-run screen, the
+Ledger on the environment's own data, the real account pool under Status →
+Tokens, Config → Accounts, secret human actions, and `cauldron ctl`. Ripples
+and the soup engine
+arrive in 0.2.0. [CHANGELOG.md](CHANGELOG.md) lists every change.
+
 cauldron has three parts:
 
 - **`cauldron`**, a command-line supervisor. It keeps each environment's
@@ -114,18 +119,27 @@ All three are written in Rust. The repository also carries shell and Python
 helper scripts, and an older Python client for the threads daemon. cauldron
 runs on **macOS only** for now, and it is licensed under **Apache-2.0**.
 
-**Working now:** environments; the cluster sidebar, with cluster creation from a
-boundary you write; cluster tabs for questions, actions, tasks, nodes, status
-and details; the bucket, and dumps, each of which is saved; the Threads tab
-(new in 0.1.1), which shows each environment's threads pinned or recent, read
-live from its threads daemon; the threads face, with persistent Claude Code
-conversations on the account pool; and the `cauldron-build` demo environment
-(see below).
+**Working now:** environments; two tab bars, a global Config bar (TUI,
+Devices, Providers, Accounts) over the environment bar (Cauldron, Threads,
+Status, Permissions, Settings); a first-run screen that makes your first
+cauldron; the cluster sidebar, with cluster creation from a boundary you
+write; cluster tabs for questions, actions, tasks, nodes, status and details;
+the bucket, and dumps, each of which is saved; the Threads tab, which shows
+each environment's threads pinned or recent, read live from its threads
+daemon; the Ledger, a time-ordered event flow of the environment's own dumps;
+Status → Tokens, the real account pool and its usage pressure; Config →
+Accounts, the threads daemon's accounts, masked as `a•••@e•••`, with login from
+the face and each account switched on or off per cauldron; secret human
+actions, typed into a masked input and routed to an env file or the macOS
+keychain; the threads face, with persistent Claude Code conversations on the
+account pool; `cauldron ctl`, which sends a dump, prints one frame of the
+face or reads one soup node from the command line; and the `cauldron-build`
+demo environment (see below).
 
 **Not yet:** the engine that acts on a dump. In the design, a dump sets off
 **ripples**: agents that read it, update the soup, and turn it into tasks,
-questions and actions. Ripples and the soup engine are not in this release, so
-nothing processes a dump yet; they arrive in V1, the next release. Questions
+questions and actions. Ripples and the soup engine are not in this build yet,
+so nothing processes a dump yet; they are coming in 0.2.0. Questions
 and actions appear in the UI, but they come from the environment's data or the
 demo data. See
 [ROADMAP.md](ROADMAP.md).
@@ -190,14 +204,16 @@ cauldron status
 cauldron
 ```
 
-This opens the terminal UI in the default environment, `prod`. Press `?` to see
-every key binding. A new `prod` is empty: the Clusters sidebar holds one
-cluster, `prod`, with no questions and no actions in it. To see every part of
-the UI with something in it, open the [`cauldron-build` demo
+This opens the terminal UI. Press `?` to see every key binding. On an empty
+install it opens on one action, **+ create your first cauldron**, and makes
+nothing until you take it. After that, `cauldron` opens the cauldron you used
+last, unless you name one. To see every part of the UI with something in it,
+open the [`cauldron-build` demo
 environment](#the-cauldron-build-demo-environment).
 
-**Your first environment.** Make one for your project, from the UI (`^E`, or
-click the environment name at the top left, then `+`) or from the shell:
+**More environments.** Make one for each project, from the UI (`^E`, or the
+environment dropdown at the left of the environment bar, then `+`) or from the
+shell:
 
 ```sh
 cauldron env create myproject
@@ -207,8 +223,9 @@ cauldron --env myproject
 `cauldron envs` lists your environments.
 [`docs/environments.md`](docs/environments.md) covers the whole lifecycle.
 
-**Your first cluster.** On the Clusters sidebar, press `+` to make a cluster at
-the root, or `+` beside an existing cluster to make one under it. Give it a
+**Your first cluster.** A cauldron with no cluster of its own opens with the
+Clusters sidebar's `+` selected: press Enter to make a cluster at the root, or
+`+` beside an existing cluster to make one under it. Give it a
 name, then describe in your own words what belongs in it. That description is
 the cluster's boundary, and cauldron uses it to seed the cluster from what the
 environment already holds.
@@ -245,29 +262,27 @@ cauldron --env cauldron-build
 This is an early release. These are known:
 
 - **macOS only.**
-- **Nothing acts on a dump yet.** Ripples and the soup engine arrive in V1, the
-  next release (see above).
-- **Claude Code is the only inference provider that runs.** Config lists other
-  endpoints, but none of them is used.
-- **A new environment, `prod` included, opens empty**, with one cluster named
-  after the environment. There is no "create your first environment" screen
-  yet, and a new environment has no "create your first cluster" screen.
-- **Parts of the UI read sample files, not the daemon.** These are some Status
-  and Config views. The Threads tab and the threads face
-  (`cauldron tui --chat`) are wired to the live threads daemon. The Threads
-  tab cannot start a new thread yet.
+- **Nothing acts on a dump yet.** Ripples and the soup engine are coming in
+  0.2.0 (see above).
+- **Claude Code is the only inference provider that runs.** Config shows the
+  other token sources, endpoints and templates greyed out, and refuses to act
+  on them.
+- **Parts of the UI read sample files, not the daemon.** These are the Status
+  Mesh, Soup and Bus views and some Config views. The Threads tab, Status →
+  Tokens and the threads face (`cauldron tui --chat`) are wired to the live
+  threads daemon, and the Ledger reads the environment's own data. The
+  Threads tab cannot start a new thread yet.
 - **Cluster seeding runs a local stand-in.** The model-backed seeding call needs
   a `type-one` tool that this release does not include. Without it, cauldron
   seeds a new cluster by matching words between your boundary and the
   environment's contents, and labels the result `stand-in`.
-- **Secret actions have no masked input yet**, and the Ledger is drawn as a tree
-  rather than as fork-and-join rails.
+- **The Ledger is drawn as a tree** rather than as fork-and-join rails.
 - **Re-logging into a disabled Claude account does not re-enable it**, and the
-  account pool can show a usage reading that is out of date. (A fix is planned
-  for V1.)
+  account pool can show a usage reading that is out of date. (A fix is
+  planned.)
 - **A large threads write-ahead log can slow the daemon's start.** A log left
   from earlier runs is folded only every five minutes, so a big one can stall
-  startup. (A fix is planned for V1.)
+  startup. (A fix is planned.)
 
 ## Roadmap and changes
 

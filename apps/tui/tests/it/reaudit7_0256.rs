@@ -231,7 +231,9 @@ fn h4_the_help_names_human_and_the_orders_msg_23_set() {
     assert!(help.contains("questions | actions | tasks | nodes | status | details"), "{help}");
     assert!(!help.contains("--human-tab") && !help.contains("--tasks-tab"), "{help}");
     assert!(help.contains("tokens | mesh | soup | bus"), "{help}");
-    assert!(help.contains("cauldron (this cauldron) | tui | devices | providers | permissions"), "{help}");
+    // V1.1: the root tabs of both bars; --config-tab kept one release.
+    assert!(help.contains("cauldron | threads | status | permissions | settings") && help.contains("tui | devices | providers | accounts"), "{help}");
+    assert!(help.contains("--config-tab   DEPRECATED"), "{help}");
     // The palette names the replace and the whole cauldron.
     let pal: String = tui::cauldron::app::KEYMAP.iter().map(|(k, v)| format!("{k} {v}\n")).collect();
     assert!(pal.contains("in place of the one there"), "{pal}");

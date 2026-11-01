@@ -58,14 +58,14 @@ pub struct PolicyFile {
 pub enum Kind {
     TypeOne,
     TypeTwo,
-    /// A ripple made of ripples — an aggregate ripple, which the screen
-    /// calls a SPLASH (8e4fca10 msg 186: "the aggregate ripples, which are
-    /// now going to be called a splash"). Its stored word stays `shell` (the
-    /// policy files say it); `aggregate` and `splash` read as the same thing,
-    /// and so does `type_three` (V1.9's kind word, the curated
-    /// `cauldron-build` ledger's).
-    #[serde(alias = "aggregate", alias = "splash", alias = "type_three")]
-    Shell,
+    /// A ripple made of ripples — a TYPE 3 (product spec §7, RP#181: "I'm
+    /// renaming the splashes to type 3 ripples"). Stored as `type_three`,
+    /// ripple/v2's word. `shell`, the word policies written before V1.9
+    /// say, still reads as a type 3; `splash` and `aggregate` are REFUSED,
+    /// as ripple/v2 refuses them, so a policy in the retired vocabulary
+    /// fails loudly instead of loading as something ripple/v2 rejects.
+    #[serde(alias = "shell")]
+    TypeThree,
 }
 
 impl Kind {
@@ -74,7 +74,7 @@ impl Kind {
         match self {
             Kind::TypeOne => "type one",
             Kind::TypeTwo => "type two",
-            Kind::Shell => "splash",
+            Kind::TypeThree => "type 3",
         }
     }
 }
@@ -1101,7 +1101,7 @@ pub fn check_ripple(policy: &Policy, r: &RippleDef) -> std::result::Result<(), S
     for s in r.steps() {
         check_step(policy, s)?;
     }
-    if r.kind == Kind::Shell && r.entry.is_none() {
+    if r.kind == Kind::TypeThree && r.entry.is_none() {
         return Err("a shell has an entry".into());
     }
     Ok(())
@@ -1408,6 +1408,25 @@ pub fn today() -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// **V1.9 G2 — the stored word.** A type 3 is written `type_three`
+    /// (ripple/v2's word) and reads back; `shell`, what policies written
+    /// before V1.9 say, still reads as one; `splash` and `aggregate` are
+    /// REFUSED, as ripple/v2 refuses them, and the refusal names the word.
+    #[test]
+    fn v19_g2_type_three_is_the_stored_word_and_splash_is_refused() {
+        assert_eq!(serde_json::to_string(&Kind::TypeThree).unwrap(), "\"type_three\"");
+        assert_eq!(serde_json::from_str::<Kind>("\"type_three\"").unwrap(), Kind::TypeThree, "opposition: type_three round-trips");
+        assert_eq!(serde_json::from_str::<Kind>("\"shell\"").unwrap(), Kind::TypeThree, "a policy he already has still loads");
+        for retired in ["splash", "aggregate"] {
+            let e = serde_json::from_str::<Kind>(&format!("\"{retired}\"")).expect_err(retired).to_string();
+            assert!(e.contains(retired), "the refusal names `{retired}`: {e}");
+        }
+        assert_eq!(Kind::TypeThree.label(), "type 3");
+        // The policy compiled into the face says `type_three` and loads.
+        let seed: SeedFile = serde_json::from_str(DEFAULT_POLICY).expect("the default policy parses");
+        assert!(seed.policy.ripple.iter().any(|r| r.kind == Kind::TypeThree), "the default policy has a type 3");
+    }
 
     #[test]
     fn markers_are_read_off_the_text() {

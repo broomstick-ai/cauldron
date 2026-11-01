@@ -40,7 +40,8 @@ fn env_in(root: &Path, name: &str) -> Environment {
 fn open() -> (App, PathBuf) {
     std::env::set_var("CAULDRON_TYPE_ONE", "off");
     let root = scratch_root();
-    (App::open(env_in(&root, "prod"), seed_dir(), true).expect("seed loads"), root)
+    // V1.6: Claude Code's accounts are the daemon's; the fixture stands in.
+    (crate::live_pool::seeded(App::open(env_in(&root, "prod"), seed_dir(), true).expect("seed loads")), root)
 }
 
 fn key(code: KeyCode) -> Event {
@@ -96,7 +97,7 @@ fn every_screen(a: &mut App, mut f: impl FnMut(&str, &mut App)) {
         f(&format!("Status {st:?}"), a);
     }
     for t in CfgTab::ALL {
-        a.set_ctab(CTab::Config);
+        a.set_ctab(CTab::Settings);
         a.set_cfg_tab(t);
         open_all(a);
         f(&format!("Config {t:?}"), a);
@@ -166,7 +167,7 @@ fn v3_the_named_sections_are_band_lines() {
     seen(&mut a, &["example-mac"]);
     a.set_sttab(StatusTab::Soup);
     seen(&mut a, &["Unclaimed regions", "Unclaimed repos"]);
-    a.set_ctab(CTab::Config);
+    a.set_ctab(CTab::Settings);
     a.set_cfg_tab(CfgTab::Cauldron);
     a.open_settings_path("cauldron/directories").unwrap();
     seen(&mut a, &["Roots"]);
@@ -219,7 +220,7 @@ fn v3_a_section_band_closes_and_opens() {
     a.handle(key(KeyCode::Right));
     assert!(screen(&mut a).contains("dump.received"), "→ opens it again");
     // Config › Cauldron › Directories › Roots.
-    a.set_ctab(CTab::Config);
+    a.set_ctab(CTab::Settings);
     a.set_cfg_tab(CfgTab::Cauldron);
     a.open_settings_path("cauldron/directories").unwrap();
     let i = a.selectable().iter().position(|e| matches!(e, Entry::Sub { label, .. } if label == "Roots")).expect("Roots is a row");
@@ -244,7 +245,7 @@ fn v7_every_config_row_has_an_explained_tip() {
     let w = 114;
     let mut kinds = std::collections::BTreeSet::new();
     for t in CfgTab::ALL {
-        a.set_ctab(CTab::Config);
+        a.set_ctab(CTab::Settings);
         a.set_cfg_tab(t);
         open_all(&mut a);
         let entries = a.entries();
@@ -254,7 +255,7 @@ fn v7_every_config_row_has_an_explained_tip() {
         assert!(kinds.contains(k), "no {k} row was checked: {kinds:?}");
     }
     // A click on a table row's ⓘ explains it (and does not open it).
-    a.set_ctab(CTab::Config);
+    a.set_ctab(CTab::Settings);
     a.set_cfg_tab(CfgTab::Providers);
     a.snav.open.clear();
     a.open_settings_path("providers/claude_code").unwrap();
@@ -289,7 +290,7 @@ fn check(a: &App, scope: CfgTab, entries: &[tui::cauldron::menu::Flat], w: usize
     let mut tipped = 0;
     for (ix, f) in entries.iter().enumerate() {
         let kind = match &f.entry {
-            Entry::Strip | Entry::Gap | Entry::Para(_) => None,
+            Entry::Gap | Entry::Para(_) => None,
             Entry::Sub { .. } => Some("Sub"),
             Entry::Row(_) => Some("Row"),
             Entry::Fixed(..) => Some("Fixed"),

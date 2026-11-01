@@ -105,12 +105,13 @@ fn open_thread(a: &mut App, id: &str) {
 fn n1_n2_the_top_left_is_the_name_and_threads_is_a_tab() {
     let (mut a, _r) = open();
     let s = screen(&mut a);
-    let top = s.lines().next().unwrap();
+    // V1.1: the environment bar is row 1, under the global bar.
+    let top = s.lines().nth(1).unwrap();
     assert!(top.starts_with("  prod  ▾"), "{top:?}");
-    assert!(top.trim_end().ends_with("Cauldron | Threads | Status | Config"), "{top:?}");
-    let bar = render_bg_at(&mut a, 120, 60, 40, 0).unwrap();
-    assert_eq!(render_bg_at(&mut a, 120, 60, 0, 0).unwrap(), bar, "the margin is the bar's own background");
-    press_at(&mut a, 3, 0);
+    assert!(top.trim_end().ends_with("Cauldron | Threads | Status | Permissions | Settings"), "{top:?}");
+    let bar = render_bg_at(&mut a, 120, 60, 40, 1).unwrap();
+    assert_eq!(render_bg_at(&mut a, 120, 60, 0, 1).unwrap(), bar, "the margin is the bar's own background");
+    press_at(&mut a, 3, 1);
     assert!(a.dropdown.is_some(), "a click at the top left is the cauldrons dropdown");
     a.dropdown = None;
     press(&mut a, Hit::CTab(CTab::Threads));
@@ -123,7 +124,7 @@ fn n1_n2_the_top_left_is_the_name_and_threads_is_a_tab() {
     assert_eq!(a.ctab, CTab::Status);
     // It keeps where he was: a thread opened stays open across tabs.
     open_thread(&mut a, P);
-    a.set_ctab(CTab::Config);
+    a.set_ctab(CTab::Settings);
     a.set_ctab(CTab::Threads);
     assert_eq!(a.threads.open.as_deref(), Some(P));
     a.set_ctab(CTab::Cauldron);
@@ -145,7 +146,7 @@ fn m2_the_threads_tab_has_no_bucket_and_its_list_is_bands() {
     for gone in [" bucket ", "Clusters", " soup ", " surface ", "Projects"] {
         assert!(!s.contains(gone), "`{gone}` is on the Threads screen:\n{s}");
     }
-    assert!(s.lines().nth(1).unwrap().starts_with('╭') && s.lines().last().unwrap().starts_with('╰'), "a box from line two to the last:\n{s}");
+    assert!(s.lines().nth(2).unwrap().starts_with('╭') && s.lines().last().unwrap().starts_with('╰'), "a box from line three (V1.1: under two bars) to the last:\n{s}");
     for band in ["▾ Pinned", "▾ Recent", "▸ Archived"] {
         assert!(s.contains(band), "no band `{band}`:\n{s}");
     }
@@ -222,7 +223,7 @@ fn m2_the_arrows_cross_the_regions_and_climb_back() {
     assert_eq!(a.live.store.open_id(), Some(K1), "the subagent's own thread is opened");
     fx::transcript(&mut a);
     let s = screen(&mut a);
-    assert!(s.lines().nth(2).unwrap().contains(&format!("{P_NAME} › builder · carve region R7")), "its first line says whose transcript:\n{s}");
+    assert!(s.lines().nth(3).unwrap().contains(&format!("{P_NAME} › builder · carve region R7")), "its first line says whose transcript:\n{s}");
     assert!(s.contains(&format!("what is the state of {K1}?")), "{s}");
     assert!(!s.contains("Message ·"), "a subagent takes no messages:\n{s}");
     a.threads.focus = Some(TFocus::Chat);
@@ -329,7 +330,7 @@ fn m2_i1_the_mouse_and_the_palette() {
 fn m3_a_threads_first_line_names_it() {
     let (mut a, _r) = open();
     a.set_ctab(CTab::Threads);
-    let first = |a: &mut App| unbox(&render_to_text(a, 120, 30).unwrap()[2]).to_string();
+    let first = |a: &mut App| unbox(&render_to_text(a, 120, 30).unwrap()[3]).to_string();
     assert!(first(&mut a).contains("▾ Pinned"), "the list starts at once");
     keys(&mut a, &[KeyCode::Down, KeyCode::Right]);
     assert_eq!(first(&mut a), format!("{P_NAME} · active (+1) · harness · 3 unread elsewhere"));

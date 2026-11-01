@@ -257,7 +257,7 @@ fn adversarial_0215_click_every_control() {
         }
         for t in CfgTab::ALL {
             page(&mut a, &mut rec, &root, env, &format!("Config {t:?}"), &move |a: &mut App| {
-                a.set_ctab(CTab::Config);
+                a.set_ctab(CTab::Settings);
                 if a.cfg_tab != t {
                     a.set_cfg_tab(t);
                 }

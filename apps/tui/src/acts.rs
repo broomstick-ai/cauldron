@@ -205,6 +205,39 @@ impl Verb {
     }
 }
 
+/// **THE ACCOUNT VERBS** (V1.6, Config › Accounts): the machine-wide in-pool
+/// switch and the daemon's piped login — five of the seam's methods, said
+/// through the face's ONE connection ([`crate::mirror::Handle::account`]),
+/// never through a second socket. A type of their own, apart from [`Verb`],
+/// because none of them names a thread and every one of them is said only from
+/// Config, never routed from a keypress on a thread.
+///
+/// `Complete` is the one variant that carries a secret — the code he pasted —
+/// and its `Debug` says so instead of printing it.
+#[derive(Clone, PartialEq)]
+pub enum AccountVerb {
+    /// `accounts/login/begin` for `account` (a new slot's name, or an
+    /// existing account's key).
+    LoginBegin { account: String },
+    /// `accounts/login/{session_id}/complete` with the pasted code.
+    LoginComplete { session_id: String, code: String },
+    /// `accounts/login/{session_id}/cancel`.
+    LoginCancel { session_id: String },
+    /// `accounts/{account}/enable` (`on`) or `/disable`.
+    InPool { account: String, on: bool },
+}
+
+impl std::fmt::Debug for AccountVerb {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            AccountVerb::LoginBegin { .. } => write!(f, "LoginBegin"),
+            AccountVerb::LoginComplete { .. } => write!(f, "LoginComplete {{ code: <redacted> }}"),
+            AccountVerb::LoginCancel { .. } => write!(f, "LoginCancel"),
+            AccountVerb::InPool { on, .. } => write!(f, "InPool {{ on: {on} }}"),
+        }
+    }
+}
+
 impl Wire {
     pub fn owner(&self) -> Owner {
         match self {

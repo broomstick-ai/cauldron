@@ -47,7 +47,7 @@ use std::time::{Duration, Instant};
 use futures_util::{SinkExt, StreamExt};
 use serde_json::{json, Value};
 use tokio::net::TcpListener;
-use tokio::sync::Notify;
+use tokio::sync::watch;
 use tokio_tungstenite::tungstenite::Message;
 
 /// How one connection behaves.
@@ -76,6 +76,10 @@ pub struct Conn {
     /// REL-6: leaves this connection never answers (a body the daemon is
     /// slow to serve), while everything else is answered.
     pub hang: Vec<String>,
+    /// V1.6: frames pushed right after this connection answers a leaf —
+    /// `("disable", <the row with disabled: true>)` plays a daemon that
+    /// publishes the fact its command caused. `(leaf, frame)`, in order.
+    pub after: Vec<(String, String)>,
 }
 
 impl Default for Conn {
@@ -88,6 +92,7 @@ impl Default for Conn {
             push: Vec::new(),
             echo_sends: false,
             hang: Vec::new(),
+            after: Vec::new(),
         }
     }
 }
@@ -129,6 +134,12 @@ impl Conn {
     /// Echo every accepted send as a `threads/log` event. See [`Conn::echo_sends`].
     pub fn echo_sends(mut self) -> Self {
         self.echo_sends = true;
+        self
+    }
+
+    /// After answering `leaf`, push `frame`. See [`Conn::after`].
+    pub fn then(mut self, leaf: &str, frame: Value) -> Self {
+        self.after.push((leaf.to_string(), frame.to_string()));
         self
     }
 
@@ -184,6 +195,28 @@ struct Shared {
     log: Vec<Req>,
     /// Connections that have asked `shapes/list` and been answered.
     learned: usize,
+    /// Connections the FACE ended (its socket closed under the fake's read) —
+    /// never the fake's own `stop`/`close_current` (REL-6e F1).
+    peer_closed: usize,
+    /// REL-6f G2: connections a [`Gate`] let through, and connections it
+    /// dropped because it did not open in time.
+    gate_opened: usize,
+    gate_timed_out: usize,
+}
+
+/// **REL-6f G2: AN EVENT ANOTHER FAKE WAITS ON**, not a clock it compares.
+/// `(accepted, closed by the face)` for one fake, published on every change.
+type Closes = Arc<watch::Sender<(usize, usize)>>;
+
+/// **A GATE ON A FAKE'S CONNECTIONS** ([`Fake::start_gated`]): each incoming
+/// connection is held, before its handshake, until EVERY connection the
+/// watched fake accepted has been closed by the face. It waits on that event
+/// itself. `most` is a failure bound, never a measurement: a connection the
+/// event has not freed by then is counted (`gate_timed_out`) and dropped.
+#[derive(Clone)]
+pub struct Gate {
+    closes: watch::Receiver<(usize, usize)>,
+    most: Duration,
 }
 
 pub struct Fake {
@@ -192,7 +225,12 @@ pub struct Fake {
     /// anything real. `tests` set `TUI_THREADS_CHASSIS_PORT` to it.
     pub port: u16,
     shared: Arc<Mutex<Shared>>,
-    close_now: Arc<Notify>,
+    closes: Closes,
+    /// REL-6f: a close GENERATION, not a `Notify`: `notify_waiters` is lost
+    /// on a connection task that is not parked in `notified()` at that instant
+    /// (mid-send), so a `stop` could leave the socket open. A watch change is
+    /// seen whenever the task next looks.
+    close_now: Arc<watch::Sender<u64>>,
     accept: tokio::task::JoinHandle<()>,
 }
 
@@ -204,6 +242,22 @@ impl Fake {
     /// The same, on `port` (0: the kernel's choice) — REL-6's restart of a
     /// daemon on the port a face is already dialling.
     pub async fn start_on(port: u16, scripts: Vec<Conn>) -> Fake {
+        Self::start_with(port, scripts, None).await
+    }
+
+    /// The same, with every incoming connection held at `gate` (REL-6f G2).
+    pub async fn start_gated(scripts: Vec<Conn>, gate: Gate) -> Fake {
+        Self::start_with(0, scripts, Some(gate)).await
+    }
+
+    /// **A GATE THAT OPENS WHEN THE FACE HAS CLOSED EVERY CONNECTION TO THIS
+    /// FAKE** (and it accepted at least one), for another fake to hold its
+    /// connections at. See [`Gate`].
+    pub fn all_closed_gate(&self, most: Duration) -> Gate {
+        Gate { closes: self.closes.subscribe(), most }
+    }
+
+    async fn start_with(port: u16, scripts: Vec<Conn>, gate: Option<Gate>) -> Fake {
         let listener = TcpListener::bind(("127.0.0.1", port)).await.expect("bind");
         let port = listener.local_addr().unwrap().port();
         // REL-6a6: an isolated dial reaches only a port it was given.
@@ -212,10 +266,12 @@ impl Fake {
             scripts,
             ..Default::default()
         }));
-        let close_now = Arc::new(Notify::new());
+        let close_now = Arc::new(watch::channel(0u64).0);
+        let closes: Closes = Arc::new(watch::channel((0, 0)).0);
 
         let s = shared.clone();
         let c = close_now.clone();
+        let w = closes.clone();
         let accept = tokio::spawn(async move {
             loop {
                 let Ok((sock, _)) = listener.accept().await else {
@@ -226,6 +282,7 @@ impl Fake {
                     g.conns += 1;
                     g.conns
                 };
+                w.send_modify(|(accepted, _)| *accepted += 1);
                 let script = {
                     let g = s.lock().unwrap();
                     g.scripts
@@ -234,7 +291,7 @@ impl Fake {
                         .cloned()
                         .unwrap_or_default()
                 };
-                tokio::spawn(serve(sock, n, script, s.clone(), c.clone()));
+                tokio::spawn(serve(sock, n, script, s.clone(), c.subscribe(), w.clone(), gate.clone()));
             }
         });
 
@@ -242,6 +299,7 @@ impl Fake {
             url: format!("ws://127.0.0.1:{port}/ws"),
             port,
             shared,
+            closes,
             close_now,
             accept,
         }
@@ -252,11 +310,11 @@ impl Fake {
     /// one is closed.
     pub fn stop(&self) {
         self.accept.abort();
-        self.close_now.notify_waiters();
+        self.close_now.send_modify(|g| *g += 1);
     }
 
     pub fn close_current(&self) {
-        self.close_now.notify_waiters();
+        self.close_now.send_modify(|g| *g += 1);
     }
 
     pub fn log(&self) -> Vec<Req> {
@@ -265,6 +323,22 @@ impl Fake {
 
     pub fn connections(&self) -> usize {
         self.shared.lock().unwrap().conns
+    }
+
+    /// How many connections the face closed (REL-6e F1).
+    pub fn peer_closed(&self) -> usize {
+        self.shared.lock().unwrap().peer_closed
+    }
+
+    /// Connections its [`Gate`] let through (REL-6f G2).
+    pub fn gate_opened(&self) -> usize {
+        self.shared.lock().unwrap().gate_opened
+    }
+
+    /// Connections its [`Gate`] dropped because the event it waits on did not
+    /// happen within its bound (REL-6f G2).
+    pub fn gate_timed_out(&self) -> usize {
+        self.shared.lock().unwrap().gate_timed_out
     }
 
     pub async fn until(&self, what: &str, f: impl Fn(&Fake) -> bool) {
@@ -343,8 +417,20 @@ async fn serve(
     n: usize,
     script: Conn,
     shared: Arc<Mutex<Shared>>,
-    close_now: Arc<Notify>,
+    mut close_now: watch::Receiver<u64>,
+    closes: Closes,
+    gate: Option<Gate>,
 ) {
+    if let Some(Gate { mut closes, most }) = gate {
+        let freed = tokio::time::timeout(most, closes.wait_for(|&(accepted, closed)| accepted >= 1 && closed >= accepted)).await;
+        let mut g = shared.lock().unwrap();
+        if matches!(freed, Ok(Ok(_))) {
+            g.gate_opened += 1;
+        } else {
+            g.gate_timed_out += 1;
+            return;
+        }
+    }
     let Ok(ws) = tokio_tungstenite::accept_async(sock).await else {
         return;
     };
@@ -369,9 +455,13 @@ async fn serve(
     }
     loop {
         tokio::select! {
-            _ = close_now.notified() => return,
+            _ = close_now.changed() => return,
             frame = stream.next() => {
-                let Some(Ok(Message::Text(t))) = frame else { return };
+                let Some(Ok(Message::Text(t))) = frame else {
+                    shared.lock().unwrap().peer_closed += 1;
+                    closes.send_modify(|(_, closed)| *closed += 1);
+                    return;
+                };
                 let Ok(v) = serde_json::from_str::<Value>(&t) else { continue };
                 if v.get("type").and_then(Value::as_str) != Some("request") {
                     continue;
@@ -433,6 +523,11 @@ async fn serve(
                 if script.echo_sends && leaf == "send" && !doubled {
                     let echo = echo_of(subject.unwrap_or_default(), &params, &shared);
                     if sink.send(Message::Text(echo.to_string())).await.is_err() {
+                        return;
+                    }
+                }
+                for (l, f) in &script.after {
+                    if l == leaf && sink.send(Message::Text(f.clone())).await.is_err() {
                         return;
                     }
                 }

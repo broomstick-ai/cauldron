@@ -167,10 +167,12 @@ async fn interactive(url: &str) -> anyhow::Result<()> {
                     let Some(Event::Key(k)) = k else { continue };
                     if k.kind != KeyEventKind::Press { continue }
                     let Some(a) = app.key(k) else { continue };
-                    app.set_note(format!("sending — {}", a.question()), Tone::Muted);
+                    app.set_note(format!("sending — {}", a.question_as(&app.shown(a.label()))), Tone::Muted);
                     term.draw(|f| view::draw(f, &app))?;
                     match perform(&h, &a).await {
-                        Outcome::Done(n, t) => app.set_note(n, t),
+                        // `perform` names the account by the one masker; a twin
+                        // is told apart here, where the board is (V1-ACCT).
+                        Outcome::Done(n, t) => app.set_note(n.replace(&crate::pool::model::shown_name(a.label()), &app.shown(a.label())), t),
                         Outcome::NeedsTerminal(argv) if crate::pool::action::isolated_set_live_refusal(std::path::Path::new(&argv[0])).is_some() => {
                             let why = crate::pool::action::isolated_set_live_refusal(std::path::Path::new(&argv[0])).unwrap_or_default();
                             app.set_note(why, Tone::Bad);
@@ -183,7 +185,7 @@ async fn interactive(url: &str) -> anyhow::Result<()> {
                             term.clear()?;
                             paused.store(false, Ordering::SeqCst);
                             match st {
-                                Ok(s) if s.success() => app.set_note(format!("{} is now this machine's login", a.label()), Tone::Good),
+                                Ok(s) if s.success() => app.set_note(format!("{} is now this machine's login", app.shown(a.label())), Tone::Good),
                                 Ok(s) => app.set_note(format!("set-live-login exited {s}"), Tone::Bad),
                                 Err(e) => app.set_note(format!("could not run set-live-login: {e}"), Tone::Bad),
                             }

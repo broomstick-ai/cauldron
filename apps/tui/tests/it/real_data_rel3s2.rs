@@ -177,7 +177,7 @@ fn the_faces_create_env_seeds_cauldron_build_and_it_shows_the_demo() {
     for d in &a.ledger.dumps {
         kinds(&d.ripples, &mut ks);
     }
-    assert!(ks.contains(&Kind::Shell) && ks.contains(&Kind::TypeOne) && ks.contains(&Kind::TypeTwo), "type_three reads as a type 3: {ks:?}");
+    assert!(ks.contains(&Kind::TypeThree) && ks.contains(&Kind::TypeOne) && ks.contains(&Kind::TypeTwo), "type_three reads as a type 3: {ks:?}");
 
     // Behaviour 4: the install's `[secrets] env_file` is a setting, and read.
     let w = a.settings.warnings();

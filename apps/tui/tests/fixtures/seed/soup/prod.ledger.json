@@ -1,5 +1,5 @@
 {
- "_note": "FAKE DATA (8e4fca10 msg 403 Q9): what ran for each dump, for Status › Ledger (8e4fca10 msg 457). Keyed by the dump's seq; a dump the bucket's log holds takes its words and time from the log. `at` is relative to now; an execution's `after_ms` is from its dump. kind: type_one (①), type_two (②), shell (③, a splash). A type 3's steps name the children they ran by index.",
+ "_note": "FAKE DATA (8e4fca10 msg 403 Q9): what ran for each dump, for Status › Ledger (8e4fca10 msg 457). Keyed by the dump's seq; a dump the bucket's log holds takes its words and time from the log. `at` is relative to now; an execution's `after_ms` is from its dump. kind: type_one (①), type_two (②), type_three (③). A type 3's steps name the children they ran by index.",
  "dumps": [
   {
    "seq": 11,
@@ -7,7 +7,7 @@
    "ripples": [
     {
      "ripple": "dump",
-     "kind": "shell",
+     "kind": "type_three",
      "state": "running",
      "after_ms": 0,
      "ms": 41300,
@@ -102,7 +102,7 @@
       },
       {
        "ripple": "apply",
-       "kind": "shell",
+       "kind": "type_three",
        "state": "running",
        "after_ms": 5300,
        "ms": 36000,
@@ -222,7 +222,7 @@
    "ripples": [
     {
      "ripple": "dump",
-     "kind": "shell",
+     "kind": "type_three",
      "state": "done",
      "after_ms": 0,
      "ms": 28400,
@@ -324,7 +324,7 @@
       },
       {
        "ripple": "apply",
-       "kind": "shell",
+       "kind": "type_three",
        "state": "done",
        "after_ms": 4520,
        "ms": 23000,
@@ -375,7 +375,7 @@
         },
         {
          "ripple": "author_with_review",
-         "kind": "shell",
+         "kind": "type_three",
          "state": "done",
          "after_ms": 4610,
          "ms": 22800,
@@ -469,7 +469,7 @@
     },
     {
      "ripple": "curation",
-     "kind": "shell",
+     "kind": "type_three",
      "state": "done",
      "after_ms": 30000,
      "ms": 9000,
@@ -556,7 +556,7 @@
    "ripples": [
     {
      "ripple": "dump",
-     "kind": "shell",
+     "kind": "type_three",
      "state": "failed",
      "after_ms": 0,
      "ms": 6200,
@@ -681,7 +681,7 @@
    "ripples": [
     {
      "ripple": "dump",
-     "kind": "shell",
+     "kind": "type_three",
      "state": "done",
      "after_ms": 0,
      "ms": 15100,
