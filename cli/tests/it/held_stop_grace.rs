@@ -165,6 +165,7 @@ impl Sandbox {
             .args(args)
             .env("CAULDRON_HOME", &self.root)
             .env("CAULDRON_ENV", &self.env)
+            .env(crate::grants::ALLOW_ENV, crate::grants::owned(&self.root, &self.daemon.iter().map(Child::id).collect::<Vec<_>>()))
             .output()
             .expect("spawn cauldron");
         let text = format!(
@@ -216,6 +217,7 @@ impl Sandbox {
             .arg("daemon")
             .env("CAULDRON_HOME", &self.root)
             .env("CAULDRON_ENV", &self.env)
+            .env(crate::grants::ALLOW_ENV, crate::grants::owned(&self.root, &[]))
             .stdout(log.try_clone().unwrap())
             .stderr(log)
             .spawn()
@@ -313,6 +315,7 @@ fn held_stop_whose_holder_never_confirms_gives_up_at_grace_35s_plus_2_polls_plus
         .args(["stop", "svc-a"])
         .env("CAULDRON_HOME", &sb.root)
         .env("CAULDRON_ENV", &sb.env)
+        .env(crate::grants::ALLOW_ENV, crate::grants::owned(&sb.root, &[holder]))
         .stdout(out_file.try_clone().unwrap())
         .stderr(out_file)
         .spawn()

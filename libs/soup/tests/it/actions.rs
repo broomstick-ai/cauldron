@@ -2,8 +2,8 @@
 //! enters the soup. The NON-routed secret action lives here, as a negative
 //! fixture, never in the shipped dataset.
 
-use soup::actions::{validate_action, Reject};
-use soup::demo::Dataset;
+use soup_seed::actions::{validate_action, Reject};
+use soup_seed::demo::Dataset;
 
 fn fence(lines: &str) -> String {
     format!("## Step\n\n```field\n{lines}\n```\n")
@@ -97,7 +97,7 @@ impl Drop for Tmp {
 /// fresh directory. A refusal must have written nothing; an acceptance must
 /// have written the action.
 fn write_path_says(i: usize, body: &str) -> Result<(), Reject> {
-    use soup::demo::{install_from, Source};
+    use soup_seed::demo::{install_from, Source};
     let mut clusters: serde_json::Value = serde_json::from_str(Source::EMBEDDED.clusters).unwrap();
     let has = clusters["clusters"][0]["human_actions"].as_array_mut().expect("cluster 0 holds human actions");
     has.push(serde_json::json!({"serial": 990 + i, "ask": "agreement probe", "status": "open", "filed": "2026-10-31", "body": body}));
@@ -226,8 +226,8 @@ fn the_face_and_the_write_path_give_one_verdict() {
         // `validate_action`, so comparing the two would be `x == x`.)
         // The face draws exactly the fields the soup parsed (the same type,
         // the same values): there is no second parser to differ.
-        let drawn: Vec<soup::actions::Field> = tickets::parse(body).steps.iter().flat_map(|s| s.fields().cloned().collect::<Vec<_>>()).collect();
-        assert_eq!(drawn, soup::actions::fields(body), "[{what}] the face draws other fields than the soup parsed");
+        let drawn: Vec<soup_seed::actions::Field> = tickets::parse(body).steps.iter().flat_map(|s| s.fields().cloned().collect::<Vec<_>>()).collect();
+        assert_eq!(drawn, soup_seed::actions::fields(body), "[{what}] the face draws other fields than the soup parsed");
         seen.insert(match &wrote {
             Ok(()) => "ok",
             Err(Reject::NoRoute { .. }) => "no-route",

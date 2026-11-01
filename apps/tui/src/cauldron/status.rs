@@ -851,7 +851,7 @@ fn supervision(b: &mut B) {
         return;
     }
     let n = shown(b.app, "supervision").min(recs.len());
-    let cells: Vec<Vec<String>> = recs.iter().rev().take(n).map(|r| vec![r.at.clone(), r.op.word().to_string(), format!("{} on {}", r.service, r.device)]).collect();
+    let cells: Vec<Vec<String>> = recs.iter().rev().take(n).map(|r| vec![crate::cauldron::supervise::shown_at(&r.at), r.op.word().to_string(), format!("{} on {}", r.service, r.device)]).collect();
     let wd = look::widths(&cells);
     for (i, (r, c)) in recs.iter().rev().take(n).zip(&cells).enumerate() {
         let mut right = format!("{} · {}", r.who, r.why);

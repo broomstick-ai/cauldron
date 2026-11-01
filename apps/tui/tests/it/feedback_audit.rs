@@ -559,7 +559,10 @@ fn a_run_recorded_here_keeps_its_cluster_by_key_and_its_day_by_instant() {
     assert_eq!(run.day_word(), "today");
     // A day later it is yesterday's, and the runs page groups it so.
     let mut old = run.clone();
-    old.at = Some((chrono::Local::now() - chrono::Duration::days(1)).to_rfc3339());
+    // UPTIME-DST: yesterday's DATE at noon, not `now - 24h`, which is two
+    // dates back in the first hour after a spring-forward.
+    let noon = chrono::Local::now().date_naive().pred_opt().unwrap().and_hms_opt(12, 0, 0).unwrap();
+    old.at = Some(noon.and_local_timezone(chrono::Local).single().unwrap().to_rfc3339());
     assert_eq!(old.day_word(), "yesterday");
     // Renamed, the cluster still finds its run: its log has it.
     let g = a.forest.find(&key).unwrap();

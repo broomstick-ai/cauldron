@@ -147,7 +147,7 @@ env = { path = "../../libs/env" }
 # REL-3.S2: the face's own `+` seeds `cauldron-build` exactly as the CLI's
 # `env create` does (`soup::demo::seed_env`). The soup crate's own tests
 # dev-depend on this crate; a dev-dependency cycle is allowed.
-soup = { path = "../../libs/soup" }
+soup = { package = "soup-seed", path = "../../libs/soup" }
 # ── THE SUBSCRIPTION-SHAPE CHASSIS, VENDORED (and the SAME copy the AUI links) ──
 #
 # `libs/shapewire` is a copy of `substrate-interface-layer:lib/shapewire`, taken

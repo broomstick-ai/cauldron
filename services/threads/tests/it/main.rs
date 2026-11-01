@@ -124,6 +124,7 @@ mod probe_warn_once;
 mod projected_turn;
 mod protoledger_features;
 mod protoledger_link;
+mod push_burst_nodelay;
 mod recent_hydrate_cost;
 mod recent_updates;
 mod recent_visits;

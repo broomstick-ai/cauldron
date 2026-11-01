@@ -147,6 +147,7 @@ impl Sandbox {
             .args(args)
             .env("CAULDRON_HOME", &self.root)
             .env("CAULDRON_ENV", &self.env)
+            .env(crate::grants::ALLOW_ENV, crate::grants::owned(&self.root, &self.daemon.iter().map(Child::id).collect::<Vec<_>>()))
             .output()
             .expect("spawn cauldron");
         let text = format!("{}{}", String::from_utf8_lossy(&out.stdout), String::from_utf8_lossy(&out.stderr));
@@ -187,6 +188,7 @@ impl Sandbox {
             .arg("daemon")
             .env("CAULDRON_HOME", &self.root)
             .env("CAULDRON_ENV", &self.env)
+            .env(crate::grants::ALLOW_ENV, crate::grants::owned(&self.root, &[]))
             .stdout(log.try_clone().unwrap())
             .stderr(log)
             .spawn()

@@ -1,6 +1,6 @@
 # Roadmap
 
-This is the plan after the 0.1.2 release. It is a plan, not a promise: items
+This is the plan after the 0.1.3 release. It is a plan, not a promise: items
 can move between releases, and this file changes as they do. After
 0.2.0, releases come out weekly. What each release actually contains is
 recorded in [CHANGELOG.md](CHANGELOG.md).
@@ -27,11 +27,14 @@ Shipped in 0.1.2 (see [CHANGELOG.md](CHANGELOG.md)):
 - **Accounts:** the threads daemon's accounts under Config, masked; log in
   once from the face, then switch each account on or off per cauldron.
 
+Shipped in 0.1.3: account polish (account settings read-only, with a notice,
+when the install's key is wrong; clearer refusals; a 5-second connect timeout).
+
 Coming in 0.2.0. Ripples and the soup engine arrive in 0.2.0:
 
 - **Ripples live:** dumps set off ripples, and ripples write to the soup. The
   soup engine is hardened, and the Ledger shows real ripple events. (Not in
-  0.1.0, 0.1.1 or 0.1.2.)
+  0.1.0, 0.1.1, 0.1.2 or 0.1.3.)
 
 ## Weekly releases
 

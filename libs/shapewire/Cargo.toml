@@ -121,6 +121,12 @@ required-features = ["hub"]
 name = "version_link"
 required-features = ["hub"]
 
+# R4.S14 pass b: the handshake's identity paths driven end to end through the
+# real door (`server::drive`) over a socket, so it needs the door.
+[[test]]
+name = "auth_gate"
+required-features = ["server"]
+
 [dev-dependencies]
 tokio = { workspace = true, features = ["full"] }
 tempfile = "3"
@@ -130,6 +136,10 @@ tempfile = "3"
 # the crate itself names neither (R3.S2.10).
 anyhow = { workspace = true }
 tracing-subscriber = { workspace = true }
+# A websocket CLIENT for `tests/auth_gate.rs`, which drives the door's
+# handshake over a real socket. DEV only, and the version the workspace already
+# pins (`apps/tui` links the same 0.24), so the lock gains no package.
+tokio-tungstenite = { workspace = true }
 
 [lints.rust]
 unsafe_code = "forbid"

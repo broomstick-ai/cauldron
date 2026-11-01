@@ -5,6 +5,10 @@
 // REL-6a5: every child of this binary carries CAULDRON_ISOLATED=1.
 test_isolation::install!();
 
+// CLI-ISO: the grants a test hands the isolated `cauldron` verbs it runs.
+#[path = "support/grants.rs"]
+mod grants;
+
 mod broken_declaration;
 mod c7f4_pin_lock;
 mod c7f5_manifest_race;

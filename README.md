@@ -101,11 +101,12 @@ for your family. They don't mix: each environment's data is its own, under
 
 ## What is in this release
 
-This is **0.1.2**, the V1 interface: two tab bars, a first-run screen, the
+This is **0.1.3**, the V1 interface: two tab bars, a first-run screen, the
 Ledger on the environment's own data, the real account pool under Status →
-Tokens, Config → Accounts, secret human actions, and `cauldron ctl`. Ripples
-and the soup engine
-arrive in 0.2.0. [CHANGELOG.md](CHANGELOG.md) lists every change.
+Tokens, Config → Accounts, secret human actions, and `cauldron ctl`. 0.1.3
+adds account polish: account settings open read-only, with a notice, when the
+install's key is wrong, and a face stops waiting on a service that never
+answers. Ripples and the soup engine arrive in 0.2.0. [CHANGELOG.md](CHANGELOG.md) lists every change.
 
 cauldron has three parts:
 

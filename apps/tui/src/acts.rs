@@ -939,7 +939,7 @@ mod tests {
         // POSITIVE ASSERTION FAILS LOUDLY WHEN ITS SUBJECT IS RENAMED; A
         // NEGATIVE ONE GOES QUIET.** `crate::methods`'s header has the long
         // version of that and the three selectors it takes to close the gap.
-        // **THE DAEMON SURFACE OF THIS ROUTER, AND IT IS THREE VERBS.**
+        // **THE DAEMON SURFACE OF THIS ROUTER, AND IT IS FOUR VERBS.**
         //
         // This used to assert over `methods::` references and then over two
         // spellings of a hand-written literal. `methods.rs` is deleted, so what
@@ -953,16 +953,33 @@ mod tests {
         // matched nothing, the `assert_eq!` went RED and every
         // `!src.contains(…)` under it went SILENT. A positive assertion fails
         // loudly when its subject is renamed; a negative one goes quiet.
-        for verb in ["Verb::Cancel", "Verb::Send", "Verb::Create"] {
+        for verb in ["Verb::Cancel", "Verb::Send", "Verb::Create", "Verb::Name"] {
             assert!(
                 src.contains(verb),
                 "`{verb}` is not constructed in this router, so the claims \
                  below are about a file that routes nothing to the daemon"
             );
         }
-        // And no FOURTH. `Verb` is three variants; this asserts the router uses
-        // all three and names no other, which together say the set is closed.
+        // And no FIFTH. `Verb` is four variants; this asserts the router uses
+        // all four and names no other, which together say the set is closed.
+        //
+        // **`Verb::` AS A WHOLE PATH SEGMENT, NOT AS A SUBSTRING.** A bare
+        // `match_indices("Verb::")` also matches inside `AccountVerb::` (V1.6),
+        // a DIFFERENT enum, and reported `Verb::LoginBegin` as a fifth daemon
+        // verb: red for the wrong reason, which masked this check's real job.
+        // A hit preceded by an identifier character is another type's path and
+        // is skipped; `Verb::`, `(Verb::` and `acts::Verb::` are all still in
+        // scope, so a qualified spelling cannot be used as a hiding place.
+        let mut scanned = 0;
         for (i, _) in src.match_indices("Verb::") {
+            if src[..i]
+                .chars()
+                .next_back()
+                .is_some_and(|c| c.is_ascii_alphanumeric() || c == '_')
+            {
+                continue;
+            }
+            scanned += 1;
             let rest = &src[i + "Verb::".len()..];
             let end = rest
                 .find(|c: char| !c.is_ascii_alphanumeric() && c != '_')
@@ -970,10 +987,15 @@ mod tests {
             let name = &rest[..end];
             assert!(
                 ["Cancel", "Send", "Create", "Name"].contains(&name),
-                "`Verb::{name}` is routed and is not one of the three this face \
+                "`Verb::{name}` is routed and is not one of the four this face \
                  speaks — widening the surface is a deliberate act, not an edit"
             );
         }
+        assert!(
+            scanned >= 4,
+            "the closed-set scan saw {scanned} `Verb::` paths — the boundary \
+             filter is skipping the daemon verbs themselves"
+        );
         // No method PATH written by hand, in EITHER grammar. The new spelling
         // is `"threads/…"`; the pre-2026-09-28 one is `"threads.…"`, and that
         // second selector is the one a migration's own guard forgets — it is

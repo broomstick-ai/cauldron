@@ -195,6 +195,7 @@ impl Sandbox {
             .args(args)
             .env("CAULDRON_HOME", &self.root)
             .env("CAULDRON_ENV", &self.env)
+            .env(crate::grants::ALLOW_ENV, crate::grants::owned(&self.root, &[]))
             .output()
             .expect("spawn cauldron");
         let text = format!("{}{}", String::from_utf8_lossy(&out.stdout), String::from_utf8_lossy(&out.stderr));

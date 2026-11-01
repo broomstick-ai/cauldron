@@ -4,7 +4,7 @@
 //! `seed/ledger.json` too, since REL-3.S2: the face reads an environment's
 //! own ledger seed first and knows `type_three` and a fold's `thread`.
 
-use soup::demo::{install, ENV};
+use soup_seed::demo::{install, ENV};
 use tui::cauldron::{artifacts, ledger, store, tickets};
 
 struct Tmp(std::path::PathBuf);
@@ -56,7 +56,7 @@ fn the_face_reads_every_artifact_as_present() {
 
 #[test]
 fn the_face_parses_the_secret_action_as_four_steps_with_masked_fields() {
-    let ds = soup::demo::Dataset::embedded().unwrap();
+    let ds = soup_seed::demo::Dataset::embedded().unwrap();
     let body = ds.clusters["clusters"][4]["children"][1]["human_actions"][0]["body"].as_str().unwrap();
     let t = tickets::parse(body);
     assert_eq!(t.steps.len(), 4, "{:?}", t.steps.iter().map(|s| &s.title).collect::<Vec<_>>());

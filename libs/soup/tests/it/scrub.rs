@@ -4,8 +4,8 @@
 
 use std::path::{Path, PathBuf};
 
-use soup::demo::all_files;
-use soup::scrub::{load_personal, violations, violations_with, Personal};
+use soup_seed::demo::all_files;
+use soup_seed::scrub::{load_personal, violations, violations_with, Personal};
 
 fn repo_root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("../..")

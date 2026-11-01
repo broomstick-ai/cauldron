@@ -52,7 +52,10 @@ impl Op {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Record {
-    /// `YYYY-MM-DD HH:MM:SS`, local.
+    /// When it was asked: an RFC 3339 instant in the local offset in force
+    /// then (`2026-11-01T01:42:53-07:00`, see [`stamp`]), so it names ONE
+    /// instant even in a repeated hour. A log written before UPTIME-DST holds
+    /// `YYYY-MM-DD HH:MM:SS` local, which [`instant`] still reads.
     pub at: String,
     /// Who asked: `operator` from this face.
     pub who: String,
@@ -191,13 +194,70 @@ pub fn answered(t: &ThreadsBoard) -> Option<String> {
     }
 }
 
-/// How long ago `at` (`YYYY-MM-DD HH:MM:SS`, local) was; `—` when it
-/// cannot be read.
+/// **UPTIME-DST: A DURATION IS A DIFFERENCE OF INSTANTS.** How long ago `at`
+/// was, as drawn (`3h 5m`); `—` when it cannot be read. Counted from the UTC
+/// instant `at` names to [`now`], never by subtracting two local wall-clock
+/// readings: across a DST change those are an hour off the elapsed time (a
+/// 3h 5m uptime read `2h 5m` across the 2026-11-01 fall-back).
 fn since(at: &str) -> String {
-    match chrono::NaiveDateTime::parse_from_str(at, "%Y-%m-%d %H:%M:%S") {
-        Ok(t) => span((chrono::Local::now().naive_local() - t).num_seconds().max(0)),
-        Err(_) => "—".into(),
+    since_at(at, now())
+}
+
+/// [`since`] at an explicit `now`.
+pub fn since_at(at: &str, now: chrono::DateTime<chrono::Utc>) -> String {
+    instant(at).map_or_else(|| "—".into(), |t| span((now - t).num_seconds().max(0)))
+}
+
+/// The instant a record's `at` names. RFC 3339 is exact. A legacy local
+/// `YYYY-MM-DD HH:MM:SS` (written before UPTIME-DST) is resolved in this
+/// machine's zone: a time in a repeated hour reads as its FIRST occurrence
+/// (the JOBS-DST policy), and one in a skipped hour, which no clock ever
+/// wrote, is unreadable.
+pub fn instant(at: &str) -> Option<chrono::DateTime<chrono::Utc>> {
+    use chrono::TimeZone;
+    if let Ok(t) = chrono::DateTime::parse_from_rfc3339(at) {
+        return Some(t.with_timezone(&chrono::Utc));
     }
+    let naive = chrono::NaiveDateTime::parse_from_str(at, "%Y-%m-%d %H:%M:%S").ok()?;
+    // The earliest INSTANT, chosen here: chrono's `earliest()` on `Local`
+    // returned the PST reading of a fall-back 01:xx, which is the later one.
+    match chrono::Local.from_local_datetime(&naive) {
+        chrono::LocalResult::Single(t) => Some(t.with_timezone(&chrono::Utc)),
+        chrono::LocalResult::Ambiguous(a, b) => Some(a.with_timezone(&chrono::Utc).min(b.with_timezone(&chrono::Utc))),
+        chrono::LocalResult::None => None,
+    }
+}
+
+/// A record's `at` for DISPLAY: its instant as this machine's local
+/// `YYYY-MM-DD HH:MM:SS` (the column the log has always shown); the text
+/// itself when it cannot be read.
+pub fn shown_at(at: &str) -> String {
+    match chrono::DateTime::parse_from_rfc3339(at) {
+        Ok(t) => t.with_timezone(&chrono::Local).format("%Y-%m-%d %H:%M:%S").to_string(),
+        Err(_) => at.to_string(),
+    }
+}
+
+/// The `at` a record made at `t` carries: RFC 3339, seconds, in the local
+/// offset in force at `t`.
+pub fn stamp(t: chrono::DateTime<chrono::Utc>) -> String {
+    t.with_timezone(&chrono::Local).to_rfc3339_opts(chrono::SecondsFormat::Secs, false)
+}
+
+/// **THE FACE'S "NOW" FOR SUPERVISION** (UPTIME-DST, on JOBS-DST's pattern):
+/// the real UTC clock, except that an ISOLATED process (the test-only
+/// marker, or a cargo test harness — [`env::egress::process_isolation`])
+/// reads it from `CAULDRON_TEST_NOW` (unix seconds) when that is set, so a
+/// test can pin a moment across a DST change. His own face is never
+/// isolated, so it never reads the variable. The zone is injected the
+/// ordinary way: `TZ`, which `chrono::Local` honours.
+pub fn now() -> chrono::DateTime<chrono::Utc> {
+    static PINNED: std::sync::OnceLock<Option<i64>> = std::sync::OnceLock::new();
+    let pinned = *PINNED.get_or_init(|| {
+        env::egress::process_isolation()?;
+        std::env::var("CAULDRON_TEST_NOW").ok()?.trim().parse().ok()
+    });
+    pinned.and_then(|s| chrono::DateTime::from_timestamp(s, 0)).unwrap_or_else(chrono::Utc::now)
 }
 
 /// How long `s` has been up, as drawn: from the record that started it when
@@ -225,5 +285,5 @@ fn fake_pid(r: &Record) -> u32 {
 
 /// The record of `op` on `service`, asked from this face now.
 pub fn record(device: &str, service: &str, op: Op, (from, to): (String, String)) -> Record {
-    Record { at: chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string(), who: "operator".into(), device: device.into(), service: service.into(), op, why: "requested".into(), from, to }
+    Record { at: stamp(now()), who: "operator".into(), device: device.into(), service: service.into(), op, why: "requested".into(), from, to }
 }

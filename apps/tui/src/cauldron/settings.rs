@@ -1803,6 +1803,30 @@ pub struct Settings {
     /// an old id two accounts shared, a value dropped for a newer one. Masked
     /// names only. The face takes them as a notice.
     pub adoption_notes: Vec<String>,
+    /// Why these settings opened read-only although the face may write:
+    /// the install's account-id key is unusable (V1-ACCT3).
+    pub key_problem: Option<String>,
+}
+
+/// **THE NOTICE FOR AN UNUSABLE ACCOUNT-ID KEY** (V1-ACCT5, V1-ACCT4-I B1):
+/// the face is read-only, so a change is not saved. It says settings go
+/// unapplied ONLY where that is true: an email-address account's id is
+/// digested under the key ([`crate::cauldron::menu::account_id`]), and this
+/// process digests under another key unless it bound this install before
+/// (`bound_here`, a re-read after the key went bad). A named account's id
+/// is its slug and never depends on the key, so its settings still apply.
+/// [`KeyError::Write`] (no key file and no mark that one was made here) has
+/// no key whose ids could be missed, so it says only that the face is
+/// read-only.
+///
+/// [`KeyError::Write`]: crate::pool::model::install_key::KeyError::Write
+pub fn key_notice(e: &crate::pool::model::install_key::KeyError, bound_here: bool) -> String {
+    use crate::pool::model::install_key::KeyError;
+    let ro = format!("{e}: account settings are read-only in this face, and a change made here is not saved");
+    if bound_here || matches!(e, KeyError::Write(..)) {
+        return ro;
+    }
+    format!("{ro}. Settings saved for an email-address account under this install's key are not applied in this session (a switch you set may show its default); a named account's settings still apply")
 }
 
 impl Settings {
@@ -1851,11 +1875,28 @@ impl Settings {
             held_on_disk: std::cell::Cell::new(false),
             writable,
             adoption_notes: Vec::new(),
+            key_problem: None,
         };
         // This install's digest key, beside the settings it keys (V1-ACCT2):
-        // created by the first face that may write here.
-        if let Err(e) = crate::pool::model::install_key::bind(global_dir, writable) {
-            tracing::warn!(error = %e, "the install's account-id key could not be read or written: ids are this process's only");
+        // created by the first face that may write here. It FAILS SAFE
+        // (V1-ACCT3, V1-ACCT2-I N-a/N-b/N-c): a key that is another
+        // install's, unreadable, corrupt or lost opens these settings
+        // READ-ONLY with a notice — nothing is written under ids no later
+        // open could reproduce, and the user is told why a switch they set may read
+        // as its default. A key adopted after ids were drawn is said too.
+        use crate::pool::model::install_key::{bind, Bind};
+        match bind(global_dir, writable) {
+            Ok(Bind::Redrew) => {
+                tracing::warn!("account ids drawn before the install's key was read were redrawn under it");
+                s.adoption_notes.push("account ids drawn before this install's key was read have been redrawn under it".into());
+            }
+            Ok(_) => {}
+            Err(e) => {
+                tracing::warn!(error = %e, "the install's account-id key is unusable: settings are read-only in this face");
+                s.writable = false;
+                s.key_problem = Some(e.to_string());
+                s.adoption_notes.push(key_notice(&e, crate::pool::model::install_key::has_bound(global_dir)));
+            }
         }
         let own_file = Store::load(&s.path())?;
         let from_file = own_file.is_some();
@@ -1972,11 +2013,21 @@ impl Settings {
         Ok(AccountsFile::default())
     }
 
+    /// Why a write is refused in a face that may not write: the install's
+    /// unusable account-id key when that is the cause (V1-ACCT3-I F1),
+    /// else `--dump`.
+    fn read_only_refusal(&self, verb: &str) -> String {
+        match &self.key_problem {
+            Some(p) => format!("nothing is {verb}: account settings are read-only in this face because {p}"),
+            None => format!("nothing is {verb} by --dump"),
+        }
+    }
+
     /// Change `accounts.json` under its lock, from the file as it is inside
     /// the lock (another face may have written it), and adopt the result.
     fn update_accounts(&mut self, f: impl FnOnce(&mut AccountsFile) -> Result<()>) -> Result<()> {
         if !self.writable {
-            bail!("nothing is changed by --dump");
+            bail!("{}", self.read_only_refusal("changed"));
         }
         let path = self.accounts_path();
         let file = env::lock::with_lock(&path, || {
@@ -2501,7 +2552,7 @@ impl Settings {
             bail!("an account needs a name with a letter or a digit in it");
         }
         if !self.writable {
-            bail!("nothing is created by --dump");
+            bail!("{}", self.read_only_refusal("created"));
         }
         let acct = AddedAccount { pool: pool.into(), id: id.clone(), label: label.trim().into(), added_at: chrono::Utc::now().to_rfc3339() };
         let id2 = id.clone();
@@ -2559,7 +2610,7 @@ impl Settings {
     /// and is written. Returns its id.
     pub fn add_endpoint(&mut self, here: bool) -> Result<String> {
         if !self.writable {
-            bail!("nothing is added by --dump");
+            bail!("{}", self.read_only_refusal("added"));
         }
         let p = endpoint_prefix(here);
         let from = format!("{p}.{DRAFT_EP}.");

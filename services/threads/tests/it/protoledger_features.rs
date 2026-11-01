@@ -73,14 +73,52 @@ fn resolved(meta: &Value, name: &str) -> Vec<(String, Vec<String>)> {
 fn protoledger_is_the_pinned_release_with_store_sync_sqlite_and_never_serve_or_cli() {
     let meta = metadata();
     let pl = resolved(&meta, "protoledger");
-    assert_eq!(pl.len(), 1, "exactly one protoledger in the build, got {pl:?}");
-    let (id, features) = &pl[0];
+    assert!(!pl.is_empty(), "no protoledger in the build: the instrument reads nothing");
+
+    // THE BAN IS BY ANY ROUTE (module doc): every protoledger the workspace
+    // resolves, whoever links it. The build may hold more than one — since
+    // RV1.S3 another workspace member may link its own pin (model types only,
+    // `default-features = false`) beside this crate's — and `serve`/`cli` must reach
+    // NONE of them. Stated on its own so a red names the package and the
+    // feature.
+    for (id, features) in &pl {
+        for banned in BANNED {
+            assert!(
+                !features.iter().any(|f| f == banned),
+                "{id}: protoledger feature `{banned}` is enabled in this build (resolved: {features:?}); \
+                 the daemon must never link `serve` (tokio + axum) or `cli` (clap), by any route"
+            );
+        }
+    }
+
+    // THE PIN AND THE EXACT SET are judged on the protoledger THIS crate
+    // depends on — the one `threads`' own resolve node names — not on
+    // whichever protoledger the resolve listed first.
+    let packages = meta["packages"].as_array().unwrap();
+    let own_manifest = concat!(env!("CARGO_MANIFEST_DIR"), "/Cargo.toml");
+    let threads_id = packages
+        .iter()
+        .find(|p| p["name"] == "threads" && p["manifest_path"] == own_manifest)
+        .and_then(|p| p["id"].as_str())
+        .expect("this crate is in the resolve");
+    let threads_node = meta["resolve"]["nodes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|n| n["id"] == threads_id)
+        .expect("a resolve node for this crate");
+    let mine: Vec<&(String, Vec<String>)> = pl
+        .iter()
+        .filter(|(id, _)| {
+            threads_node["deps"].as_array().unwrap().iter().any(|d| d["pkg"] == id.as_str())
+        })
+        .collect();
+    assert_eq!(mine.len(), 1, "exactly one protoledger reaches this crate, got {mine:?} (all resolved: {pl:?})");
+    let (id, features) = mine[0];
 
     // The pinned rev, and only it: the package source carries both the rev
     // asked for (`?rev=`) and the commit Cargo.lock resolved it to (`#`).
-    let source = meta["packages"]
-        .as_array()
-        .unwrap()
+    let source = packages
         .iter()
         .find(|p| p["id"] == id.as_str())
         .and_then(|p| p["source"].as_str())
@@ -89,15 +127,6 @@ fn protoledger_is_the_pinned_release_with_store_sync_sqlite_and_never_serve_or_c
         source == format!("{PINNED_REPO}?rev={PINNED_REV}#{PINNED_REV}") && source.ends_with(&format!("?rev={PINNED_REV}#{PINNED_REV}")),
         "protoledger is not the pinned public release {PINNED_REV}: {source}"
     );
-
-    // The ban, stated on its own so a red names the feature.
-    for banned in BANNED {
-        assert!(
-            !features.iter().any(|f| f == banned),
-            "protoledger feature `{banned}` is enabled in this build (resolved: {features:?}); \
-             the daemon must never link `serve` (tokio + axum) or `cli` (clap)"
-        );
-    }
     // And the exact set: a constant "no features" passes the ban above but not this.
     assert_eq!(features, &WANTED.map(String::from).to_vec(), "protoledger features drifted");
 }

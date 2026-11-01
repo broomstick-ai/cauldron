@@ -212,6 +212,15 @@ pub mod codes {
     /// parsed and every required thing is there; what is wrong is one name,
     /// and the prose says which so the remedy is to drop it.
     pub const UNKNOWN_PARAM: &str = "unknown_param";
+    /// **A REQUEST THAT WAS UNDERSTOOD, WELL FORMED, AND JUDGED BY THE
+    /// PRODUCER'S OWN VALIDATOR — AND TURNED AWAY WHOLE, WITH STRUCTURED
+    /// WITNESSES IN `detail`** (R4.S1 spec §3.6 item 1).
+    ///
+    /// Not [`MALFORMED`]: the frame parsed and the ask was clear. Not
+    /// [`FORBIDDEN`]: the consumer may write; this ask may not land. The
+    /// remedy is in the witnesses, which are the producer's contract and not
+    /// the chassis's — a consumer branches on `detail`, never on this prose.
+    pub const REFUSED: &str = "refused";
     /// **THE SUBJECT A VERB NAMES IS NOT HERE NOW** — a thread id, an attached
     /// session's cookie — and the producer does not claim whether it ever was.
     ///
@@ -258,6 +267,7 @@ pub mod codes {
         ERROR,
         NOT_AVAILABLE_YET,
         UNKNOWN_PARAM,
+        REFUSED,
         NOT_FOUND,
     ];
 }
@@ -271,6 +281,12 @@ pub mod codes {
 pub struct Refusal {
     pub code: &'static str,
     pub message: String,
+    /// **A STRUCTURED PAYLOAD BESIDE THE PROSE** (R4.S1 spec §3.6 item 2) —
+    /// the witnesses a [`codes::REFUSED`] answer carries, for instance. `None`
+    /// on every refusal that predates it, and absent from the wire then, so
+    /// no existing byte moves. Built with [`Refusal::with_detail`];
+    /// [`Refusal::new`] keeps its two-argument form.
+    pub detail: Option<Value>,
 }
 
 impl Refusal {
@@ -278,6 +294,16 @@ impl Refusal {
         Self {
             code,
             message: message.into(),
+            detail: None,
+        }
+    }
+
+    /// A refusal that carries a structured `detail` beside its prose.
+    pub fn with_detail(code: &'static str, message: impl Into<String>, detail: Value) -> Self {
+        Self {
+            code,
+            message: message.into(),
+            detail: Some(detail),
         }
     }
 
@@ -306,6 +332,16 @@ impl std::fmt::Display for Refusal {
 pub trait Coded {
     fn code(&self) -> &'static str {
         codes::ERROR
+    }
+}
+
+/// **WHAT A PRODUCER IMPLEMENTS TO PUT A STRUCTURED PAYLOAD ON ITS
+/// REFUSALS** — the sibling of [`Coded`] (R4.S1 spec §3.6 item 2). The default
+/// is `None`, so a producer that implements nothing keeps every refusal byte
+/// it had. `server::refuse_detailed` is the mapping that reads both.
+pub trait Detailed {
+    fn detail(&self) -> Option<Value> {
+        None
     }
 }
 
@@ -431,6 +467,11 @@ pub enum Outcome {
         /// One of [`codes`]. **Never absent**: an untyped producer error carries
         /// [`codes::ERROR`] rather than omitting the key.
         code: String,
+        /// The refusal's structured payload ([`Refusal::detail`]). ADDITIVE, on
+        /// the same terms `code` was: after `error` and `code`, and absent when
+        /// there is none, so a consumer reading by key sees what it saw before.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        detail: Option<Value>,
     },
     Promise {
         promise: String,
@@ -447,6 +488,7 @@ impl Outcome {
         Outcome::Error {
             error: r.message,
             code: r.code.to_string(),
+            detail: r.detail,
         }
     }
 
@@ -469,11 +511,45 @@ impl Outcome {
 /// Deliberately not an exhaustive `ClientMsg`. A producer keeps its own control
 /// frames, and the chassis forwards any other `type` to the producer rather than
 /// claiming to know the whole vocabulary. See [`ClientFrame`] and [`classify`].
-#[derive(Debug, Clone, Deserialize)]
+///
+/// **`Debug` is hand-written, not derived**, because `auth` carries credentials:
+/// `secret`, `run_token` and a principal's `token` print as `<redacted>`, the
+/// treatment [`Bearer`] gets and for the same reason — a credential escapes
+/// through a `{:?}` on a struct that happens to hold it.
+#[derive(Clone, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ChassisMsg {
     /// Authenticate this connection.
-    Auth { secret: String },
+    ///
+    /// **EVERY FIELD DEFAULTS, so every `auth` frame on the machine parses as
+    /// it did** (R4.S1 spec §2.4 item 4). `{"type":"auth","secret":"…"}` is the
+    /// frame every existing client sends and it means exactly what it meant.
+    /// The three additions are for a producer that reads WHO is connecting:
+    ///
+    /// * `consumer` — the identity a consumer states, the same object
+    ///   `shapes/{shape}/subscribe` takes (`{name, shape_version, pid?,
+    ///   build?}`). Carried RAW here and parsed by the gate with
+    ///   `ledger::ConsumerIdentity::parse`, because this module is the floor and
+    ///   `ledger` is not: one parser, reached from both doors.
+    /// * `run_token` — a `THREADS_RUN_TOKEN` ([`crate::token`]). An agent logs
+    ///   in with this and NO secret; the producer verifies it
+    ///   (`server::Producer::verify_run_token`).
+    /// * `principal` — a harness-class claim ([`PrincipalClaim`]), verified by
+    ///   the producer (`server::Producer::verify_principal`).
+    ///
+    /// A frame with NONE of `secret`, `run_token`, `principal` carries no
+    /// credential and is [`ClientFrame::Invalid`] at [`classify`] — as a frame
+    /// with no `secret` was before these fields existed.
+    Auth {
+        #[serde(default)]
+        secret: Option<String>,
+        #[serde(default)]
+        consumer: Option<Value>,
+        #[serde(default)]
+        run_token: Option<String>,
+        #[serde(default)]
+        principal: Option<PrincipalClaim>,
+    },
     /// An RPC request.
     Request {
         id: String,
@@ -482,6 +558,149 @@ pub enum ChassisMsg {
         params: Value,
     },
 }
+
+/// What a redacted credential prints as.
+const REDACTED: &str = "<redacted>";
+
+impl std::fmt::Debug for ChassisMsg {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ChassisMsg::Auth {
+                secret,
+                consumer,
+                run_token,
+                principal,
+            } => f
+                .debug_struct("Auth")
+                .field("secret", &secret.as_ref().map(|_| REDACTED))
+                .field("consumer", consumer)
+                .field("run_token", &run_token.as_ref().map(|_| REDACTED))
+                .field("principal", principal)
+                .finish(),
+            ChassisMsg::Request { id, method, params } => f
+                .debug_struct("Request")
+                .field("id", id)
+                .field("method", method)
+                .field("params", params)
+                .finish(),
+        }
+    }
+}
+
+/// **WHICH KIND OF RIPPLE STEP A WRITE IS FOR** (R4.S1 spec §2.6).
+/// Named here so the soup's per-write ripple
+/// assertion and any consumer that states one spell the two kinds once.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RippleKind {
+    TypeOne,
+    TypeTwo,
+}
+
+/// **A HARNESS-CLASS CLAIM, AS PRESENTED ON `auth`** (R4.S1 spec §2.3, §2.4
+/// item 4).
+///
+/// There is NO agent variant: an agent is its run token (`auth.run_token`),
+/// whose thread id is read off signed claims and never off a frame. An
+/// unknown `kind`, or an unknown field inside a known one, is a parse failure
+/// — so the frame is [`ClientFrame::Invalid`], never silently a reader.
+///
+/// **There is no ripple variant either — re-shaped in R4.S14 pass c.**
+/// Pass b carried `Ripple { ripple_kind,
+/// run_id, step_id, scope, token }`, one connection per ripple step. The design:
+/// the ripple runner authenticates as a SUPERVISED SERVICE IDENTITY on its own
+/// verified connection ([`PrincipalClaim::Service`]) and asserts the ripple
+/// kind, run id and step id PER WRITE; the producer records them in provenance
+/// under that verified service identity. So nothing ripple-shaped is a
+/// connection property any more, and no ripple holds a token of its own.
+///
+/// `token` is the producer's per-boot harness token. The chassis does not
+/// check it: [`crate::server::Producer::verify_principal`] does, and the
+/// chassis's gate refuses a claim presented WITHOUT the daemon secret before
+/// that hook is ever called (`Producer::principal_requires_secret`). `Debug`
+/// redacts it.
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+pub enum PrincipalClaim {
+    /// The harness's own machinery, naming the operation it performs.
+    Harness { operation: String, token: String },
+    /// A supervised service — the ripple runner is the first — naming
+    /// itself. What it may assert per request is the producer's rule, not the
+    /// chassis's.
+    Service { service: String, token: String },
+}
+
+impl PrincipalClaim {
+    /// The harness token the claim was presented with. Named to be
+    /// conspicuous, as [`Bearer::expose`] is.
+    pub fn expose_token(&self) -> &str {
+        match self {
+            PrincipalClaim::Harness { token, .. } | PrincipalClaim::Service { token, .. } => token,
+        }
+    }
+
+    /// The claim with its credential removed — what a producer's
+    /// `verify_principal` hands back once it has checked the token.
+    pub fn principal(&self) -> Principal {
+        match self {
+            PrincipalClaim::Harness { operation, .. } => Principal::Harness {
+                operation: operation.clone(),
+            },
+            PrincipalClaim::Service { service, .. } => Principal::Service {
+                service: service.clone(),
+            },
+        }
+    }
+}
+
+impl std::fmt::Debug for PrincipalClaim {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            PrincipalClaim::Harness { operation, .. } => f
+                .debug_struct("Harness")
+                .field("operation", operation)
+                .field("token", &REDACTED)
+                .finish(),
+            PrincipalClaim::Service { service, .. } => f
+                .debug_struct("Service")
+                .field("service", service)
+                .field("token", &REDACTED)
+                .finish(),
+        }
+    }
+}
+
+/// **A VERIFIED PRINCIPAL** — what a producer's `verify_principal` returns and
+/// what the chassis keeps for the connection's life. A [`PrincipalClaim`] with
+/// the credential gone: nothing downstream of the handshake needs the token.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum Principal {
+    Harness { operation: String },
+    Service { service: String },
+}
+
+/// **WHY A HANDSHAKE WAS REFUSED**, on the `auth_ack` (R4.S1 spec §2.4 item 4,
+/// §3.7). The wire form of a [`Refusal`]: the code and the prose.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AuthError {
+    pub code: String,
+    pub message: String,
+}
+
+impl From<Refusal> for AuthError {
+    fn from(r: Refusal) -> Self {
+        Self {
+            code: r.code.to_string(),
+            message: r.message,
+        }
+    }
+}
+
+/// The sentence a credential-less `auth` frame is refused with.
+pub const AUTH_NO_CREDENTIAL: &str =
+    "invalid frame: an `auth` frame must carry a credential — `secret`, `run_token` or \
+     `principal`";
 
 /// What one client text frame turned out to be.
 #[derive(Debug)]
@@ -517,6 +736,16 @@ pub fn classify(text: &str) -> ClientFrame {
     };
     if tag == "auth" || tag == "request" {
         return match serde_json::from_value::<ChassisMsg>(raw) {
+            // **A FRAME WITH NO CREDENTIAL AT ALL IS STILL INVALID** — before
+            // `secret` became optional this was serde's "missing field
+            // `secret`"; it is now said in words, and the socket is left open
+            // and unauthenticated exactly as before (R4.S1 spec §3.7).
+            Ok(ChassisMsg::Auth {
+                secret: None,
+                run_token: None,
+                principal: None,
+                ..
+            }) => ClientFrame::Invalid(AUTH_NO_CREDENTIAL.into()),
             Ok(m) => ClientFrame::Chassis(m),
             Err(e) => ClientFrame::Invalid(format!("invalid frame: {e}")),
         };
@@ -556,6 +785,13 @@ pub enum ChassisServerMsg {
         /// Present iff `ok`. The handshake is what gates issuing it.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         bearer: Option<Bearer>,
+        /// **WHY, on a refused handshake** (R4.S1 spec §2.4 item 4). ADDITIVE
+        /// and absent rather than `null` when there is nothing to say, so a
+        /// producer that has not opted in (`Producer::credential_refusal`)
+        /// still answers a wrong secret with exactly `{"type":"auth_ack",
+        /// "ok":false}`. Never present when `ok`.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        error: Option<AuthError>,
     },
     /// Answers a `request.id`.
     Response { correlate: String, outcome: Outcome },
@@ -927,7 +1163,9 @@ mod tests {
             other => panic!("a producer frame must reach the producer: {other:?}"),
         }
         match classify(r#"{"type":"auth","secret":"s"}"#) {
-            ClientFrame::Chassis(ChassisMsg::Auth { secret }) => assert_eq!(secret, "s"),
+            ClientFrame::Chassis(ChassisMsg::Auth { secret, .. }) => {
+                assert_eq!(secret.as_deref(), Some("s"))
+            }
             other => panic!("auth is the chassis's: {other:?}"),
         }
         match classify(r#"{"type":"request","id":"1","method":"shapes.list"}"#) {
@@ -1014,6 +1252,7 @@ mod tests {
             serde_json::to_string(&ChassisServerMsg::AuthAck {
                 ok: true,
                 bearer: Some(Bearer::from_token("deadbeef")),
+                error: None,
             })
             .unwrap(),
             r#"{"type":"auth_ack","ok":true,"bearer":"deadbeef"}"#
@@ -1022,6 +1261,7 @@ mod tests {
             serde_json::to_string(&ChassisServerMsg::AuthAck {
                 ok: false,
                 bearer: None,
+                error: None,
             })
             .unwrap(),
             r#"{"type":"auth_ack","ok":false}"#
@@ -1039,6 +1279,186 @@ mod tests {
         assert_eq!(
             serde_json::to_string(&r).unwrap(),
             r#"{"type":"response","correlate":"17","outcome":{"type":"error","error":"no such method","code":"unknown_method"}}"#
+        );
+    }
+
+    // ── R4.S14 pass b: the handshake frame's additive fields ────────────────
+
+    /// **EVERY `auth` SHAPE, CLASSIFIED.** The legacy secret-only frame parses
+    /// with every new field absent; each credential parses alone; a frame with
+    /// no credential, an unknown principal kind, and an unknown field inside a
+    /// known kind are each `Invalid`. Paired arms, so a classifier that admitted
+    /// everything fails the last three and one that refused everything fails
+    /// the first three.
+    #[test]
+    fn auth_frames_parse_additively_and_a_credentialless_one_is_invalid() {
+        match classify(r#"{"type":"auth","secret":"s"}"#) {
+            ClientFrame::Chassis(ChassisMsg::Auth {
+                secret,
+                consumer,
+                run_token,
+                principal,
+            }) => {
+                assert_eq!(secret.as_deref(), Some("s"));
+                assert!(consumer.is_none() && run_token.is_none() && principal.is_none());
+            }
+            other => panic!("the legacy frame must parse as before: {other:?}"),
+        }
+        match classify(
+            r#"{"type":"auth","consumer":{"name":"pen","shape_version":"1","build":"abc"},"run_token":"rt1.aa.bb"}"#,
+        ) {
+            ClientFrame::Chassis(ChassisMsg::Auth {
+                secret,
+                consumer,
+                run_token,
+                ..
+            }) => {
+                assert!(secret.is_none());
+                assert_eq!(run_token.as_deref(), Some("rt1.aa.bb"));
+                assert_eq!(consumer.unwrap()["build"], "abc");
+            }
+            other => panic!("an agent frame (token, no secret) must parse: {other:?}"),
+        }
+        match classify(
+            r#"{"type":"auth","principal":{"kind":"harness","operation":"migrate","token":"t"}}"#,
+        ) {
+            ClientFrame::Chassis(ChassisMsg::Auth { principal, .. }) => assert_eq!(
+                principal,
+                Some(PrincipalClaim::Harness {
+                    operation: "migrate".into(),
+                    token: "t".into()
+                })
+            ),
+            other => panic!("a harness principal must parse: {other:?}"),
+        }
+        match classify(
+            r#"{"type":"auth","secret":"s","principal":{"kind":"service","service":"ripple-runner","token":"t"}}"#,
+        ) {
+            ClientFrame::Chassis(ChassisMsg::Auth { principal: Some(p), .. }) => {
+                assert_eq!(
+                    p.principal(),
+                    Principal::Service {
+                        service: "ripple-runner".into(),
+                    }
+                );
+                assert_eq!(p.expose_token(), "t");
+            }
+            other => panic!("a service principal must parse: {other:?}"),
+        }
+        for (frame, why) in [
+            (r#"{"type":"auth"}"#, "no field at all"),
+            (
+                r#"{"type":"auth","consumer":{"name":"a","shape_version":"1"}}"#,
+                "a consumer is not a credential",
+            ),
+            (r#"{"type":"auth","secret":null}"#, "a null secret is absent"),
+        ] {
+            match classify(frame) {
+                ClientFrame::Invalid(m) => assert_eq!(m, AUTH_NO_CREDENTIAL, "{why}"),
+                other => panic!("{why}: must be Invalid, got {other:?}"),
+            }
+        }
+        for (frame, why) in [
+            (
+                r#"{"type":"auth","principal":{"kind":"agent","thread":"t","token":"x"}}"#,
+                "there is no agent principal — an agent is its run token",
+            ),
+            (
+                r#"{"type":"auth","principal":{"kind":"harness","operation":"o","token":"t","thread":"x"}}"#,
+                "an unknown field inside a known kind",
+            ),
+            (
+                r#"{"type":"auth","secret":"s","principal":{"kind":"ripple","ripple_kind":"type_two","run_id":"r","step_id":"st","scope":[],"token":"t"}}"#,
+                "there is no ripple principal since pass c — a ripple step is asserted per write",
+            ),
+            (
+                r#"{"type":"auth","secret":"s","principal":{"kind":"service","service":"r","token":"t","step_id":"st"}}"#,
+                "a step id is not a property of a service connection",
+            ),
+        ] {
+            match classify(frame) {
+                ClientFrame::Invalid(m) => assert!(m.starts_with("invalid frame: "), "{why}: {m}"),
+                other => panic!("{why}: must be Invalid, never a reader, got {other:?}"),
+            }
+        }
+    }
+
+    /// **THE CREDENTIALS NEVER REACH A `{:?}`.** Paired: the same `Debug` still
+    /// prints the non-secret fields, so a `Debug` that printed nothing at all
+    /// (a constant) fails the second half.
+    #[test]
+    fn auth_debug_redacts_secret_run_token_and_principal_token() {
+        let m = match classify(
+            r#"{"type":"auth","secret":"hunter2-secret","run_token":"rt1.c1a1m5.ma0c","consumer":{"name":"pen-consumer","shape_version":"1"},"principal":{"kind":"harness","operation":"migrate-op","token":"harness-tok-9"}}"#,
+        ) {
+            ClientFrame::Chassis(m) => m,
+            other => panic!("{other:?}"),
+        };
+        let d = format!("{m:?}");
+        for leaked in ["hunter2-secret", "rt1.c1a1m5.ma0c", "harness-tok-9"] {
+            assert!(!d.contains(leaked), "Debug leaked {leaked}: {d}");
+        }
+        assert!(d.contains("<redacted>"), "{d}");
+        assert!(d.contains("pen-consumer") && d.contains("migrate-op"), "{d}");
+
+        let r = match classify(r#"{"type":"request","id":"9","method":"whoami-m"}"#) {
+            ClientFrame::Chassis(m) => format!("{m:?}"),
+            other => panic!("{other:?}"),
+        };
+        assert!(r.contains("whoami-m") && r.contains("\"9\""), "{r}");
+    }
+
+    /// **`detail` IS ADDITIVE ON THE WIRE (R4.S1 spec §3.6 item 2).** A refusal
+    /// built with [`Refusal::new`] serializes byte-identically to the form
+    /// every consumer has read since `code` was added; one built with
+    /// [`Refusal::with_detail`] carries `detail` after `code`, and the frame
+    /// round-trips. Paired, so an Outcome that always or never wrote `detail`
+    /// fails one half.
+    #[test]
+    fn refusal_detail_is_additive_and_round_trips() {
+        let plain = Outcome::refused(Refusal::new(codes::MALFORMED, "no"));
+        assert_eq!(
+            serde_json::to_string(&plain).unwrap(),
+            r#"{"type":"error","error":"no","code":"malformed"}"#
+        );
+        let w = serde_json::json!({"kind": "refused", "witnesses": [{"kind": "missing_parameter", "name": "x"}]});
+        let detailed = Outcome::refused(Refusal::with_detail(codes::REFUSED, "turned away", w.clone()));
+        let bytes = serde_json::to_string(&detailed).unwrap();
+        assert_eq!(
+            bytes,
+            r#"{"type":"error","error":"turned away","code":"refused","detail":{"kind":"refused","witnesses":[{"kind":"missing_parameter","name":"x"}]}}"#
+        );
+        let back: Outcome = serde_json::from_str(&bytes).unwrap();
+        assert_eq!(back, detailed);
+        let old: Outcome = serde_json::from_str(r#"{"type":"error","error":"no","code":"malformed"}"#).unwrap();
+        assert_eq!(old, plain, "a frame written before `detail` existed still parses");
+        assert!(codes::ALL.contains(&codes::REFUSED));
+    }
+
+    /// **THE ONE REFUSED-HANDSHAKE FRAME OF §3.7, AS BYTES**, and the legacy
+    /// refusal still byte-identical when no error is given.
+    #[test]
+    fn auth_ack_error_is_additive_and_matches_the_spec_bytes() {
+        assert_eq!(
+            serde_json::to_string(&ChassisServerMsg::AuthAck {
+                ok: false,
+                bearer: None,
+                error: Some(AuthError::from(Refusal::new(
+                    codes::UNAUTHORIZED,
+                    "unauthorized: credentials not accepted"
+                ))),
+            })
+            .unwrap(),
+            r#"{"type":"auth_ack","ok":false,"error":{"code":"unauthorized","message":"unauthorized: credentials not accepted"}}"#
+        );
+        assert_eq!(
+            serde_json::to_string(&ChassisServerMsg::AuthAck {
+                ok: false,
+                bearer: None,
+                error: None,
+            })
+            .unwrap(),
+            r#"{"type":"auth_ack","ok":false}"#
         );
     }
 }

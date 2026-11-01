@@ -84,6 +84,7 @@ const NOT_ENDPOINT: &[(&str, &str)] = &[
     // scratch root), so it lives there only. V1.2's CAULDRON_ENV_SOURCE stays.
     ("CAULDRON_ENV_SOURCE", "V1.2: whether CAULDRON_ENV was defaulted by the router; picks which existing cauldron opens under the (isolated) CAULDRON_HOME root, never an address"),
     ("CAULDRON_ISOLATED", "the test-only isolation MARKER (REL-6a2, cauldron::live::ISOLATED_ENV): not an address, but required =1 on every launch (LAUNCH_ALSO)"),
+    ("CAULDRON_TEST_NOW", "UPTIME-DST (JOBS-DST's pattern): supervise::now's pinned unix seconds, read ONLY in an isolated process; a time, never an address"),
     ("CARGO_PKG_VERSION", "compile time"),
     ("CARGO_MANIFEST_DIR", "compile time"),
     ("TUI_BUILD_COMMIT", "compile time"),

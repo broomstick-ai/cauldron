@@ -83,3 +83,4 @@ mod tokens_live;
 mod accounts_live;
 mod account_ids_v1acct;
 mod account_ids_v1acct2;
+mod install_key_v1acct3;

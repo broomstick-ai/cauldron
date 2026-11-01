@@ -125,6 +125,9 @@ struct Sandbox {
     env: String,
     daemon: Option<Child>,
     log: PathBuf,
+    /// JOBS-DST: extra environment for every `cauldron` this sandbox runs
+    /// (the injected zone, `TZ`).
+    extra_env: Vec<(String, String)>,
 }
 
 /// R5.S9: the DROP GUARD. It runs on success AND on panic (unwind), and it
@@ -291,14 +294,23 @@ impl Sandbox {
         }
         std::fs::create_dir_all(root.join("cwd-here")).unwrap();
         let log = root.join("daemon.log");
-        Sandbox { root, env, daemon: None, log }
+        Sandbox { root, env, daemon: None, log, extra_env: Vec::new() }
     }
 
     fn cauldron(&self, args: &[&str]) -> (i32, String) {
+        self.cauldron_with(args, &[])
+    }
+
+    /// [`Sandbox::cauldron`] with more environment (JOBS-DST: an injected
+    /// `CAULDRON_TEST_NOW` and `TZ`).
+    fn cauldron_with(&self, args: &[&str], more: &[(&str, &str)]) -> (i32, String) {
         let out = Command::new(env!("CARGO_BIN_EXE_cauldron"))
             .args(args)
             .env("CAULDRON_HOME", &self.root)
             .env("CAULDRON_ENV", &self.env)
+            .env(crate::grants::ALLOW_ENV, crate::grants::owned(&self.root, &self.daemon.iter().map(Child::id).collect::<Vec<_>>()))
+            .envs(self.extra_env.iter().map(|(k, v)| (k.as_str(), v.as_str())))
+            .envs(more.iter().copied())
             .output()
             .expect("spawn cauldron");
         (
@@ -438,6 +450,8 @@ impl Sandbox {
             .arg("daemon")
             .env("CAULDRON_HOME", &self.root)
             .env("CAULDRON_ENV", &self.env)
+            .env(crate::grants::ALLOW_ENV, crate::grants::owned(&self.root, &[]))
+            .envs(self.extra_env.iter().map(|(k, v)| (k.as_str(), v.as_str())))
             .stdout(log.try_clone().unwrap())
             .stderr(log)
             .spawn()
@@ -543,7 +557,14 @@ fn with_restart_never_a_killed_service_stays_down_past_the_backoff() {
     sb.start_daemon();
     let first = wait_for("ui up under the daemon", budget(), || sb.up("ui", port));
     let cfirst = wait_for("ctl up under the daemon", budget(), || sb.up("ctl", cport));
-    let launches = sb.acts("ui", "launch").len();
+    // CLI-ISO: the launch writes the row BEFORE it appends its LAUNCH record
+    // (cli/src/main.rs, the one chokepoint), so `up` can be true while the
+    // record is still owed; a count taken then reads 0 and the owed record
+    // later reads as "a relaunch". Count once ui's first launch is recorded.
+    let launches = wait_for("ui's first launch recorded", budget(), || {
+        let n = sb.acts("ui", "launch").len();
+        (n >= 1).then_some(n)
+    });
     let killed = Instant::now();
     kill9(first);
     kill9(cfirst);
@@ -1054,14 +1075,17 @@ fn r5s3d1_a_refusal_of_a_second_label_is_logged_though_the_record_already_says_r
 /// nowhere near the start time) runs at load, and `jobs.json` must carry the
 /// slot the test computes on its own clock — while running (the spawn write)
 /// and after the pass (the `ran` write).
+///
+/// JOBS-DST: the holder runs with its zone INJECTED (`TZ=UTC`), so the
+/// expected slot is plain arithmetic on one reading of now, taken once —
+/// no `/bin/date`, no machine zone, no DST, and no second reading that a
+/// midnight could fall between.
 #[test]
 fn the_holder_persists_the_calendar_slot_a_pass_was_started_for() {
     let mut sb = Sandbox::new("jobslot");
-    let out = Command::new("/bin/date").arg("+%s %H:%M:%S").output().unwrap();
-    let text = String::from_utf8(out.stdout).unwrap();
-    let (now, hms) = text.trim().split_once(' ').unwrap();
-    let now: u64 = now.parse().unwrap();
-    let sod: u64 = hms.split(':').map(|x| x.parse::<u64>().unwrap()).fold(0, |a, x| a * 60 + x);
+    sb.extra_env.push(("TZ".into(), "UTC".into()));
+    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs();
+    let sod = now % 86_400;
     let target = (sod + 12 * 3600) % 86_400 / 60 * 60;
     let at = format!("{:02}:{:02}", target / 3600, target % 3600 / 60);
     let expected = now - (sod + 86_400 - target) % 86_400;
@@ -1381,69 +1405,89 @@ fn a_signed_bundle_is_installed_whole_with_its_seal_intact() {
 /// R5.S5 (H179-1, Deploy5-2): `status` prints a CALENDAR job's next slot —
 /// in `--json` as `next_slot {unix, utc, local, due}` and in the text detail —
 /// and an INTERVAL job's `next_slot` is `null`. No holder runs: the slot is
-/// read off the record exactly as the holder's first look reads it. The
-/// expected instant is computed here from one `/bin/date` reading, and the
-/// UTC/local strings are checked against `/bin/date -u -r` / `-r`, an
-/// instrument independent of cauldron's own formatter.
+/// read off the record exactly as the holder's first look reads it.
+///
+/// JOBS-DST: replaces CLI-ISO's `/bin/date` arithmetic, which read the
+/// current date on every call and was itself wrong across both transitions.
+/// Every `status` here runs on an INJECTED clock — `CAULDRON_TEST_NOW` (the
+/// isolated process's wall clock) and `TZ` — at fixed instants on the two
+/// 2026 US transition nights, and every expected value is a literal (from
+/// Python's `zoneinfo` when the test was written). Nothing here reads the
+/// real clock or the machine's zone. The pre-JOBS-DST arithmetic gives the
+/// value in each row's `old` note; the fix gives `unix`.
 #[test]
 fn status_prints_a_calendar_jobs_next_slot_in_utc_and_local() {
     let sb = Sandbox::new("nextslot");
-    let out = Command::new("/bin/date").arg("+%s %H:%M:%S").output().unwrap();
-    let text = String::from_utf8(out.stdout).unwrap();
-    let (now, hms) = text.trim().split_once(' ').unwrap();
-    let now: u64 = now.parse().unwrap();
-    let sod: u64 = hms.split(':').map(|x| x.parse::<u64>().unwrap()).fold(0, |a, x| a * 60 + x);
-    let target = (sod + 2 * 3600) % 86_400 / 60 * 60;
-    let at = format!("{:02}:{:02}", target / 3600, target % 3600 / 60);
-    let upcoming = now + (target + 86_400 - sod) % 86_400;
-    sb.declare_job("cj", "", &format!("at = \"{at}\"\nargs = [\"run\"]\nrun_at_load = false"), "");
+    let jobs_json = sb.root.join("data").join(&sb.env).join("jobs.json");
+    for (name, at) in [("cj", "03:15"), ("dj", "23:00"), ("gj", "02:30")] {
+        sb.declare_job(name, "", &format!("at = \"{at}\"\nargs = [\"run\"]\nrun_at_load = false"), "");
+        sb.build_and_pin(name);
+    }
     sb.declare_job("ij", "", "every_secs = 3600\nargs = [\"run\"]\nrun_at_load = false", "");
-    sb.build_and_pin("cj");
     sb.build_and_pin("ij");
-    let date = |args: &[&str]| -> String {
-        String::from_utf8(Command::new("/bin/date").args(args).output().unwrap().stdout).unwrap().trim().to_string()
-    };
-    let row = |name: &str| -> serde_json::Value {
-        let (rc, out) = sb.cauldron(&["status", name, "--json"]);
+    let row = |name: &str, now: u64, tz: &str| -> serde_json::Value {
+        let now = now.to_string();
+        let (rc, out) = sb.cauldron_with(&["status", name, "--json"], &[("CAULDRON_TEST_NOW", &now), ("TZ", tz)]);
         assert_eq!(rc, 0, "{out}");
         let v: serde_json::Value = serde_json::from_str(&out).unwrap_or_else(|e| panic!("{e}: {out}"));
         v["services"].as_array().unwrap().iter().find(|r| r["service"] == name).cloned().unwrap()
     };
+    const LA: &str = "America/Los_Angeles";
 
-    // 1. Never run: the next slot is the upcoming one, not due.
-    let r = row("cj");
-    let n = &r["next_slot"];
-    let unix = n["unix"].as_u64().unwrap_or_else(|| panic!("no next_slot for a calendar job: {r}"));
-    assert!(unix.abs_diff(upcoming) <= 2, "next slot {unix} is not the {at} slot {upcoming}: {r}");
-    assert!(unix > now, "a never-run job's next slot is in the future: {r}");
-    assert_eq!(n["due"], false, "{r}");
-    assert_eq!(n["utc"].as_str().unwrap(), date(&["-u", "-r", &unix.to_string(), "+%Y-%m-%dT%H:%M:%SZ"]), "{r}");
-    let local = n["local"].as_str().unwrap_or_else(|| panic!("no local time: {r}"));
-    assert!(local.starts_with(&date(&["-r", &unix.to_string(), "+%Y-%m-%dT%H:%M:%S"])), "{local}");
-    assert!(local.contains(&format!("T{at}:00")), "the local time of day is the declared `at`: {local}");
-    let (rc, out) = sb.cauldron(&["status", "cj"]);
+    // (job, injected now, TZ, the record's last_slot (None: never run),
+    //  expected unix, utc, local, due, what it shows)
+    #[rustfmt::skip]
+    let cases: [(&str, u64, &str, Option<u64>, u64, &str, &str, bool, &str); 6] = [
+        // now 2026-11-01T08:30Z = 01:30 PDT, the FIRST 01:30 of the fall-back night.
+        ("cj", 1_793_521_800, LA, None, 1_793_531_700, "2026-11-01T11:15:00Z", "2026-11-01T03:15:00-08:00 PST", false,
+         "never run, 01:30 PDT: the upcoming 03:15 is PST (old: 10:15Z, now + 1 h 45 m of wall clock)"),
+        // now 2026-11-01T09:30Z = 01:30 PST, the SECOND 01:30.
+        ("cj", 1_793_525_400, LA, None, 1_793_531_700, "2026-11-01T11:15:00Z", "2026-11-01T03:15:00-08:00 PST", false,
+         "never run, 01:30 PST: the same 03:15 PST"),
+        // now 2026-11-02T06:00Z = Nov 1 22:00 PST; last slot Oct 28 23:00 PDT.
+        ("dj", 1_793_599_200, LA, Some(1_793_253_600), 1_793_512_800, "2026-11-01T06:00:00Z", "2026-10-31T23:00:00-07:00 PDT", true,
+         "three slots missed, 22:00 PST: due at yesterday's 23:00 PDT (old: 07:00Z, now - 23 h)"),
+        // now 2026-03-09T05:00Z = Mar 8 22:00 PDT; last slot Mar 5 23:00 PST.
+        ("dj", 1_773_032_400, LA, Some(1_772_780_400), 1_772_953_200, "2026-03-08T07:00:00Z", "2026-03-07T23:00:00-08:00 PST", true,
+         "three slots missed, 22:00 PDT: due at yesterday's 23:00 PST (old: 06:00Z, now - 23 h)"),
+        // now 2026-03-08T09:30Z = 01:30 PST, half an hour before the gap.
+        ("gj", 1_772_962_200, LA, None, 1_772_965_800, "2026-03-08T10:30:00Z", "2026-03-08T03:30:00-07:00 PDT", false,
+         "never run: a NONEXISTENT 02:30 runs at 03:30 PDT, moved forward by the gap"),
+        // A zone with no DST, the same instant as the first row.
+        ("cj", 1_793_521_800, "America/Phoenix", None, 1_793_528_100, "2026-11-01T10:15:00Z", "2026-11-01T03:15:00-07:00 MST", false,
+         "no DST: 01:30 MST, the 03:15 MST slot"),
+    ];
+    for (name, now, tz, last, unix, utc, local, due, what) in cases {
+        match last {
+            None => {
+                let _ = std::fs::remove_file(&jobs_json);
+            }
+            Some(l) => std::fs::write(
+                &jobs_json,
+                format!("{{\"{name}\": {{\"state\": \"ok\", \"version\": \"v\", \"detail\": \"a pass\", \"last_slot\": {l}}}}}"),
+            )
+            .unwrap(),
+        }
+        let r = row(name, now, tz);
+        let n = &r["next_slot"];
+        assert_eq!(n["unix"].as_u64(), Some(unix), "{what}: {r}");
+        assert_eq!(n["utc"].as_str(), Some(utc), "{what}: {r}");
+        assert_eq!(n["local"].as_str(), Some(local), "{what}: {r}");
+        assert_eq!(n["due"], due, "{what}: {r}");
+        assert_eq!(r["detail"].as_str().unwrap().contains("DUE NOW"), due, "{what}: {r}");
+    }
+    // Sentinel: the injected clock is what `status` read — the same job and
+    // record a day later (2026-11-02T08:30Z) gives the NEXT day's slot.
+    let _ = std::fs::remove_file(&jobs_json);
+    let r = row("cj", 1_793_521_800 + 86_400, LA);
+    assert_eq!(r["next_slot"]["unix"].as_u64(), Some(1_793_531_700 + 86_400), "the injected now was not read: {r}");
+    // The text status carries the same slot.
+    let (rc, out) = sb.cauldron_with(&["status", "cj"], &[("CAULDRON_TEST_NOW", "1793521800"), ("TZ", LA)]);
     assert_eq!(rc, 0, "{out}");
-    assert!(out.contains(&format!("next slot {}", n["utc"].as_str().unwrap())), "text status lacks the next slot:\n{out}");
+    assert!(out.contains("next slot 2026-11-01T11:15:00Z"), "text status lacks the next slot:\n{out}");
 
-    // 2. Opposed: a record whose last pass covered a slot three days back
-    //    reads DUE, at the most recent slot (yesterday's) — not the upcoming.
-    let yesterday = upcoming - 86_400;
-    std::fs::write(
-        sb.root.join("data").join(&sb.env).join("jobs.json"),
-        format!(
-            "{{\"cj\": {{\"state\": \"ok\", \"version\": \"v\", \"detail\": \"a pass\", \"last_slot\": {}}}}}",
-            upcoming - 3 * 86_400
-        ),
-    )
-    .unwrap();
-    let r = row("cj");
-    assert_eq!(r["next_slot"]["due"], true, "three slots missed must read due: {r}");
-    let unix = r["next_slot"]["unix"].as_u64().unwrap();
-    assert!(unix.abs_diff(yesterday) <= 2, "due slot {unix} is not the most recent {yesterday}: {r}");
-    assert!(r["detail"].as_str().unwrap().contains("DUE NOW"), "{r}");
-
-    // 3. An interval job has no slot.
-    let r = row("ij");
+    // An interval job has no slot.
+    let r = row("ij", 1_793_521_800, LA);
     assert!(r["next_slot"].is_null(), "an interval job printed a next slot: {r}");
     assert!(!r["detail"].as_str().unwrap().contains("next slot"), "{r}");
 }

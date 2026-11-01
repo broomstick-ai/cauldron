@@ -332,6 +332,9 @@ mod tests {
         let reg = Registration { binary: "/x/fake".into(), probe: "seam".into() };
         let se2 = se.clone();
         let (_svc, addr) = start(&se, &attested, &reg, move |addr| Fake { se: se2, addr }).unwrap();
+        // RV1.S1h: the service bound this listener in-process; REL-6a8 admits an
+        // isolated dial only to a listener this process granted (address + pid).
+        env::egress::grant_addr(addr).unwrap(); // REL-6a8: given
 
         let table = Table::load(&se.env, &se.data_root, &se.seams).unwrap();
         let row = table.seams.get("fake").expect("the service wrote its row");
@@ -364,12 +367,16 @@ mod tests {
         let attested = env::warnings::attest_warnings!(Fake);
         let reg = Registration { binary: String::new(), probe: "seam".into() };
         let se2 = se.clone();
-        let (_svc, _addr) = start(&se, &attested, &reg, move |addr| Fake { se: se2, addr }).unwrap();
+        let (_svc, addr) = start(&se, &attested, &reg, move |addr| Fake { se: se2, addr }).unwrap();
+        env::egress::grant_addr(addr).unwrap(); // REL-6a8: given (RV1.S1h)
         let table = Table::load(&se.env, &se.data_root, &se.seams).unwrap();
         let mut row = table.seams.get("fake").unwrap().clone();
         row.boot_token = "a-token-nobody-holds".into();
         let verdict = env::seams::probe(&row);
-        assert_ne!(verdict.state, SeamState::Live, "{}", verdict.detail);
+        // RV1.S1h: exactly wrong-owner — an isolation refusal (no listener
+        // reached) is also "not Live", so `assert_ne!(.., Live)` passed without
+        // the handshake ever running.
+        assert_eq!(verdict.state, SeamState::StaleWrongOwner, "{}", verdict.detail);
     }
 
     /// An attestation minted for another shape is refused BEFORE anything is

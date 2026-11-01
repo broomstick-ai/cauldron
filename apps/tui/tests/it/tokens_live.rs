@@ -78,6 +78,15 @@ fn face(port: u16) -> App {
     face_on(port, CTab::Status)
 }
 
+/// **A BACKSTOP, NOT A VERDICT** (V1-ACCT3, V1-ACCT2-I on `f1`). [`pump`]
+/// returns the moment the face shows what it waits for: that event is the
+/// wait. This bound only stops a test that would otherwise hang. At 5 s it
+/// measured the scheduler: `f1` failed at load ~24 with the face honestly
+/// `connecting to the threads daemon…`, two channel hops from `Connected`.
+/// It sits above the seam's own `CONNECT_TIMEOUT` and first backoff, so
+/// a run that needs a retry still finishes inside it.
+const PUMP_BACKSTOP: Duration = Duration::from_secs(30);
+
 fn pump(a: &mut App, what: &str, done: impl Fn(&App) -> bool) {
     let t0 = Instant::now();
     loop {
@@ -85,7 +94,7 @@ fn pump(a: &mut App, what: &str, done: impl Fn(&App) -> bool) {
         if done(a) {
             return;
         }
-        assert!(t0.elapsed() < Duration::from_secs(5), "timed out waiting for {what}:\n{}", screen(a));
+        assert!(t0.elapsed() < PUMP_BACKSTOP, "timed out after {:?} waiting for {what}:\n{}", t0.elapsed(), screen(a));
         std::thread::sleep(Duration::from_millis(5));
     }
 }

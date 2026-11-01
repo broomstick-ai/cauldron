@@ -145,6 +145,7 @@ fn cauldron(home: &Path, args: &[&str]) -> (i32, String, String) {
 fn base(home: &Path) -> Command {
     let mut c = Command::new(BIN);
     c.env("HOME", home).env_remove("CAULDRON_HOME").env_remove("CAULDRON_ENV").env_remove("ENV");
+    c.env(crate::grants::ALLOW_ENV, crate::grants::owned(home, &[]));
     c
 }
 

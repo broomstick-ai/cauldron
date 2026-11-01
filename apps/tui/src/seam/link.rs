@@ -66,6 +66,14 @@ use super::held::{EntryState, Held, LinkState};
 /// How long one command round trip waits for a reply before giving up.
 pub const REQUEST_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
 
+/// **HOW LONG ONE CONNECT MAY TAKE**: the TCP connect AND the WebSocket
+/// upgrade, together. Unbounded, a daemon that accepts the connection and
+/// never answers the upgrade (wedged, stopped under a debugger, a stranger on
+/// the port) left a face `Connecting` with no retry and nothing said. Past
+/// this the attempt is `Down` with that reason and the ladder below retries.
+/// Loopback answers in milliseconds; five seconds is a wedge, not a slow day.
+pub const CONNECT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
+
 /// Backoff floor and ceiling. Reconnect FOREVER — both faces already do, and
 /// the operator uses them all day; an `OFFLINE` terminal state is a board
 /// affordance for its down page and has no home here.
@@ -416,10 +424,17 @@ async fn run(
             continue;
         }
 
-        let ws = match tokio_tungstenite::connect_async(ws_url()).await {
-            Ok((ws, _)) => ws,
-            Err(e) => {
-                let reason = format!("could not open the chassis socket: {e}");
+        // BOUNDED (CONNECT_TIMEOUT): a daemon that takes the TCP connection
+        // and never answers the upgrade is `Down` with that said, then
+        // retried, never `Connecting` for ever.
+        let ws = match tokio::time::timeout(CONNECT_TIMEOUT, tokio_tungstenite::connect_async(ws_url())).await {
+            Ok(Ok((ws, _))) => ws,
+            failed => {
+                let reason = match failed {
+                    Ok(Err(e)) => format!("could not open the chassis socket: {e}"),
+                    _ => format!("the chassis socket did not answer its handshake within {} ms", CONNECT_TIMEOUT.as_millis()),
+                };
+                warn!("threads daemon unavailable: {reason}; retrying in {backoff}ms");
                 publish(&held, &events, LinkState::Down { reason });
                 tokio::time::sleep(std::time::Duration::from_millis(backoff)).await;
                 backoff = (backoff * 2).min(BACKOFF_MAX_MS);

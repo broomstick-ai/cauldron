@@ -62,7 +62,7 @@ use std::time::Duration;
 use axum::{
     extract::{
         ws::{Message, WebSocket, WebSocketUpgrade},
-        State,
+        ConnectInfo, State,
     },
     response::IntoResponse,
     routing::get,
@@ -72,8 +72,11 @@ use futures::{SinkExt, StreamExt};
 use serde_json::{json, Value};
 
 use crate::envelope::{
-    self, ChassisMsg, ChassisServerMsg, ClientFrame, Coded, HealthWire, Identity, Outcome, Refusal,
+    self, AuthError, ChassisMsg, ChassisServerMsg, ClientFrame, Coded, Detailed, HealthWire,
+    Identity, Outcome, Principal, PrincipalClaim, Refusal,
 };
+use crate::ledger::ConsumerIdentity;
+use crate::token::Claims;
 use crate::hub::{Hub, Kind};
 use crate::wire::ConnId;
 
@@ -362,6 +365,25 @@ pub trait Producer: Send + Sync + 'static {
     /// what every refusal carried before R1.
     fn handle<'a>(&'a self, method: &'a str, params: Value) -> BoxFut<'a, Result<Value, Refusal>>;
 
+    /// **ROUTE ONE REQUEST, KNOWING WHO SENT IT — ADDITIVE** (R4.S1 spec §2.4
+    /// item 5, gen-11 Q4).
+    ///
+    /// The chassis calls THIS for every producer request; the default delegates
+    /// to [`Self::handle`], so a producer that never reads the caller (threads)
+    /// compiles and behaves exactly as before. A producer that mints anything
+    /// from the connection implements this one instead, and the caller arrives
+    /// as a TYPE-LEVEL argument rather than a reserved params key — a reserved
+    /// key would be a second place the request could name it.
+    fn handle_as<'a>(
+        &'a self,
+        caller: &'a Caller<'a>,
+        method: &'a str,
+        params: Value,
+    ) -> BoxFut<'a, Result<Value, Refusal>> {
+        let _ = caller;
+        self.handle(method, params)
+    }
+
     /// EXTRA `/health` fields. The six fixed keys are not negotiable and an
     /// extra that shadows one panics at build time — see [`HealthWire::build`].
     fn health_extras(&self) -> BTreeMap<String, Value> {
@@ -410,6 +432,75 @@ pub trait Producer: Send + Sync + 'static {
     /// already have a home behind [`Self::handle`] — see [`crate::mcp`] for
     /// what the chassis owns and what the producer's façade owns.
     fn mcp(&self) -> Option<&dyn crate::mcp::McpTools> {
+        None
+    }
+
+    // ── THE HANDSHAKE'S IDENTITY HOOKS (R4.S1 spec §2.4 items 3-4, §2.5) ──
+    //
+    // Every one defaults to REFUSING or to the behaviour the chassis had before
+    // they existed, on the construction `durable` and `resources` use: a
+    // producer that has not thought about identity cannot imply one by
+    // accident. See [`admit`] for the order the gate asks them in.
+
+    /// **VERIFY A RUN TOKEN PRESENTED ON `auth`.** `Ok(claims)` admits the
+    /// connection as that thread's turn; the claims are kept for the
+    /// connection's life and handed to [`Self::handle_as`].
+    ///
+    /// The WS door's mirror of [`crate::mcp::McpTools::verify`]. Default:
+    /// refused [`envelope::codes::UNSUPPORTED`] — this producer has no key.
+    /// [`verify_run_token_signature`] is the signature check a producer
+    /// holding the machine key calls; the validity WINDOW (is the turn still
+    /// running?) is the producer's, as it is on the MCP door.
+    fn verify_run_token(&self, token: &str) -> Result<Claims, Refusal> {
+        let _ = token;
+        Err(Refusal::new(
+            envelope::codes::UNSUPPORTED,
+            "this producer does not accept a run token at `auth`",
+        ))
+    }
+
+    /// **VERIFY A HARNESS-CLASS PRINCIPAL PRESENTED ON `auth`.** Default:
+    /// refused [`envelope::codes::UNSUPPORTED`].
+    fn verify_principal(&self, claim: &PrincipalClaim) -> Result<Principal, Refusal> {
+        let _ = claim;
+        Err(Refusal::new(
+            envelope::codes::UNSUPPORTED,
+            "this producer does not accept a principal at `auth`",
+        ))
+    }
+
+    /// **DOES THIS CLAIM NEED THE DAEMON SECRET BESIDE IT?** Default `true`
+    /// for every claim. On a producer with a secret, the gate refuses a frame
+    /// that carries a principal and no secret BEFORE [`Self::verify_principal`]
+    /// is called, so an unsecured claim never reaches the token check and
+    /// learns nothing (spec §2.5 rule 2). It lands in the same commit as
+    /// [`PrincipalClaim::Harness`], so no gate ever admits a harness principal
+    /// without the secret.
+    fn principal_requires_secret(&self, claim: &PrincipalClaim) -> bool {
+        let _ = claim;
+        true
+    }
+
+    /// **CHECK THE `consumer` AN `auth` FRAME STATED** — `None` when it stated
+    /// none. Default: accept anything, which is what the chassis did before
+    /// `auth` could carry one. A producer that requires an identity at the
+    /// handshake (the soup: `consumer` with `build`, else `malformed`) refuses
+    /// here; the gate asks it after the secret and before any token.
+    fn check_consumer(&self, consumer: Option<&ConsumerIdentity>) -> Result<(), Refusal> {
+        let _ = consumer;
+        Ok(())
+    }
+
+    /// **THE REFUSAL A CHASSIS-REFUSED CREDENTIAL CARRIES ON ITS `auth_ack`** —
+    /// a wrong secret, a secret beside another credential that does not hold,
+    /// a principal presented without the secret.
+    ///
+    /// `None` — the default — keeps a wrong secret's ack byte-identical to what
+    /// every existing client has always read, `{"type":"auth_ack","ok":false}`;
+    /// a principal-without-secret refusal (a path that did not exist before)
+    /// then carries [`CREDENTIALS_NOT_ACCEPTED`]. A producer that wants every
+    /// refused handshake to say why (spec §3.7's one ack) returns `Some`.
+    fn credential_refusal(&self) -> Option<Refusal> {
         None
     }
 }
@@ -584,6 +675,266 @@ impl Bearers {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// 2b. Who a connection is — the handshake's identity (R4.S1 spec §2.4-2.5)
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// The one sentence a refused credential carries when the producer has not
+/// supplied its own ([`Producer::credential_refusal`]): fixed, so a consumer
+/// cannot tell one refused credential from another by the prose (spec §3.7).
+pub const CREDENTIALS_NOT_ACCEPTED: &str = "unauthorized: credentials not accepted";
+
+/// **WHAT THE HANDSHAKE PROVED ABOUT A CONNECTION**, kept for its life.
+///
+/// All three are `None` on a connection that authenticated with the secret
+/// alone (or arrived at an open socket): a reader, as every connection was
+/// before `auth` could say more.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ConnIdentity {
+    /// The identity the consumer stated on `auth`.
+    pub consumer: Option<ConsumerIdentity>,
+    /// The verified run-token claims — this connection IS that thread's turn.
+    pub claims: Option<Claims>,
+    /// The verified harness-class principal.
+    pub principal: Option<Principal>,
+}
+
+impl ConnIdentity {
+    /// Borrow this identity as the [`Caller`] a request is handed with, with
+    /// no peer address (a caller outside the door — a test, an in-process
+    /// call). The door itself uses [`Self::caller_at`].
+    pub fn caller(&self, conn: ConnId) -> Caller<'_> {
+        self.caller_at(conn, None)
+    }
+
+    /// Borrow this identity as the [`Caller`] for a connection whose remote
+    /// address the door knows.
+    pub fn caller_at(&self, conn: ConnId, peer: Option<SocketAddr>) -> Caller<'_> {
+        Caller {
+            conn,
+            consumer: self.consumer.as_ref(),
+            claims: self.claims.as_ref(),
+            principal: self.principal.as_ref(),
+            peer,
+        }
+    }
+}
+
+/// **WHO SENT THIS REQUEST** — [`Producer::handle_as`]'s argument (spec §2.4
+/// item 5). Everything in it came from the chassis's handshake for this
+/// connection and nothing from the request.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Caller<'c> {
+    pub conn: ConnId,
+    pub consumer: Option<&'c ConsumerIdentity>,
+    pub claims: Option<&'c Claims>,
+    pub principal: Option<&'c Principal>,
+    /// **THE CONNECTION'S REMOTE ADDRESS, AS THE LISTENER ACCEPTED IT**
+    /// (R6.S0 open item 13, decided gen 20; ADDITIVE). A producer that must
+    /// identify the PROCESS on the far side — the `(pid, start-time)` pair of
+    /// R6.S0 §3.1 — starts from this, because the socket's own address is the
+    /// one fact about the peer nothing in a frame can state. `None` when the
+    /// router was served without connect info (a producer that mounts
+    /// [`Chassis::into_router`] on its own `axum::serve`, as threads does);
+    /// [`Chassis::serve_on_with_shutdown`] always supplies it.
+    pub peer: Option<SocketAddr>,
+}
+
+/// **EVERY LIVE CONNECTION'S IDENTITY, BESIDE [`Bearers`].**
+///
+/// Registered when a connection's `auth` succeeds and revoked by the same
+/// connection guard that revokes its bearer, so "the connection ended" and
+/// "the identity expired" are one event under every exit, exactly as the
+/// bearer's are.
+#[derive(Default)]
+pub struct Identities {
+    inner: std::sync::Mutex<std::collections::HashMap<ConnId, ConnIdentity>>,
+}
+
+impl Identities {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Record what this connection's handshake proved.
+    pub fn register(&self, conn: ConnId, id: ConnIdentity) {
+        self.inner.lock().unwrap().insert(conn, id);
+    }
+
+    /// What this connection's handshake proved, if it has completed one.
+    pub fn get(&self, conn: ConnId) -> Option<ConnIdentity> {
+        self.inner.lock().unwrap().get(&conn).cloned()
+    }
+
+    /// Forget this connection. Called from the connection guard.
+    pub fn revoke(&self, conn: ConnId) {
+        self.inner.lock().unwrap().remove(&conn);
+    }
+
+    pub fn live(&self) -> usize {
+        self.inner.lock().unwrap().len()
+    }
+}
+
+/// **THE SIGNATURE CHECK A PRODUCER HOLDING THE MACHINE KEY CALLS FROM
+/// [`Producer::verify_run_token`]** — the WS door's mirror of the signature
+/// half of threads' `McpTools::verify`.
+///
+/// Every [`crate::token::TokenError`] is [`envelope::codes::UNAUTHORIZED`] —
+/// one CODE for malformed, forged and unparseable-claims tokens (spec §2.4 item
+/// 3's table) — but NOT one refusal: the MESSAGE names the `TokenError`
+/// (`run token refused: <why>`), so the three are distinguishable by prose.
+/// A producer that owes spec §3.7's ONE ack (the soup) maps the result to its
+/// own fixed refusal ([`CREDENTIALS_NOT_ACCEPTED`]) and never forwards this
+/// message (corrected R4.S14 pass c, inspection finding F1). The token is never
+/// echoed. A genuine signature over claims that do not parse is the MINTER's
+/// defect, so it is also logged as a warning.
+///
+/// **SIGNATURE ONLY — DISCLOSED.** This does NOT check that the token's turn
+/// is still running: that window is threads' `running_turns` row, which no
+/// threads shape carries yet (R4.S1 spec, gen16b open item 2). A token for an
+/// ended turn verifies here. A producer that can see the window checks it
+/// after this returns, as threads' MCP door does.
+pub fn verify_run_token_signature(
+    key: &crate::token::Key,
+    token: &str,
+) -> Result<Claims, Refusal> {
+    key.verify(token.trim()).map_err(|e| {
+        if let crate::token::TokenError::BadClaims(why) = &e {
+            tracing::warn!(
+                error = %why,
+                "a run token with a GENUINE signature carries claims that do not parse — the \
+                 minter's defect, not the presenter's"
+            );
+        }
+        Refusal::new(envelope::codes::UNAUTHORIZED, format!("run token refused: {e}"))
+    })
+}
+
+/// The producer hooks the handshake asks, as a trait of their own so the
+/// gate's ORDER can be tested without a hub or a socket. Every [`Producer`] is
+/// one.
+pub(crate) trait Gate {
+    fn verify_run_token(&self, token: &str) -> Result<Claims, Refusal>;
+    fn verify_principal(&self, claim: &PrincipalClaim) -> Result<Principal, Refusal>;
+    fn principal_requires_secret(&self, claim: &PrincipalClaim) -> bool;
+    fn check_consumer(&self, consumer: Option<&ConsumerIdentity>) -> Result<(), Refusal>;
+    fn credential_refusal(&self) -> Option<Refusal>;
+}
+
+impl<P: Producer> Gate for P {
+    fn verify_run_token(&self, token: &str) -> Result<Claims, Refusal> {
+        Producer::verify_run_token(self, token)
+    }
+    fn verify_principal(&self, claim: &PrincipalClaim) -> Result<Principal, Refusal> {
+        Producer::verify_principal(self, claim)
+    }
+    fn principal_requires_secret(&self, claim: &PrincipalClaim) -> bool {
+        Producer::principal_requires_secret(self, claim)
+    }
+    fn check_consumer(&self, consumer: Option<&ConsumerIdentity>) -> Result<(), Refusal> {
+        Producer::check_consumer(self, consumer)
+    }
+    fn credential_refusal(&self) -> Option<Refusal> {
+        Producer::credential_refusal(self)
+    }
+}
+
+/// One `auth` frame's fields, as the gate reads them.
+pub(crate) struct AuthFrame<'f> {
+    pub secret: Option<&'f str>,
+    pub consumer: Option<&'f Value>,
+    pub run_token: Option<&'f str>,
+    pub principal: Option<&'f PrincipalClaim>,
+}
+
+/// **THE HANDSHAKE, DECIDED** (R4.S1 spec §2.5 rule 2, §3.7).
+///
+/// `configured` is the producer's [`Producer::secret`]. `Ok` is what the
+/// connection proved; `Err(r)` refuses and closes, `r` riding the ack as its
+/// `error` (`None` = the bare `{"ok":false}` a wrong secret has always had on a
+/// producer that has not opted into [`Producer::credential_refusal`]).
+///
+/// The order, and each step is checked only when the frame carries it — and
+/// "every one presented must hold":
+///
+/// 1. **`secret`**, constant-time against `configured` (an open producer
+///    accepts any, as before). Wrong → refused, and NOTHING after it is
+///    examined — a secret beside a run token that does not hold refuses the
+///    frame before the token is looked at.
+/// 2. **`consumer`**, parsed by the subscribe door's own parser (present and
+///    not an identity → `malformed`), then [`Producer::check_consumer`].
+/// 3. **`run_token`** → [`Producer::verify_run_token`].
+/// 4. **`principal`**: on a producer with a secret, presented WITHOUT one and
+///    [`Producer::principal_requires_secret`] → refused before
+///    [`Producer::verify_principal`] is called; otherwise that hook decides.
+///
+/// A secured producer never admits a frame on which no credential was
+/// verified: a frame with no secret, no token and no principal is refused
+/// here too (the door never sends one — [`envelope::classify`] makes it
+/// `Invalid` first — but this function does not rely on that).
+pub(crate) fn admit<G: Gate + ?Sized>(
+    gate: &G,
+    configured: Option<&str>,
+    frame: AuthFrame<'_>,
+) -> Result<ConnIdentity, Option<Refusal>> {
+    let refused_credential = || {
+        Some(
+            gate.credential_refusal()
+                .unwrap_or_else(|| Refusal::new(envelope::codes::UNAUTHORIZED, CREDENTIALS_NOT_ACCEPTED)),
+        )
+    };
+    // 1. The secret — the chassis's own check, first.
+    if let Some(given) = frame.secret {
+        let ok = match configured {
+            Some(s) => constant_time_eq(s.as_bytes(), given.as_bytes()),
+            None => true,
+        };
+        if !ok {
+            return Err(gate.credential_refusal());
+        }
+    }
+    if configured.is_some()
+        && frame.secret.is_none()
+        && frame.run_token.is_none()
+        && frame.principal.is_none()
+    {
+        return Err(refused_credential());
+    }
+    // 2. Who the consumer says it is.
+    let consumer = match frame.consumer {
+        None | Some(Value::Null) => None,
+        Some(v) => Some(
+            ConsumerIdentity::parse(&json!({ "consumer": v }))
+                .map_err(|e| Some(Refusal::malformed(e)))?,
+        ),
+    };
+    gate.check_consumer(consumer.as_ref()).map_err(Some)?;
+    // 3. The run token.
+    let claims = match frame.run_token {
+        Some(t) => Some(gate.verify_run_token(t).map_err(Some)?),
+        None => None,
+    };
+    // 4. The principal.
+    let principal = match frame.principal {
+        Some(claim) => {
+            if configured.is_some()
+                && frame.secret.is_none()
+                && gate.principal_requires_secret(claim)
+            {
+                return Err(refused_credential());
+            }
+            Some(gate.verify_principal(claim).map_err(Some)?)
+        }
+        None => None,
+    };
+    Ok(ConnIdentity {
+        consumer,
+        claims,
+        principal,
+    })
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // 3. The router
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -592,6 +943,7 @@ impl Bearers {
 pub struct Chassis<P: Producer> {
     producer: Arc<P>,
     bearers: Arc<Bearers>,
+    identities: Arc<Identities>,
     reads: Arc<crate::resource::ReadGate>,
 }
 
@@ -600,6 +952,7 @@ impl<P: Producer> Clone for Chassis<P> {
         Self {
             producer: Arc::clone(&self.producer),
             bearers: Arc::clone(&self.bearers),
+            identities: Arc::clone(&self.identities),
             reads: Arc::clone(&self.reads),
         }
     }
@@ -610,6 +963,7 @@ impl<P: Producer> Chassis<P> {
         Self {
             producer,
             bearers: Arc::new(Bearers::new()),
+            identities: Arc::new(Identities::new()),
             reads: Arc::new(crate::resource::ReadGate::new()),
         }
     }
@@ -620,6 +974,11 @@ impl<P: Producer> Chassis<P> {
     /// test can read it to assert a grant's lifetime.
     pub fn bearers(&self) -> &Arc<Bearers> {
         &self.bearers
+    }
+    /// What each live connection's handshake proved — revoked with its
+    /// bearer. A test can read it to assert an identity's lifetime.
+    pub fn identities(&self) -> &Arc<Identities> {
+        &self.identities
     }
     /// The resource door's in-flight read counter — see
     /// [`crate::resource::MAX_INFLIGHT_RESOURCE_READS`].
@@ -694,7 +1053,14 @@ impl<P: Producer> Chassis<P> {
         let daemon = self.producer().identity().daemon.clone();
         let app = self.into_router();
         let handle = tokio::spawn(async move {
-            if let Err(e) = axum::serve(listener, app)
+            // **WITH CONNECT INFO**, so every connection's [`Caller::peer`] is
+            // the address this listener accepted (R6.S0 open item 13). Additive:
+            // the router and every handler are unchanged, and a request that
+            // reads no `ConnectInfo` is served exactly as before.
+            if let Err(e) = axum::serve(
+                listener,
+                app.into_make_service_with_connect_info::<SocketAddr>(),
+            )
                 .with_graceful_shutdown(shutdown)
                 .await
             {
@@ -743,8 +1109,12 @@ async fn health<P: Producer>(State(c): State<Chassis<P>>) -> impl IntoResponse {
 async fn ws_handler<P: Producer>(
     ws: WebSocketUpgrade,
     State(c): State<Chassis<P>>,
+    // OPTIONAL, so a router served without connect info still upgrades — the
+    // peer is then `None`, never a refused connection.
+    peer: Option<ConnectInfo<SocketAddr>>,
 ) -> impl IntoResponse {
-    ws.on_upgrade(move |socket| drive(socket, c))
+    let peer = peer.map(|ConnectInfo(addr)| addr);
+    ws.on_upgrade(move |socket| drive(socket, c, peer))
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -757,9 +1127,10 @@ async fn ws_handler<P: Producer>(
 /// Every invariant in here was a COMMENT before the move and is a test now
 /// (`tests/chassis_lifecycle.rs`), because this is the one piece of the move
 /// whose correctness lives in arm ordering rather than in types.
-async fn drive<P: Producer>(socket: WebSocket, chassis: Chassis<P>) {
+async fn drive<P: Producer>(socket: WebSocket, chassis: Chassis<P>, peer: Option<SocketAddr>) {
     let producer = Arc::clone(chassis.producer());
     let bearers = Arc::clone(chassis.bearers());
+    let identities = Arc::clone(chassis.identities());
     let (mut tx, mut rx) = socket.split();
 
     // ── THE CONNECTION ID COMES FROM THE HUB, NOT FROM A STATIC ────────────
@@ -786,14 +1157,26 @@ async fn drive<P: Producer>(socket: WebSocket, chassis: Chassis<P>) {
     // **THE BEARER'S LIFETIME IS THE SAME EVENT.** The grant is revoked here
     // too, so a token cannot outlive the socket that was issued it under any
     // exit path either.
-    struct ConnectionGuard<P: Producer>(Arc<P>, Arc<Bearers>, ConnId);
+    //
+    // **AND SO IS THE IDENTITY'S** (R4.S1 spec §2.4 item 4): what the
+    // handshake proved is forgotten by the same `Drop`.
+    struct ConnectionGuard<P: Producer>(Arc<P>, Arc<Bearers>, Arc<Identities>, ConnId);
     impl<P: Producer> Drop for ConnectionGuard<P> {
         fn drop(&mut self) {
-            self.0.hub().dropped(self.2);
-            self.1.revoke(self.2);
+            self.0.hub().dropped(self.3);
+            self.1.revoke(self.3);
+            self.2.revoke(self.3);
         }
     }
-    let _conn_guard = ConnectionGuard(Arc::clone(&producer), Arc::clone(&bearers), conn_id);
+    let _conn_guard = ConnectionGuard(
+        Arc::clone(&producer),
+        Arc::clone(&bearers),
+        Arc::clone(&identities),
+        conn_id,
+    );
+    // This connection's own copy of what its handshake proved, borrowed into
+    // every request's `Caller`. A reader's until an `auth` says otherwise.
+    let mut conn_identity = ConnIdentity::default();
 
     let mut shape_subs: HashSet<(String, String)> = HashSet::new();
     // **STANDING MEMBERSHIP INTEREST, PER SHAPE** — the `(conn, None)` half of
@@ -856,22 +1239,56 @@ async fn drive<P: Producer>(socket: WebSocket, chassis: Chassis<P>) {
                         // always honoured, and every other frame is refused on
                         // its own request id until one succeeds.
                         match frame {
-                            ClientFrame::Chassis(ChassisMsg::Auth { secret: given }) => {
-                                let ok = match &secret {
-                                    Some(s) => constant_time_eq(s.as_bytes(), given.as_bytes()),
-                                    None => true,
+                            ClientFrame::Chassis(ChassisMsg::Auth {
+                                secret: given,
+                                consumer,
+                                run_token,
+                                principal,
+                            }) => {
+                                // The order of every check is [`admit`]'s.
+                                let verdict = admit(
+                                    producer.as_ref(),
+                                    secret.as_deref(),
+                                    AuthFrame {
+                                        secret: given.as_deref(),
+                                        consumer: consumer.as_ref(),
+                                        run_token: run_token.as_deref(),
+                                        principal: principal.as_ref(),
+                                    },
+                                )
+                                // **ONE CONNECTION, ONE IDENTITY.** A second
+                                // `auth` that proves the same thing is
+                                // answered as the first was; one that proves
+                                // something DIFFERENT is refused — the
+                                // identity is the connection's for its life,
+                                // and a re-auth that replaced it would be a
+                                // second place to say who is connected.
+                                .and_then(|id| match identities.get(conn_id) {
+                                    Some(prev) if prev != id => Err(Some(Refusal::malformed(
+                                        "this connection already authenticated as a different \
+                                         identity; reconnect to be someone else",
+                                    ))),
+                                    _ => Ok(id),
+                                });
+                                let (ok, error) = match verdict {
+                                    Ok(id) => {
+                                        authed = true;
+                                        identities.register(conn_id, id.clone());
+                                        conn_identity = id;
+                                        (true, None)
+                                    }
+                                    Err(r) => (false, r.map(AuthError::from)),
                                 };
-                                if ok { authed = true; }
                                 // The handshake is what gates issuing the
                                 // grant, and `issue` is idempotent per
                                 // connection so a second `auth` frame returns
                                 // the same token rather than orphaning one.
                                 let bearer = ok.then(|| bearers.issue(conn_id));
-                                let ack = ChassisServerMsg::AuthAck { ok, bearer };
+                                let ack = ChassisServerMsg::AuthAck { ok, bearer, error };
                                 if send(&mut tx, &ack).await.is_err() {
                                     break;
                                 }
-                                if !ok { break; } // bad secret: close
+                                if !ok { break; } // refused credential: close
                             }
                             ref other if !authed => {
                                 // Echo the request id so callers can correlate
@@ -902,10 +1319,11 @@ async fn drive<P: Producer>(socket: WebSocket, chassis: Chassis<P>) {
                                 {
                                     shapes_rx = Some(producer.hub().connect(conn_id));
                                 }
+                                let caller = conn_identity.caller_at(conn_id, peer);
                                 let outcome =
                                     dispatch(
                                         &producer,
-                                        conn_id,
+                                        &caller,
                                         &method,
                                         params,
                                         &mut shape_subs,
@@ -1114,7 +1532,7 @@ async fn drive<P: Producer>(socket: WebSocket, chassis: Chassis<P>) {
 /// typed when the producer's error implements [`Coded`].
 async fn dispatch<P: Producer>(
     producer: &Arc<P>,
-    conn: ConnId,
+    caller: &Caller<'_>,
     method: &str,
     params: Value,
     shape_subs: &mut HashSet<(String, String)>,
@@ -1147,7 +1565,7 @@ async fn dispatch<P: Producer>(
     }
     match chassis_method(
         producer.as_ref(),
-        conn,
+        caller,
         routed.template,
         &params,
         shape_subs,
@@ -1155,7 +1573,9 @@ async fn dispatch<P: Producer>(
     ) {
         Some(Ok(payload)) => Outcome::ok(payload),
         Some(Err(r)) => Outcome::refused(r),
-        None => match producer.handle(routed.template, params).await {
+        // `handle_as`, whose default is `handle`: a producer that never reads
+        // the caller is answered exactly as before.
+        None => match producer.handle_as(caller, routed.template, params).await {
             Ok(payload) => Outcome::ok(payload),
             Err(r) => Outcome::refused(r),
         },
@@ -1171,12 +1591,13 @@ async fn dispatch<P: Producer>(
 /// gate set is the third thing of that kind and was the one nobody passed.
 fn chassis_method<P: Producer>(
     producer: &P,
-    conn: ConnId,
+    caller: &Caller<'_>,
     method: &str,
     params: &Value,
     shape_subs: &mut HashSet<(String, String)>,
     shape_members: &mut HashSet<String>,
 ) -> Option<Result<Value, Refusal>> {
+    let conn = caller.conn;
     match method {
         // **RULE 2.7's THIRD STAGE.** The whole rule is
         // [`crate::command::barrier`]; this arm is the route to it. Nothing
@@ -1318,6 +1739,21 @@ fn chassis_method<P: Producer>(
                 Ok(v) => Some(v),
                 Err(e) => return Some(Err(Refusal::malformed(e))),
             };
+            // **ONE CONNECTION, ONE CONSUMER** (R4.S1 spec §2.4 item 4). Where
+            // this connection stated a consumer at `auth`, a subscribe that
+            // states a DIFFERENT one is refused `malformed` — the same
+            // no-two-places rule as a subject in the params. A connection that
+            // stated none at `auth` (every client written before `auth` could)
+            // is untouched: its subscribe's `consumer` is the only statement.
+            if let (Some(stated), Some(asked)) = (caller.consumer, identity.as_ref()) {
+                if stated != asked {
+                    return Some(Err(Refusal::malformed(
+                        "this subscribe states a different `consumer` than this connection \
+                         stated at `auth`; a connection is one consumer — state the same \
+                         identity, or reconnect as the other",
+                    )));
+                }
+            }
             // ── WHICH CONTRACT IT WAS BUILT AGAINST — RULE 2.6 ─────────────
             //
             // **AND THIS ONE IS A HANDSHAKE, WHICH IS WHY IT IS A SEPARATE
@@ -1485,6 +1921,17 @@ pub fn refuse<E: Coded + std::fmt::Display>(e: E) -> Refusal {
     Refusal::new(e.code(), e.to_string())
 }
 
+/// [`refuse`]'s sibling for a producer whose errors also carry a structured
+/// payload ([`Detailed`]; R4.S1 spec §3.6 item 2). `detail: None` gives exactly
+/// what [`refuse`] gives.
+pub fn refuse_detailed<E: Coded + Detailed + std::fmt::Display>(e: E) -> Refusal {
+    Refusal {
+        code: e.code(),
+        message: e.to_string(),
+        detail: e.detail(),
+    }
+}
+
 // ═════════════════════════════════════════════════════════════════════════════
 #[cfg(test)]
 mod path_grammar_tests {
@@ -1634,5 +2081,261 @@ mod path_grammar_tests {
                 leaf: "subscribe",
             }
         );
+    }
+}
+
+// ═════════════════════════════════════════════════════════════════════════════
+// R4.S14 pass b — the handshake gate's ORDER, without a hub or a socket.
+// `tests/auth_gate.rs` drives the same gate end to end through `drive`.
+// ═════════════════════════════════════════════════════════════════════════════
+#[cfg(test)]
+mod handshake_tests {
+    use super::*;
+    use std::sync::atomic::{AtomicUsize, Ordering::SeqCst};
+
+    /// A gate that records which hooks were asked, so ORDER is observable:
+    /// a refusal that came "first" is one after which nothing else was asked.
+    #[derive(Default)]
+    struct Fake {
+        token_ok: bool,
+        principal_ok: bool,
+        needs_secret: bool,
+        consumer_needs_build: bool,
+        own_refusal: bool,
+        token_calls: AtomicUsize,
+        principal_calls: AtomicUsize,
+        consumer_calls: AtomicUsize,
+    }
+
+    fn claims() -> Claims {
+        Claims {
+            thread_id: "t-1".into(),
+            run_id: "t-1/3".into(),
+            root: "t-0".into(),
+            depth: 1,
+            turn: "cookie".into(),
+        }
+    }
+
+    impl Gate for Fake {
+        fn verify_run_token(&self, token: &str) -> Result<Claims, Refusal> {
+            self.token_calls.fetch_add(1, SeqCst);
+            if self.token_ok && token == "good-token" {
+                Ok(claims())
+            } else {
+                Err(Refusal::new(envelope::codes::UNAUTHORIZED, "token says no"))
+            }
+        }
+        fn verify_principal(&self, claim: &PrincipalClaim) -> Result<Principal, Refusal> {
+            self.principal_calls.fetch_add(1, SeqCst);
+            if self.principal_ok && claim.expose_token() == "harness-ok" {
+                Ok(claim.principal())
+            } else {
+                Err(Refusal::new(envelope::codes::UNAUTHORIZED, "principal says no"))
+            }
+        }
+        fn principal_requires_secret(&self, _: &PrincipalClaim) -> bool {
+            self.needs_secret
+        }
+        fn check_consumer(&self, c: Option<&ConsumerIdentity>) -> Result<(), Refusal> {
+            self.consumer_calls.fetch_add(1, SeqCst);
+            if self.consumer_needs_build && c.and_then(|c| c.build.as_ref()).is_none() {
+                Err(Refusal::malformed("consumer with build required"))
+            } else {
+                Ok(())
+            }
+        }
+        fn credential_refusal(&self) -> Option<Refusal> {
+            self.own_refusal
+                .then(|| Refusal::new(envelope::codes::UNAUTHORIZED, "fixed sentence"))
+        }
+    }
+
+    fn harness(token: &str) -> PrincipalClaim {
+        PrincipalClaim::Harness {
+            operation: "migrate".into(),
+            token: token.into(),
+        }
+    }
+
+    fn frame<'f>(
+        secret: Option<&'f str>,
+        consumer: Option<&'f Value>,
+        run_token: Option<&'f str>,
+        principal: Option<&'f PrincipalClaim>,
+    ) -> AuthFrame<'f> {
+        AuthFrame {
+            secret,
+            consumer,
+            run_token,
+            principal,
+        }
+    }
+
+    /// **THE SECRET, EXACTLY AS BEFORE.** Right admits as a reader; wrong is
+    /// refused with NO error (the legacy bare ack) on a producer that has not
+    /// opted in, and with ITS refusal on one that has; an open producer admits
+    /// any secret. Four arms, so neither a constant `Ok` nor a constant `Err`
+    /// survives.
+    #[test]
+    fn the_secret_is_checked_as_it_always_was() {
+        let g = Fake::default();
+        assert_eq!(
+            admit(&g, Some("s3"), frame(Some("s3"), None, None, None)),
+            Ok(ConnIdentity::default())
+        );
+        assert_eq!(admit(&g, Some("s3"), frame(Some("nope"), None, None, None)), Err(None));
+        let mine = Fake {
+            own_refusal: true,
+            ..Fake::default()
+        };
+        assert_eq!(
+            admit(&mine, Some("s3"), frame(Some("nope"), None, None, None)),
+            Err(Some(Refusal::new(envelope::codes::UNAUTHORIZED, "fixed sentence")))
+        );
+        assert_eq!(
+            admit(&g, None, frame(Some("anything"), None, None, None)),
+            Ok(ConnIdentity::default())
+        );
+    }
+
+    /// **A WRONG SECRET IS CHECKED FIRST AND NOTHING AFTER IT IS ASKED** — a
+    /// secret beside a run token that does not hold refuses before the token
+    /// is looked at, and before the consumer is (spec §3.7). Paired with the
+    /// right secret, where both ARE asked, so a gate that never asked anything
+    /// fails.
+    #[test]
+    fn a_wrong_secret_refuses_before_any_other_credential_is_examined() {
+        let g = Fake {
+            token_ok: true,
+            ..Fake::default()
+        };
+        let c = json!({"name":"pen","shape_version":"1","build":"b"});
+        assert!(admit(&g, Some("s3"), frame(Some("nope"), Some(&c), Some("good-token"), None)).is_err());
+        assert_eq!((g.token_calls.load(SeqCst), g.consumer_calls.load(SeqCst)), (0, 0));
+        let id = admit(&g, Some("s3"), frame(Some("s3"), Some(&c), Some("good-token"), None)).unwrap();
+        assert_eq!((g.token_calls.load(SeqCst), g.consumer_calls.load(SeqCst)), (1, 1));
+        assert_eq!(id.claims, Some(claims()));
+    }
+
+    /// **AGENT LOGIN: A RUN TOKEN AND NO SECRET**, admitted only by the hook,
+    /// whose claims become the connection's. A token the hook refuses carries
+    /// the HOOK's refusal into the ack.
+    #[test]
+    fn a_run_token_alone_logs_in_only_when_the_producer_verifies_it() {
+        let g = Fake {
+            token_ok: true,
+            ..Fake::default()
+        };
+        let id = admit(&g, Some("s3"), frame(None, None, Some("good-token"), None)).unwrap();
+        assert_eq!(id.claims.as_ref().map(|c| c.thread_id.as_str()), Some("t-1"));
+        assert_eq!(
+            admit(&g, Some("s3"), frame(None, None, Some("forged"), None)),
+            Err(Some(Refusal::new(envelope::codes::UNAUTHORIZED, "token says no")))
+        );
+    }
+
+    /// **A PRINCIPAL WITHOUT THE SECRET NEVER REACHES `verify_principal`** on
+    /// a secured producer whose hook says the claim needs it (spec §2.5 rule
+    /// 2). Opposed three ways: with the secret the hook IS asked and admits;
+    /// with `requires_secret = false` it is asked without one; on an open
+    /// producer there is no secret to require.
+    #[test]
+    fn a_principal_without_the_secret_is_refused_before_it_is_verified() {
+        let g = Fake {
+            principal_ok: true,
+            needs_secret: true,
+            ..Fake::default()
+        };
+        let p = harness("harness-ok");
+        assert_eq!(
+            admit(&g, Some("s3"), frame(None, None, None, Some(&p))),
+            Err(Some(Refusal::new(envelope::codes::UNAUTHORIZED, CREDENTIALS_NOT_ACCEPTED)))
+        );
+        assert_eq!(g.principal_calls.load(SeqCst), 0, "verify_principal must not be asked");
+
+        let id = admit(&g, Some("s3"), frame(Some("s3"), None, None, Some(&p))).unwrap();
+        assert_eq!(g.principal_calls.load(SeqCst), 1);
+        assert_eq!(
+            id.principal,
+            Some(Principal::Harness {
+                operation: "migrate".into()
+            })
+        );
+
+        let lax = Fake {
+            principal_ok: true,
+            needs_secret: false,
+            ..Fake::default()
+        };
+        assert!(admit(&lax, Some("s3"), frame(None, None, None, Some(&p))).is_ok());
+        assert_eq!(lax.principal_calls.load(SeqCst), 1);
+        assert!(admit(&g, None, frame(None, None, None, Some(&p))).is_ok());
+
+        // And a principal whose token the hook refuses is refused WITH the
+        // secret too — the secret proves the class, not the claim.
+        let bad = harness("harness-wrong");
+        assert_eq!(
+            admit(&g, Some("s3"), frame(Some("s3"), None, None, Some(&bad))),
+            Err(Some(Refusal::new(envelope::codes::UNAUTHORIZED, "principal says no")))
+        );
+    }
+
+    /// **THE CONSUMER: PARSED BY THE SUBSCRIBE DOOR'S OWN RULE, THEN THE
+    /// PRODUCER'S.** Absent is `None` and admitted by default; present and not
+    /// an identity is `malformed`; a producer that requires `build` refuses
+    /// one without it and admits one with it.
+    #[test]
+    fn the_consumer_is_parsed_once_and_checked_by_the_producer() {
+        let g = Fake::default();
+        assert_eq!(admit(&g, Some("s3"), frame(Some("s3"), None, None, None)).unwrap().consumer, None);
+        let not_an_object = json!("pen");
+        match admit(&g, Some("s3"), frame(Some("s3"), Some(&not_an_object), None, None)) {
+            Err(Some(r)) => assert_eq!(r.code, envelope::codes::MALFORMED, "{r:?}"),
+            other => panic!("a consumer that is not an object is malformed: {other:?}"),
+        }
+        let strict = Fake {
+            consumer_needs_build: true,
+            ..Fake::default()
+        };
+        let no_build = json!({"name":"pen","shape_version":"1"});
+        let with_build = json!({"name":"pen","shape_version":"1","build":"abc123"});
+        match admit(&strict, Some("s3"), frame(Some("s3"), Some(&no_build), None, None)) {
+            Err(Some(r)) => assert_eq!(r.code, envelope::codes::MALFORMED, "{r:?}"),
+            other => panic!("the producer's consumer rule must refuse: {other:?}"),
+        }
+        let id = admit(&strict, Some("s3"), frame(Some("s3"), Some(&with_build), None, None)).unwrap();
+        assert_eq!(id.consumer.unwrap().build.as_deref(), Some("abc123"));
+    }
+
+    /// **A SECURED PRODUCER ADMITS NOTHING ON WHICH NO CREDENTIAL WAS
+    /// VERIFIED** — reachable here even though `classify` stops it first at
+    /// the door. Paired with the open producer, which admits it as before.
+    #[test]
+    fn a_secured_producer_refuses_a_frame_with_no_credential() {
+        let g = Fake::default();
+        let c = json!({"name":"pen","shape_version":"1"});
+        assert_eq!(
+            admit(&g, Some("s3"), frame(None, Some(&c), None, None)),
+            Err(Some(Refusal::new(envelope::codes::UNAUTHORIZED, CREDENTIALS_NOT_ACCEPTED)))
+        );
+        assert!(admit(&g, None, frame(None, Some(&c), None, None)).is_ok());
+    }
+
+    /// **THE SIGNATURE HELPER**: a token minted under the key verifies to its
+    /// claims; one minted under another key, and one that is not a token,
+    /// are both `unauthorized`, and neither refusal echoes what was presented.
+    #[test]
+    fn verify_run_token_signature_admits_genuine_and_refuses_forged_and_malformed() {
+        let key = crate::token::Key::from_bytes([7u8; 32]);
+        let other = crate::token::Key::from_bytes([8u8; 32]);
+        let good = key.mint(&claims());
+        assert_eq!(verify_run_token_signature(&key, &good), Ok(claims()));
+        let forged = other.mint(&claims());
+        for bad in [forged.as_str(), "rt1.zz.not-hex-and-not-a-token"] {
+            let r = verify_run_token_signature(&key, bad).unwrap_err();
+            assert_eq!(r.code, envelope::codes::UNAUTHORIZED);
+            assert!(!r.message.contains(bad), "the refusal echoed the token: {}", r.message);
+        }
     }
 }

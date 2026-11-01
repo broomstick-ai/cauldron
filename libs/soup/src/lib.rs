@@ -12,10 +12,15 @@
 //! `soup/phase-d`) are not on the release branch and cannot write yet (no
 //! tranche lock, no lander). CONSOLIDATION Q-2 recommended "a minimal `soup`
 //! data crate on the release branch ... replaced by whichever soup wins". This
-//! is that crate. It deliberately carries the package name `soup`: when the
+//! is that crate. It deliberately carried the package name `soup`: when the
 //! real soup merges, cargo refuses two packages of one name, so the merge
 //! cannot happen without moving [`demo`] into the real crate. That refusal is
-//! the reminder, by design.
+//! the reminder, by design — and it fired when the soup daemon merged on the
+//! development line (that daemon is not part of this release). The package is now
+//! `soup-seed` (its dependents still name it `soup`, through
+//! `package = "soup-seed"`, so no face or CLI code moved); moving [`demo`]
+//! into the daemon crate is a design step the merge did not take, and it is
+//! still open.
 //!
 //! ## The read path
 //!

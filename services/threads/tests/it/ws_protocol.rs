@@ -2110,6 +2110,16 @@ async fn status_reaches_a_client_by_both_push_and_query() {
 /// patient wait correct: `accepted: true` now means "the daemon owns this
 /// turn", so a client that falls back on a missing `turn_started` is
 /// manufacturing the duplicate, not recovering from one.
+///
+/// **THE LOCK IS HELD BY THE TEST, NOT BY A CLOCK** (RV1.S1b). The first turn
+/// was a `slowturn` — a fixed 0.7 s sleep — and the three sends plus the queue
+/// read had to land inside it. Measured under a loaded machine, the three send
+/// round trips alone took up to 1.9 s, the turn ended first, the dispatcher
+/// drained the rows, and the read saw 2, 1 or 0 `waiting` — a red that reads as
+/// "the hold dropped a send" and is a stopwatch losing a race. It is a
+/// `holdturn` now: it runs until this test creates its release file, so the
+/// read is taken while the lock is DEFINITELY held, and `is_locked` is asserted
+/// on both sides of it so a zero can only mean the hold itself failed.
 #[tokio::test]
 async fn a_send_into_a_locked_thread_is_accepted_and_queued_never_duplicated() {
     let (manager, addr, tmp) = start_with(None).await;
@@ -2121,9 +2131,10 @@ async fn a_send_into_a_locked_thread_is_accepted_and_queued_never_duplicated() {
         .await;
     let tid = created["thread_id"].as_str().unwrap().to_string();
 
+    let release = tmp.path().join("release-first-turn");
     c.request_ok(
         &format!("threads/{}/send", tid),
-        json!({"text": "slowturn one"}),
+        json!({"text": format!("holdturn release={}", release.display())}),
     )
     .await;
     let first = c.wait_event("turn_started").await;
@@ -2139,14 +2150,36 @@ async fn a_send_into_a_locked_thread_is_accepted_and_queued_never_duplicated() {
             .await;
         assert_eq!(ack["accepted"], true);
     }
+    assert!(manager.is_locked(&tid), "sentinel: the first turn holds the lock before the read");
     let waiting = queue_rows(addr, &tid, "waiting").await;
+    assert!(
+        manager.is_locked(&tid),
+        "sentinel: the read was taken while the lock was still held — nothing has released it"
+    );
     assert_eq!(
         waiting.len(),
         3,
-        "every send is HELD, in order — never merged away and never dropped"
+        "every send is HELD — never merged away and never dropped"
+    );
+    // **IN ORDER, ASSERTED — NOT ONLY SAID** (RV1.S1f, RV1.S1b-I F2). The
+    // message above claimed "in order" for years while only `len()` was
+    // checked. The held rows must carry the three texts in SEND order, under
+    // strictly ascending message ids: a queue that reorders (or a read that
+    // returns rows out of birth order) is red here, not green.
+    let held_texts: Vec<&str> = waiting.iter().map(|r| r["text"].as_str().unwrap()).collect();
+    assert_eq!(
+        held_texts,
+        vec!["slowturn queued 0", "slowturn queued 1", "slowturn queued 2"],
+        "every send is HELD IN SEND ORDER"
+    );
+    let held_ids: Vec<u64> = waiting.iter().map(|r| r["message_id"].as_u64().unwrap()).collect();
+    assert!(
+        held_ids.windows(2).all(|w| w[0] < w[1]),
+        "the held rows' message ids ascend in send order: {held_ids:?}"
     );
 
     // The first turn ends before any second turn begins.
+    std::fs::write(&release, b"").unwrap();
     c.wait_event("turn_ended").await;
     let second = c.wait_event("turn_started").await;
     assert_ne!(
@@ -2154,10 +2187,23 @@ async fn a_send_into_a_locked_thread_is_accepted_and_queued_never_duplicated() {
         "the second turn must be the QUEUED work, not a re-run of the first"
     );
 
-    // And at no point were two executions live.
-    assert!(
-        !manager.is_locked(&tid) || manager.thread_status(&tid).unwrap()["executing"] == true,
-        "status and the lock must agree"
+    // **THE SECOND TURN IS EXACTLY THE HELD WORK, IN ORDER** (RV1.S1f,
+    // RV1.S1b-I F1). This line used to be `!is_locked || executing == true`,
+    // read after the second `turn_started` — when both operands are true — so
+    // it could not observe anything. It now compares the turn the product
+    // actually started against the rows the product actually held: the three
+    // queued ids, once each, in the order they were sent. A drain that splits
+    // the batch, drops a row, re-delivers one, delivers out of order or starts
+    // a turn naming no messages at all is red here.
+    let delivered: Vec<u64> = second["event"]["message_ids"]
+        .as_array()
+        .expect("`turn_started` names the message ids it delivers")
+        .iter()
+        .map(|v| v.as_u64().unwrap())
+        .collect();
+    assert_eq!(
+        delivered, held_ids,
+        "the second turn delivers exactly the three held sends, once each, in send order"
     );
 }
 
@@ -2723,4 +2769,177 @@ async fn a_clean_result_then_exit_1_is_still_laddered_by_the_exit_code_door() {
     assert_eq!(rt["event"]["subtype"], "success", "{rt}");
     assert_eq!(rt["event"]["is_error"], false, "{rt}");
     assert_eq!(first["event"]["kind"], "retry_scheduled", "{first}");
+}
+
+// ── THE SEND ROUND TRIP, TIMED (RV1.S1g) ────────────────────────────────────
+
+fn lat_env(name: &str, default: f64) -> f64 {
+    std::env::var(name)
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(default)
+}
+
+/// The 1/5/15-minute load average, read through `getloadavg(3)`.
+fn load_average() -> [f64; 3] {
+    let mut l = [0f64; 3];
+    // SAFETY: `l` has room for the 3 samples asked for.
+    let got = unsafe { libc::getloadavg(l.as_mut_ptr(), 3) };
+    assert_eq!(got, 3, "getloadavg returned {got}");
+    l
+}
+
+fn lat_pct(sorted: &[Duration], p: f64) -> Duration {
+    sorted[((sorted.len() as f64 - 1.0) * p).round() as usize]
+}
+
+fn lat_ms(d: Duration) -> f64 {
+    d.as_secs_f64() * 1e3
+}
+
+/// **`threads/{id}/send` INTO A HELD THREAD, ROUND TRIP, TIMED** (RV1.S1g).
+///
+/// The instrument RV1.S1e used to clear the RV1.S1b-I "15x slower send" and
+/// then threw away (RV1.S1e-I F1); committed here so the threads half of the
+/// send latency can be re-run beside shapewire's door bench
+/// (`libs/shapewire/tests/auth_gate_latency/mod.rs`). It times what S1b-I
+/// measured: one request → response for `threads/{id}/send` on ONE existing
+/// connection into a thread whose first turn (`holdturn`) holds the lock, so
+/// every timed send is an append + enqueue and starts no turn. 20 warm-up
+/// sends, then N timed ones.
+///
+/// ```text
+/// CAULDRON_ISOLATED=1 cargo test -p threads --test it -- --ignored --nocapture \
+///     send_round_trip_into_a_held_thread_latency
+/// ```
+///
+/// Prints one `RV1S1G-SEND` line: the load average at start and at end, n,
+/// min / median / p90 / p99 / max.
+///
+/// **THE CEILING, AND WHERE IT CAME FROM.** The median must stay under
+/// `THREADS_SEND_LAT_MAX_MEDIAN_MS` (default **25 ms**) when the 1-minute load
+/// at start is at most `THREADS_SEND_LAT_MAX_LOAD` (default **20**). Measured
+/// on this machine with this probe: RV1.S1e, six interleaved rounds at load
+/// 14–20, medians 11.0–21.1 ms (worst round 21.1); RV1.S1e-I at load 10–13,
+/// medians 0.64–0.73 ms. 25 ms is the worst median seen at load <= 20 plus
+/// ~20%, so a real regression of a few ms is NOT caught at that default — it
+/// is a tripwire for a gross one (a stall, a sleep, an extra fsync per send)
+/// to be tightened as the send path is brought down. p99 is
+/// reported and not judged (tails to ~390 ms under load in S1e, both sides).
+///
+/// **THE MARGIN IS THIN AT THE CAP** (RV1.S1g-I F4): at load ~20 S1e's worst
+/// median was 21.1 ms against the 25 ms ceiling, so a run at load 18–20 can go
+/// red with no code change. Do not tighten the ceiling without also lowering
+/// the load cap. The 1-minute load is a weak proxy for contention on this
+/// path (S1g-I F5: 10.3 ms at load 9.6, 0.7 ms at load 20.2), so treat a red
+/// near the cap as "re-run", not as proof.
+///
+/// **WHEN THE LOAD GATES THE VERDICT.** The load that decides is sampled
+/// AFTER the 20 warm-up sends and immediately BEFORE the first timed one
+/// (`load_judged`), not at test start: `cargo test` builds first, and the
+/// bench's own build raises the 1-minute load it would otherwise be judged on
+/// (RV1.S1g-I F2). `load_start` (test entry) and `load_end` are printed beside
+/// it.
+///
+/// **AN UNJUDGED RUN FAILS UNLESS ASKED FOR** (RV1.S1i, RV1.S1g-I F1). Above
+/// the load cap the median cannot be judged (RV1.S1b saw a ~105 ms median
+/// under four leased builds with no code change, so a red there would be the
+/// machine). It used to print `NOT JUDGED` to captured stdout and PASS — so a
+/// run without `--nocapture` showed `1 passed` whether or not anything was
+/// judged. Now an unjudged run PANICS, naming the load, the cap and the
+/// numbers, unless `THREADS_SEND_LAT_ALLOW_UNJUDGED=1` is set; with that
+/// opt-in it passes and prints `NOT JUDGED` (visible with `--nocapture`). A
+/// fail rather than a stderr line, because libtest captures stderr too and a
+/// green is the one result nobody reads: the only signal that survives every
+/// runner is the exit code, so "not judged" may not share it with "judged and
+/// under the ceiling" unless the caller said so.
+///
+/// `THREADS_SEND_LAT_N` sets N (default 250, floor 250).
+#[tokio::test]
+#[ignore = "measurement (RV1.S1g): run with --ignored --nocapture"]
+async fn send_round_trip_into_a_held_thread_latency() {
+    let n = lat_env("THREADS_SEND_LAT_N", 250.0).max(250.0) as usize;
+    let ceiling_ms = lat_env("THREADS_SEND_LAT_MAX_MEDIAN_MS", 25.0);
+    let max_load = lat_env("THREADS_SEND_LAT_MAX_LOAD", 20.0);
+    let allow_unjudged = std::env::var("THREADS_SEND_LAT_ALLOW_UNJUDGED").as_deref() == Ok("1");
+    let load_start = load_average();
+
+    let (manager, addr, tmp) = start_with(None).await;
+    let (mut c, _) = Client::connect(addr).await;
+    c.subscribe_all(&manager).await;
+    let created = c
+        .request_ok("threads/create", json!({"settings": settings(tmp.path())}))
+        .await;
+    let tid = created["thread_id"].as_str().unwrap().to_string();
+    let release = tmp.path().join("release-held-turn");
+    c.request_ok(
+        &format!("threads/{tid}/send"),
+        json!({"text": format!("holdturn release={}", release.display())}),
+    )
+    .await;
+    c.wait_event("turn_started").await;
+    assert!(manager.is_locked(&tid), "sentinel: the held turn has the lock before the first timed send");
+
+    let method = format!("threads/{tid}/send");
+    for i in 0..20 {
+        let ack = c.request_ok(&method, json!({"text": format!("warm-up {i}")})).await;
+        assert_eq!(ack["accepted"], true, "{ack}");
+    }
+    // The load that gates the verdict: after the warm-up (and the build),
+    // immediately before the first timed send (RV1.S1g-I F2).
+    let load_judged = load_average();
+    let mut samples = Vec::with_capacity(n);
+    for i in 0..n {
+        let params = json!({"text": format!("queued {i}")});
+        let t0 = std::time::Instant::now();
+        let ack = c.request_ok(&method, params).await;
+        let dt = t0.elapsed();
+        assert_eq!(ack["accepted"], true, "{ack}");
+        samples.push(dt);
+    }
+    // Every timed send must have gone into a HELD thread: the holdturn fixture
+    // gives up after 20 s, and a send into a free thread starts a turn — a
+    // different quantity. Asserted, so a slow machine fails loudly here
+    // rather than silently timing something else.
+    assert!(
+        manager.is_locked(&tid),
+        "sentinel: the hold lapsed during the run — the later sends did not go into a held thread"
+    );
+    std::fs::write(&release, b"").unwrap();
+    let load_end = load_average();
+
+    samples.sort();
+    let median = lat_ms(lat_pct(&samples, 0.5));
+    let judged = load_judged[0] <= max_load;
+    let verdict = match (judged, allow_unjudged) {
+        (true, _) => "JUDGED",
+        (false, true) => "NOT JUDGED (load over the cap; THREADS_SEND_LAT_ALLOW_UNJUDGED=1)",
+        (false, false) => "NOT JUDGED (load over the cap) -> FAIL",
+    };
+    let line = format!(
+        "RV1S1G-SEND load_start={:.2}/{:.2}/{:.2} load_judged={:.2}/{:.2}/{:.2} load_end={:.2}/{:.2}/{:.2} n={} min={:.3}ms median={:.3}ms p90={:.3}ms p99={:.3}ms max={:.3}ms ceiling={ceiling_ms}ms@load<={max_load} {verdict}",
+        load_start[0], load_start[1], load_start[2],
+        load_judged[0], load_judged[1], load_judged[2],
+        load_end[0], load_end[1], load_end[2],
+        samples.len(),
+        lat_ms(samples[0]),
+        median,
+        lat_ms(lat_pct(&samples, 0.9)),
+        lat_ms(lat_pct(&samples, 0.99)),
+        lat_ms(*samples.last().unwrap()),
+    );
+    println!("{line}");
+    if judged {
+        assert!(
+            median < ceiling_ms,
+            "threads/{{id}}/send round-trip median {median:.3} ms is over the {ceiling_ms} ms ceiling (1-min load before timing {:.2} <= {max_load})\n{line}",
+            load_judged[0]
+        );
+    } else if !allow_unjudged {
+        panic!(
+            "NOT JUDGED: the 1-minute load before timing was {:.2}, over the cap THREADS_SEND_LAT_MAX_LOAD={max_load}, so the {ceiling_ms} ms median ceiling was not applied. \
+             This is a failure, not a pass: re-run on a quieter machine, or set THREADS_SEND_LAT_ALLOW_UNJUDGED=1 to accept an unjudged run.\n{line}",
+            load_judged[0]
+        );
+    }
 }

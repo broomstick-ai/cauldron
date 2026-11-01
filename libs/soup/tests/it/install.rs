@@ -4,7 +4,7 @@
 
 use std::path::PathBuf;
 
-use soup::demo::{install, install_from, seed_env, Dataset, Source, ENV, FILES_TOKEN};
+use soup_seed::demo::{install, install_from, seed_env, Dataset, Source, ENV, FILES_TOKEN};
 
 /// A fresh directory under the system temp dir, removed on drop.
 struct Tmp(PathBuf);

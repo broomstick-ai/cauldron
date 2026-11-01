@@ -15,17 +15,56 @@ Planned, and not released yet. Ripples and the soup engine arrive in 0.2.0.
 
 - **Ripples live.** Dumps set off ripples, and ripples write to the soup. The
   soup engine is hardened, and the Ledger shows real ripple events. Neither is
-  in 0.1.0, 0.1.1 or 0.1.2.
+  in 0.1.0, 0.1.1, 0.1.2 or 0.1.3.
 
 ### Not yet scheduled to a release
 
 - **Fix: threads daemon boot with an oversized write-ahead log.** The daemon
   will fold the log once at boot, before recovery, and its periodic fold will
-  first run at 30 seconds instead of 5 minutes. Through 0.1.2, a large log
+  first run at 30 seconds instead of 5 minutes. Through 0.1.3, a large log
   left from earlier runs can stall startup until the supervisor kills the daemon.
 - **Fix: re-login re-enables a disabled account.** A verified login will lift
-  the disable and trigger a fresh usage reading. Through 0.1.2, only an
+  the disable and trigger a fresh usage reading. Through 0.1.3, only an
   explicit enable clears it.
+
+## [0.1.3] — 2026-10-31
+
+Account polish. Ripples and the soup engine arrive in 0.2.0: nothing in this
+release acts on a dump yet.
+
+### Changed
+
+- **Account settings fail safe when the install's key is wrong.** Account ids
+  are salted with a key kept per install (0.1.2). If that key belongs to
+  another install, cannot be read, is not a key, or has gone missing after one
+  was made, the face no longer mints a new key or adopts another install's:
+  it opens account settings read-only and says why in a notice. Changes made
+  in that face are not saved. Where it is true, the notice also says that
+  settings saved for an email-address account are not applied in that
+  session; a named account's settings still apply.
+- **Clearer refusals.** When account settings are read-only because of the
+  install's key, adding or changing an account or an endpoint is refused with
+  a message that names the key problem, instead of blaming `--dump`.
+- **A face no longer waits forever on a service that does not answer.** The
+  face's connection to an environment's services gives up after 5 seconds
+  when the socket accepts but never completes its handshake, marks the link
+  down with the reason, and retries.
+
+### Fixed
+
+- **Scheduled jobs fire at the right local time across daylight-saving
+  changes.** A job's daily slot is worked out as a local date and time, not
+  as "24 hours ago", so a change of clocks no longer moves it by an hour.
+  When the time happens twice (clocks go back), the job runs at the first
+  occurrence; when it does not exist (clocks go forward), it runs that much
+  later (02:30 runs at 03:30).
+- **Uptime is correct across daylight-saving changes.** A service's uptime is
+  measured between two instants instead of two local clock readings, so it no
+  longer reads an hour short or long after the clocks change.
+- **`cauldron pin` says the right thing when a park lands at the same
+  moment.** Pin reads the service's state and saves the pin as one step, so
+  its message no longer says a service "is not running" when the supervisor
+  revived it while the pin was being saved.
 
 ## [0.1.2] — 2026-10-31
 
@@ -175,6 +214,8 @@ The first public release.
   paths ship) and `scripts/check-no-personal-data.sh` (what the shipped files
   say).
 
-[Unreleased]: https://github.com/broomstick-ai/cauldron/compare/v0.1.1...HEAD
+[Unreleased]: https://github.com/broomstick-ai/cauldron/compare/v0.1.3...HEAD
+[0.1.3]: https://github.com/broomstick-ai/cauldron/compare/v0.1.2...v0.1.3
+[0.1.2]: https://github.com/broomstick-ai/cauldron/compare/v0.1.1...v0.1.2
 [0.1.1]: https://github.com/broomstick-ai/cauldron/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/broomstick-ai/cauldron/releases/tag/v0.1.0

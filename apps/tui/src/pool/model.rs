@@ -124,27 +124,105 @@ pub fn digest_hex(key: &str) -> String {
 
 /// **THIS INSTALL'S DIGEST KEY** (V1-ACCT2): 128 random bits in
 /// `<data>/shared/tui/install.key` — beside the global `settings.toml` and
-/// `accounts.json` whose ids it keys — written (0600, temp then rename) the
-/// first time a face that may write opens its settings there, and read on
-/// every open after.
+/// `accounts.json` whose ids it keys — written (0600, temp then hard link,
+/// so the first face to write one wins) the first time a face that may write
+/// opens its settings there, and read on every open after.
 ///
 /// One key per PROCESS: the first install a process binds is the one every
 /// digest in it uses, and an install directory with no key yet that the
 /// same process opens later is given that key (so the ids this process
 /// writes there are ids that directory's key makes). Before any bind (the
 /// standalone pool board with no environment, a `--dump`, a unit test) the
-/// key is a random one held in memory only. A later bind that finds a key
-/// file replaces it (nothing persisted was keyed by it); one that creates the
-/// file writes THAT key, so a digest drawn before the bind still holds.
+/// key is a random one held in memory only; a bind that creates the file
+/// writes THAT key, so a digest drawn before the bind still holds.
+///
+/// **IT FAILS SAFE** (V1-ACCT3, V1-ACCT2-I N-a/N-b/N-c). An id is never
+/// drawn from an unsalted digest, and a key is never swapped silently:
+///
+/// - **N-a, another install's key.** A process bound to install A that
+///   opens install B holding a DIFFERENT key gets [`KeyError::OtherInstall`]
+///   and keeps A's key: B's settings open read-only and the user is told, rather
+///   than ids made with A's key being written into B. The same holds when
+///   another face creates B's key between this one's read and its write.
+/// - **N-b, a lost or unreadable key.** A key file that cannot be read
+///   ([`KeyError::Unreadable`]) or is not a key ([`KeyError::Corrupt`]) is
+///   never rewritten; and a key that is MISSING where one was made
+///   ([`MARKER`] says so) is [`KeyError::Lost`], never silently replaced.
+///   Either way the settings open read-only with a notice: what the user switched
+///   off under the old key would otherwise read on again, and anything
+///   written would be keyed by a key no later open can reproduce.
+/// - **N-c, digests drawn before the bind.** A process that drew a digest
+///   under its temporary key and then binds an install with a different key
+///   adopts the install's key (the right one) and returns [`Bind::Redrew`],
+///   so the caller says that ids drawn before changed.
 pub mod install_key {
-    use std::path::Path;
+    use std::path::{Path, PathBuf};
     use std::sync::RwLock;
 
     /// The file's name, in the global settings directory.
     pub const FILE: &str = "install.key";
+    /// Written beside [`FILE`] once a key is bound there: a key file missing
+    /// while this exists was LOST, not never made. Holds no key material.
+    pub const MARKER: &str = "install.key.made";
 
-    /// `(key, bound)`: `bound` once it came from (or was written to) a file.
-    static KEY: RwLock<Option<((u64, u64), bool)>> = RwLock::new(None);
+    /// What a [`bind`] did.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub enum Bind {
+        /// The directory's key was read (or is the one this process holds).
+        Read,
+        /// The directory had no key: this process's was written there.
+        Created,
+        /// The directory's key was adopted, and digests drawn before it under
+        /// the temporary key no longer hold (N-c).
+        Redrew,
+        /// Nothing to bind: no key there, and this face may not write one.
+        Unbound,
+    }
+
+    /// Why an install's key could not be bound. The process keeps the key
+    /// it had; the caller opens that install read-only and says so. No
+    /// variant carries key material.
+    #[derive(Debug)]
+    pub enum KeyError {
+        /// N-a: this process holds another install's key.
+        OtherInstall(PathBuf),
+        /// N-b: the file is there and could not be read.
+        Unreadable(PathBuf, std::io::Error),
+        /// N-b: the file is there and is not a key.
+        Corrupt(PathBuf),
+        /// N-b: a key was made here and the file is gone.
+        Lost(PathBuf),
+        /// No key was there and writing one failed.
+        Write(PathBuf, std::io::Error),
+    }
+
+    impl std::fmt::Display for KeyError {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            match self {
+                Self::OtherInstall(p) => write!(f, "{} is another install's account-id key than the one this face opened first", p.display()),
+                Self::Unreadable(p, e) => write!(f, "the account-id key {} cannot be read ({})", p.display(), e.kind()),
+                Self::Corrupt(p) => write!(f, "the account-id key {} is not a key", p.display()),
+                Self::Lost(p) => write!(f, "the account-id key {} is missing although one was made there (remove {} to start a new key; settings saved under the old one stay unread)", p.display(), p.with_file_name(MARKER).display()),
+                Self::Write(p, e) => write!(f, "the account-id key {} could not be written ({})", p.display(), e.kind()),
+            }
+        }
+    }
+
+    impl std::error::Error for KeyError {}
+
+    /// One process's key: the global [`get`] / [`bind`] are this behind a
+    /// lock. Public so its rules can be driven without the process-wide one.
+    #[derive(Debug, Default)]
+    pub struct KeyState {
+        key: Option<(u64, u64)>,
+        /// The key came from (or was written to) an install's file.
+        bound: bool,
+        /// A digest was drawn under the key while it was not bound.
+        drawn: bool,
+        /// Every directory bound in this process: each held the process's
+        /// key when it was bound (V1-ACCT5).
+        dirs: Vec<PathBuf>,
+    }
 
     fn random() -> (u64, u64) {
         let b = uuid::Uuid::new_v4().into_bytes();
@@ -164,15 +242,24 @@ pub mod install_key {
         Some((u64::from_str_radix(&t[..16], 16).ok()?, u64::from_str_radix(&t[16..], 16).ok()?))
     }
 
+    /// The key in `path`: `None` when there is no file.
+    fn read(path: &Path) -> Result<Option<(u64, u64)>, KeyError> {
+        match std::fs::read_to_string(path) {
+            Ok(t) => parse(&t).map(Some).ok_or_else(|| KeyError::Corrupt(path.to_path_buf())),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+            Err(e) => Err(KeyError::Unreadable(path.to_path_buf(), e)),
+        }
+    }
+
     fn write(path: &Path, k: (u64, u64)) -> std::io::Result<()> {
         use std::io::Write;
         if let Some(d) = path.parent() {
             std::fs::create_dir_all(d)?;
         }
-        let tmp = path.with_extension(format!("key.tmp-{}", std::process::id()));
+        let tmp = path.with_extension(format!("key.tmp-{}-{}", std::process::id(), uuid::Uuid::new_v4().simple()));
         {
             let mut o = std::fs::OpenOptions::new();
-            o.write(true).create(true).truncate(true);
+            o.write(true).create_new(true);
             #[cfg(unix)]
             std::os::unix::fs::OpenOptionsExt::mode(&mut o, 0o600);
             let mut f = o.open(&tmp)?;
@@ -180,73 +267,108 @@ pub mod install_key {
             f.sync_all()?;
         }
         // Never over a key another face wrote first: the first one stays.
-        match std::fs::hard_link(&tmp, path) {
-            Ok(()) => {
-                let _ = std::fs::remove_file(&tmp);
-                Ok(())
-            }
-            Err(e) => {
-                let _ = std::fs::remove_file(&tmp);
-                Err(e)
+        let r = std::fs::hard_link(&tmp, path);
+        let _ = std::fs::remove_file(&tmp);
+        r
+    }
+
+    /// Say, beside the key, that one was made here (best effort: without it
+    /// a later loss is only as loud as before).
+    fn mark(dir: &Path) {
+        let m = dir.join(MARKER);
+        if !m.exists() {
+            if let Err(e) = std::fs::write(&m, "an account-id key was made in this directory; see install.key\n") {
+                tracing::warn!(error = %e.kind(), "could not mark the install's key as made");
             }
         }
     }
+
+    impl KeyState {
+        pub fn new() -> Self {
+            Self::default()
+        }
+
+        /// The key every digest uses now.
+        pub fn get(&mut self) -> (u64, u64) {
+            if !self.bound {
+                self.drawn = true;
+            }
+            *self.key.get_or_insert_with(random)
+        }
+
+        /// **BIND THE INSTALL IN `dir`** (the global settings directory):
+        /// read its key, or — when `create` and it has none — write one (this
+        /// process's). On `Err` nothing changed: the process keeps its key
+        /// and the file is left as it was.
+        pub fn bind(&mut self, dir: &Path, create: bool) -> Result<Bind, KeyError> {
+            let path = dir.join(FILE);
+            let on_disk = match read(&path)? {
+                Some(k) => k,
+                None if dir.join(MARKER).exists() => return Err(KeyError::Lost(path)),
+                None if !create => return Ok(Bind::Unbound),
+                None => {
+                    // The key this process has used so far, if any: ids it
+                    // drew before this bind stay the ids it writes.
+                    let k = *self.key.get_or_insert_with(random);
+                    match write(&path, k) {
+                        Ok(()) => {
+                            self.bound = true;
+                            self.dirs.push(dir.to_path_buf());
+                            mark(dir);
+                            return Ok(Bind::Created);
+                        }
+                        // Another face wrote one between the read and the
+                        // link: that one is the install's, judged as read.
+                        Err(_) if path.exists() => read(&path)?.ok_or_else(|| KeyError::Lost(path.clone()))?,
+                        Err(e) => return Err(KeyError::Write(path, e)),
+                    }
+                }
+            };
+            let had = self.key;
+            if self.bound && had != Some(on_disk) {
+                return Err(KeyError::OtherInstall(path));
+            }
+            let redrew = !self.bound && self.drawn && had.is_some_and(|k| k != on_disk);
+            self.key = Some(on_disk);
+            self.bound = true;
+            if !self.dirs.iter().any(|d| d == dir) {
+                self.dirs.push(dir.to_path_buf());
+            }
+            if create {
+                mark(dir);
+            }
+            Ok(if redrew { Bind::Redrew } else { Bind::Read })
+        }
+
+        /// This process bound `dir` before, so the key it digests with is
+        /// the one `dir` held then: the ids saved there are the ids it draws,
+        /// even if `dir`'s key is unusable now (V1-ACCT5).
+        pub fn has_bound(&self, dir: &Path) -> bool {
+            self.dirs.iter().any(|d| d == dir)
+        }
+    }
+
+    static STATE: RwLock<KeyState> = RwLock::new(KeyState { key: None, bound: false, drawn: false, dirs: Vec::new() });
 
     /// The key every digest in this process uses now.
     pub fn get() -> (u64, u64) {
-        if let Some((k, _)) = *KEY.read().unwrap_or_else(|e| e.into_inner()) {
-            return k;
+        {
+            let g = STATE.read().unwrap_or_else(|e| e.into_inner());
+            if let (Some(k), true) = (g.key, g.bound || g.drawn) {
+                return k;
+            }
         }
-        let mut g = KEY.write().unwrap_or_else(|e| e.into_inner());
-        g.get_or_insert_with(|| (random(), false)).0
+        STATE.write().unwrap_or_else(|e| e.into_inner()).get()
     }
 
-    /// **BIND THE INSTALL IN `dir`** (the global settings directory): read
-    /// its key, or — when `create` and it has none — write one (this
-    /// process's, if it already bound one). `Err` only when a key file is
-    /// there and unreadable or when writing one failed; the process then
-    /// keeps the key it had.
-    pub fn bind(dir: &Path, create: bool) -> std::io::Result<()> {
-        let path = dir.join(FILE);
-        let mut g = KEY.write().unwrap_or_else(|e| e.into_inner());
-        let on_disk = match std::fs::read_to_string(&path) {
-            Ok(t) => Some(parse(&t).ok_or_else(|| std::io::Error::new(std::io::ErrorKind::InvalidData, format!("{} is not a key", path.display())))?),
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
-            Err(e) => return Err(e),
-        };
-        match (*g, on_disk) {
-            // One key per process: the first bound install's.
-            (Some((_, true)), Some(_)) => Ok(()),
-            (Some((k, true)), None) => {
-                if create {
-                    write(&path, k).or_else(|e| if path.exists() { Ok(()) } else { Err(e) })?;
-                }
-                Ok(())
-            }
-            (_, Some(k)) => {
-                *g = Some((k, true));
-                Ok(())
-            }
-            (_, None) if create => {
-                // The key this process has used so far, if any: ids it drew
-                // before this bind stay the ids it writes.
-                let k = g.map_or_else(random, |(k, _)| k);
-                match write(&path, k) {
-                    Ok(()) => {
-                        *g = Some((k, true));
-                        Ok(())
-                    }
-                    // Another face wrote one between the read and the link.
-                    Err(_) if path.exists() => {
-                        let k = std::fs::read_to_string(&path).ok().and_then(|t| parse(&t)).ok_or_else(|| std::io::Error::new(std::io::ErrorKind::InvalidData, "install key"))?;
-                        *g = Some((k, true));
-                        Ok(())
-                    }
-                    Err(e) => Err(e),
-                }
-            }
-            (_, None) => Ok(()),
-        }
+    /// [`KeyState::bind`] on this process's key.
+    pub fn bind(dir: &Path, create: bool) -> Result<Bind, KeyError> {
+        STATE.write().unwrap_or_else(|e| e.into_inner()).bind(dir, create)
+    }
+
+    /// [`KeyState::has_bound`] on this process's key.
+    pub fn has_bound(dir: &Path) -> bool {
+        STATE.read().unwrap_or_else(|e| e.into_inner()).has_bound(dir)
     }
 }
 

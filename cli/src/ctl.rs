@@ -287,7 +287,9 @@ fn node(args: &[String]) -> Result<i32> {
                 many => Ok(refuse("ambiguous", &format!("{} rows for `{id}` in {pool}/{ty}", many.len()))),
             }
         }
-        shapewire::envelope::Outcome::Error { error, code } => Ok(refuse(&code, &error)),
+        // RV1.M5: `detail` (shapewire, ripple/v2) is additive; the refusal line
+        // stays {code, message} as C3 pins it.
+        shapewire::envelope::Outcome::Error { error, code, .. } => Ok(refuse(&code, &error)),
         shapewire::envelope::Outcome::Promise { promise } => Ok(refuse("unexpected", &format!("a read answered with a promise ({promise})"))),
     }
 }

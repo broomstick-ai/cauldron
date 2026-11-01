@@ -260,7 +260,9 @@ fn j3_uptime_counts_from_the_record() {
         let a = open_at(&root);
         tui::cauldron::store::soup_dir(&a.env).unwrap()
     };
-    let at = (chrono::Local::now() - chrono::Duration::seconds(3 * 3600 + 5 * 60 + 7)).format("%Y-%m-%d %H:%M:%S").to_string();
+    // UPTIME-DST: the record a face writes (`stamp`), 3h 5m 7s before the
+    // face's `now`; never a local wall-clock string subtracted from another.
+    let at = supervise::stamp(supervise::now() - chrono::Duration::seconds(UP));
     let r = supervise::Record { at, who: "operator".into(), device: "example-mac".into(), service: "tts".into(), op: supervise::Op::Restart, why: "requested".into(), from: String::new(), to: String::new() };
     supervise::append(&dir, &r).unwrap();
     let mut a = open_at(&root);
@@ -278,6 +280,96 @@ fn j3_uptime_counts_from_the_record() {
     assert_eq!(supervise::span(12), "12s");
     assert_eq!(supervise::span(4 * 60 + 3), "4m");
     assert_eq!(supervise::span(6 * 86_400 + 2 * 3600 + 9), "6d 2h");
+}
+
+/// 3h 5m 7s: the uptime every UPTIME-DST case reads as `3h 5m`.
+const UP: i64 = 3 * 3600 + 5 * 60 + 7;
+
+/// **UPTIME-DST.** A service restarted 3h 5m before a moment that spans a DST
+/// change reads `3h 5m`: its uptime is a difference of UTC instants, never of
+/// local wall-clock readings. Each case runs the face in a CHILD of this test
+/// binary with `TZ` and `CAULDRON_TEST_NOW` set (the JOBS-DST injection: an
+/// isolated process reads its now from the variable), so the zone is real
+/// and nothing in this process's environment is touched.
+///
+/// The instants (unix seconds) were computed once with Python `zoneinfo`:
+///
+/// | now (UTC)            | Los Angeles now | start, 3h 5m 7s before |
+/// |----------------------|-----------------|------------------------|
+/// | 1772968200 03-08 11:10 | 04:10 PDT     | 00:04:53 PST (spring-forward between) |
+/// | 1793533620 11-01 11:47 | 03:47 PST     | 01:41:53 PDT, first 01:xx (fall-back between) |
+/// | 1793537400 11-01 12:50 | 04:50 PST     | 01:44:53 PST, the REPEATED 01:xx |
+///
+/// The old naive-local subtraction read `4h 5m`, `2h 5m` and `3h 5m`. Every
+/// case runs in America/Los_Angeles, in America/Phoenix (no DST) and in UTC,
+/// with the record in the format a face now writes (RFC 3339) and, where it
+/// is unambiguous, in the legacy local `YYYY-MM-DD HH:MM:SS` an older face
+/// wrote. A legacy time in the repeated hour cannot name one instant; it is
+/// read as the first occurrence (asserted below as documented, not as right).
+#[test]
+fn uptime_dst_reads_3h_5m_across_both_2026_transitions_in_every_zone() {
+    const LA: &str = "America/Los_Angeles";
+    const PHX: &str = "America/Phoenix";
+    // (zone, now, legacy?, expected)
+    let mut cases: Vec<(&str, i64, bool, &str)> = Vec::new();
+    for now in [1_772_968_200, 1_793_533_620, 1_793_537_400] {
+        for tz in [LA, PHX, "UTC"] {
+            cases.push((tz, now, false, "3h 5m"));
+            let repeated = tz == LA && now == 1_793_537_400;
+            cases.push((tz, now, true, if repeated { "4h 5m" } else { "3h 5m" }));
+        }
+    }
+    let exe = std::env::current_exe().unwrap();
+    let mut failed = Vec::new();
+    for (tz, now, legacy, want) in &cases {
+        let out = std::process::Command::new(&exe)
+            .args(["reaudit8_0303::uptime_dst_child", "--exact", "--ignored", "--nocapture", "--test-threads=1"])
+            .env("TZ", tz)
+            .env("CAULDRON_TEST_NOW", now.to_string())
+            .env("UPTIME_DST_LEGACY", if *legacy { "1" } else { "0" })
+            .env("UPTIME_DST_WANT", want)
+            .output()
+            .unwrap();
+        let text = format!("{}{}", String::from_utf8_lossy(&out.stdout), String::from_utf8_lossy(&out.stderr));
+        // Sentinel: the child ran the case, it did not filter to nothing.
+        let ran = text.contains("UPTIME-DST-CHILD-RAN");
+        if !out.status.success() || !ran {
+            failed.push(format!("TZ={tz} now={now} legacy={legacy} want={want} ran={ran}:\n{text}"));
+        }
+    }
+    assert!(failed.is_empty(), "{} of {} cases failed:\n{}", failed.len(), cases.len(), failed.join("\n---\n"));
+}
+
+/// The child of [`uptime_dst_reads_3h_5m_across_both_2026_transitions_in_every_zone`]:
+/// one case, with `TZ` and `CAULDRON_TEST_NOW` set by the parent. Ignored,
+/// and a no-op without the parent's variables.
+#[test]
+#[ignore = "run by uptime_dst_reads_3h_5m_across_both_2026_transitions_in_every_zone"]
+fn uptime_dst_child() {
+    let Ok(want) = std::env::var("UPTIME_DST_WANT") else { return };
+    let legacy = std::env::var("UPTIME_DST_LEGACY").as_deref() == Ok("1");
+    let now = supervise::now();
+    // Sentinel: the pinned now was read, not the machine clock.
+    assert_eq!(now.timestamp().to_string(), std::env::var("CAULDRON_TEST_NOW").unwrap());
+    let start = now - chrono::Duration::seconds(UP);
+    let at = if legacy { start.with_timezone(&chrono::Local).format("%Y-%m-%d %H:%M:%S").to_string() } else { supervise::stamp(start) };
+    assert!(supervise::instant(&at).is_some(), "{at}");
+    let root = scratch_root();
+    let dir = tui::cauldron::store::soup_dir(&open_at(&root).env).unwrap();
+    let r = supervise::Record { at: at.clone(), who: "operator".into(), device: "example-mac".into(), service: "tts".into(), op: supervise::Op::Restart, why: "requested".into(), from: String::new(), to: String::new() };
+    supervise::append(&dir, &r).unwrap();
+    let mut a = open_at(&root);
+    assert_eq!(supervise::uptime(service(&a, "tts")), want, "at={at}");
+    assert_eq!(supervise::since_at(&at, now), want, "at={at}");
+    mesh_with(&mut a, "tts");
+    let s = render_to_text(&mut a, 140, 200).unwrap().join("\n");
+    assert!(s.lines().any(|l| l.contains("uptime") && l.contains(&want)), "{s}");
+    // The log shows the start as this zone's wall clock.
+    let local = start.with_timezone(&chrono::Local).format("%Y-%m-%d %H:%M:%S").to_string();
+    if !legacy || want == "3h 5m" {
+        assert!(s.lines().any(|l| l.contains(&local) && l.contains("restart")), "{local}\n{s}");
+    }
+    println!("UPTIME-DST-CHILD-RAN at={at} uptime={want}");
 }
 
 /// The Supervision band is shut while it is empty, and opens by itself once

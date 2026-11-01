@@ -1,8 +1,8 @@
 [package]
-name = "soup"
+name = "soup-seed"
 version.workspace = true
 edition.workspace = true
-description = "The MINIMAL soup crate on the release branch (REL-3.S1): the curated `cauldron-build` dataset (cauldron's own development, scrubbed) and the loader that seeds that one environment. Replaced by whichever real soup wins (ripple/v2 or soup/phase-d); see src/lib.rs."
+description = "The MINIMAL soup crate on the release branch (REL-3.S1; package renamed from `soup` at RV1.S1 to make room for the real soup daemon on the development line; that daemon is not in this release): the curated `cauldron-build` dataset (cauldron's own development, scrubbed) and the loader that seeds that one environment. Replaced by whichever real soup wins (ripple/v2 or soup/phase-d); see src/lib.rs."
 
 # ONE integration-test binary (core:cargo-lease): every test is a module of
 # tests/it/main.rs. Add a module there, never a new top-level tests/*.rs.

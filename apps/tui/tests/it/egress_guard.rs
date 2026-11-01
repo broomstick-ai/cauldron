@@ -18,7 +18,7 @@
 //! in the reconnect test is a scratch listener the gate is told to treat as
 //! live.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::net::TcpListener;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -575,6 +575,262 @@ const OUT_OF_REACH: &[(&str, &str)] = &[
     ("services/threads", "the threads DAEMON: neither the face nor the CLI links it (tui has it as a dev-dependency for pool_daemon only); its own dials are its job"),
     ("services/tts", "the tts DAEMON: linked by nothing the face or the CLI ships"),
 ];
+
+/// **RV1.S1d: THE OUT_OF_REACH POPULATION THAT `tui`/`cauldron` REACH ONLY
+/// THROUGH DEV-DEPENDENCIES**, by `(package, the member whose
+/// [dev-dependencies] carries the edge, why)`. A dev edge is never linked into
+/// a shipped binary, so these are still out of reach; but each is named, its
+/// edge must really be dev-only, and a row nothing reaches is stale.
+const DEV_ONLY_REACH: &[(&str, &str, &str)] = &[(
+    "threads",
+    "tui",
+    "tui's [dev-dependencies] (pool_daemon runs the daemon in-process); `cauldron` meets it only through soup-seed's own \
+     dev-dependency on tui — neither edge is in a shipped binary",
+)];
+
+/// Package names one dependency table declares, renames resolved through
+/// `package =` and, for `workspace = true`, through `[workspace.dependencies]`.
+fn dep_table_names(t: Option<&toml::Value>, ws_deps: &toml::Table, out: &mut BTreeSet<String>) {
+    let Some(t) = t.and_then(|v| v.as_table()) else { return };
+    for (k, v) in t {
+        let inherited = v.get("workspace").and_then(|w| w.as_bool()) == Some(true);
+        let renamed = v
+            .get("package")
+            .and_then(|p| p.as_str())
+            .or_else(|| if inherited { ws_deps.get(k).and_then(|w| w.get("package")).and_then(|p| p.as_str()) } else { None });
+        out.insert(renamed.unwrap_or(k).to_string());
+    }
+}
+
+/// A manifest's (normal + build, dev) dependency package names, every
+/// `[target.*]` section included.
+fn manifest_deps(manifest: &str, ws_deps: &toml::Table) -> (BTreeSet<String>, BTreeSet<String>) {
+    let m: toml::Table = manifest.parse().expect("a parseable manifest");
+    let (mut ship, mut dev) = (BTreeSet::new(), BTreeSet::new());
+    let mut scopes = vec![&m];
+    if let Some(t) = m.get("target").and_then(|t| t.as_table()) {
+        scopes.extend(t.values().filter_map(|v| v.as_table()));
+    }
+    for s in scopes {
+        for k in ["dependencies", "build-dependencies", "build_dependencies"] {
+            dep_table_names(s.get(k), ws_deps, &mut ship);
+        }
+        for k in ["dev-dependencies", "dev_dependencies"] {
+            dep_table_names(s.get(k), ws_deps, &mut dev);
+        }
+    }
+    (ship, dev)
+}
+
+/// `Cargo.lock` as a graph: package names, and per package its SHIPPED edges
+/// (normal + build) and its DEV edges. The lock does not say which is which,
+/// so a package with a manifest in `manifests` (a workspace member) has each
+/// lock edge classified by that manifest, and an edge no manifest section
+/// accounts for is an error (the parser missed a form). A registry package's
+/// lock edges are all shipped (cargo does not resolve a dependency's dev-deps).
+struct DepGraph {
+    names: Vec<String>,
+    ship: Vec<Vec<usize>>,
+    dev: Vec<Vec<usize>>,
+}
+
+fn dep_graph(lock: &str, manifests: &BTreeMap<String, String>, ws_deps: &toml::Table) -> Result<DepGraph, Vec<String>> {
+    let l: toml::Table = lock.parse().expect("a parseable Cargo.lock");
+    // (name, version, source, dependencies). A package is identified by all
+    // three: RV1.M4-Q2 — one lock may hold two same-named, same-versioned
+    // packages from different sources (two `protoledger` git pins), and a
+    // lookup by name alone cannot tell them apart.
+    let pkgs: Vec<(String, String, String, Vec<String>)> = l
+        .get("package")
+        .and_then(|p| p.as_array())
+        .expect("Cargo.lock has [[package]]")
+        .iter()
+        .map(|p| {
+            let s = |k: &str| p.get(k).and_then(|v| v.as_str()).unwrap_or("").to_string();
+            let deps = p.get("dependencies").and_then(|d| d.as_array()).map(|a| a.iter().filter_map(|d| d.as_str().map(str::to_string)).collect());
+            (s("name"), s("version"), s("source"), deps.unwrap_or_default())
+        })
+        .collect();
+    // "name", "name version" or "name version (source)". A lock reference's
+    // source omits the package's `#<precise>` fragment (a git source is
+    // `git+<url>?rev=<r>#<sha>` on the package, `git+<url>?rev=<r>` in a
+    // reference), so the package's source is compared with it stripped.
+    let resolve = |d: &str| {
+        let (head, src) = match d.split_once(" (") {
+            Some((h, rest)) => (h, Some(rest.strip_suffix(')').unwrap_or(rest))),
+            None => (d, None),
+        };
+        let mut w = head.split_whitespace();
+        let (n, v) = (w.next().unwrap_or(""), w.next());
+        let hit: Vec<usize> = (0..pkgs.len())
+            .filter(|&i| {
+                let (pn, pv, ps, _) = &pkgs[i];
+                pn == n && v.is_none_or(|v| pv == v) && src.is_none_or(|s| ps.split('#').next() == Some(s))
+            })
+            .collect();
+        (hit.len() == 1).then(|| hit[0])
+    };
+    let mut errs = Vec::new();
+    let (mut ship, mut dev) = (vec![Vec::new(); pkgs.len()], vec![Vec::new(); pkgs.len()]);
+    for (i, (name, _, source, deps)) in pkgs.iter().enumerate() {
+        // Only a source-less (path / workspace) package is a member; a git or
+        // registry package that shares a member's name is not classified by
+        // that member's manifest.
+        let declared = if source.is_empty() { manifests.get(name).map(|m| manifest_deps(m, ws_deps)) } else { None };
+        for d in deps {
+            let Some(j) = resolve(d) else {
+                errs.push(format!("Cargo.lock: {name} -> `{d}` resolves to no single package"));
+                continue;
+            };
+            match &declared {
+                None => ship[i].push(j),
+                Some((s, _)) if s.contains(&pkgs[j].0) => ship[i].push(j),
+                Some((_, v)) if v.contains(&pkgs[j].0) => dev[i].push(j),
+                Some(_) => errs.push(format!("Cargo.lock edge {name} -> {d}: no section of {name}'s manifest declares it")),
+            }
+        }
+    }
+    let names = pkgs.into_iter().map(|p| p.0).collect();
+    if errs.is_empty() { Ok(DepGraph { names, ship, dev }) } else { Err(errs) }
+}
+
+impl DepGraph {
+    /// Every package reachable from `root` (shipped edges, plus dev edges
+    /// when `with_dev`), each mapped to the package it was reached from.
+    fn closure(&self, root: &str, with_dev: bool) -> BTreeMap<String, Option<String>> {
+        let r = self.names.iter().position(|n| n == root).unwrap_or_else(|| panic!("{root} is not in Cargo.lock"));
+        let mut seen: BTreeMap<usize, Option<usize>> = BTreeMap::from([(r, None)]);
+        let mut stack = vec![r];
+        while let Some(x) = stack.pop() {
+            let dev = if with_dev { self.dev[x].as_slice() } else { &[] };
+            for &y in self.ship[x].iter().chain(dev) {
+                if let std::collections::btree_map::Entry::Vacant(e) = seen.entry(y) {
+                    e.insert(Some(x));
+                    stack.push(y);
+                }
+            }
+        }
+        seen.into_iter().map(|(k, v)| (self.names[k].clone(), v.map(|v| self.names[v].clone()))).collect()
+    }
+}
+
+/// `root -> … -> pkg`, read back off a closure's parent map.
+fn chain(c: &BTreeMap<String, Option<String>>, pkg: &str) -> String {
+    let mut out = vec![pkg.to_string()];
+    let mut at = pkg.to_string();
+    while let Some(Some(p)) = c.get(&at) {
+        out.push(p.clone());
+        at = p.clone();
+    }
+    out.reverse();
+    out.join(" -> ")
+}
+
+/// **RV1.S1d (RV1.S1-I F1): THE SKIP LIST IS CHECKED, NOT TRUSTED.** Every
+/// `OUT_OF_REACH` member is excluded from the http-dependency and dial scans
+/// above; this proves, from `Cargo.lock` and the members' manifests, that no
+/// such member is in the normal + build dependency closure of `tui` (the face)
+/// or `cauldron` (the CLI), and that every one reached through a dev edge is
+/// named in `DEV_ONLY_REACH`. Opposed on a planted lock: a renamed and a
+/// target-scoped shipped edge ARE found, a dev-only edge is NOT, and a lock
+/// edge no manifest section declares is an error, not a silent skip.
+#[test]
+fn rv1s1d_no_out_of_reach_member_is_in_the_face_or_cli_dependency_closure() {
+    let planted_lock = "version = 3\n\
+        [[package]]\nname = \"face\"\nversion = \"0.1.0\"\ndependencies = [\"devtool\", \"lib\", \"web 1.0.0\"]\n\
+        [[package]]\nname = \"lib\"\nversion = \"0.1.0\"\ndependencies = [\"daemon\"]\n\
+        [[package]]\nname = \"daemon\"\nversion = \"0.1.0\"\n\
+        [[package]]\nname = \"devtool\"\nversion = \"0.1.0\"\ndependencies = [\"daemon2\"]\n\
+        [[package]]\nname = \"daemon2\"\nversion = \"0.1.0\"\n\
+        [[package]]\nname = \"web\"\nversion = \"1.0.0\"\nsource = \"registry+https://github.com/rust-lang/crates.io-index\"\n\
+        [[package]]\nname = \"web\"\nversion = \"2.0.0\"\nsource = \"registry+https://github.com/rust-lang/crates.io-index\"\n";
+    let face = "[package]\nname = \"face\"\n[dependencies]\nlib = { path = \"../lib\" }\n\
+        [target.'cfg(unix)'.dependencies]\nweb = \"1\"\n[dev-dependencies]\ndevtool = { path = \"../devtool\" }\n";
+    let lib = "[package]\nname = \"lib\"\n[dependencies]\nd = { package = \"daemon\", path = \"../daemon\" }\n";
+    let none = toml::Table::new();
+    let mut ms = BTreeMap::from([("face".to_string(), face.to_string()), ("lib".to_string(), lib.to_string())]);
+    let g = dep_graph(planted_lock, &ms, &none).expect("planted graph");
+    let (s, a) = (g.closure("face", false), g.closure("face", true));
+    assert!(s.contains_key("daemon") && s.contains_key("web"), "planted: the renamed / target-scoped shipped edges are missed: {s:?}");
+    assert_eq!(chain(&s, "daemon"), "face -> lib -> daemon");
+    assert!(!s.contains_key("daemon2") && a.contains_key("daemon2"), "planted: the dev-only edge is misclassified: {s:?} / {a:?}");
+    ms.insert("face".into(), face.replace("lib = { path = \"../lib\" }\n", ""));
+    assert!(dep_graph(planted_lock, &ms, &none).is_err(), "planted: an undeclared lock edge must be an error");
+
+    // RV1.M4-Q2: two same-named, same-versioned packages from different git
+    // sources. Each reference resolves to its own package by source: the one
+    // `lib` ships reaches the face's shipped closure (with ITS dependency), the
+    // one only `devtool` carries does not.
+    let twin_lock = "version = 3\n\
+        [[package]]\nname = \"face\"\nversion = \"0.1.0\"\ndependencies = [\"devtool\", \"lib\"]\n\
+        [[package]]\nname = \"lib\"\nversion = \"0.1.0\"\ndependencies = [\"pl 0.1.0 (git+https://a/pl?rev=1)\"]\n\
+        [[package]]\nname = \"devtool\"\nversion = \"0.1.0\"\ndependencies = [\"pl 0.1.0 (git+file:///b/pl?rev=2)\"]\n\
+        [[package]]\nname = \"pl\"\nversion = \"0.1.0\"\nsource = \"git+file:///b/pl?rev=2#2222\"\ndependencies = [\"daemon2\"]\n\
+        [[package]]\nname = \"pl\"\nversion = \"0.1.0\"\nsource = \"git+https://a/pl?rev=1#1111\"\ndependencies = [\"daemon\"]\n\
+        [[package]]\nname = \"daemon\"\nversion = \"0.1.0\"\n\
+        [[package]]\nname = \"daemon2\"\nversion = \"0.1.0\"\n";
+    let twin_face = "[package]\nname = \"face\"\n[dependencies]\nlib = { path = \"../lib\" }\n[dev-dependencies]\ndevtool = { path = \"../devtool\" }\n";
+    let twin_ms = BTreeMap::from([
+        ("face".to_string(), twin_face.to_string()),
+        ("lib".to_string(), "[package]\nname = \"lib\"\n[dependencies]\npl = { git = \"https://a/pl\" }\n".to_string()),
+        ("devtool".to_string(), "[package]\nname = \"devtool\"\n[dependencies]\npl = { git = \"file:///b/pl\" }\n".to_string()),
+    ]);
+    let g = dep_graph(twin_lock, &twin_ms, &none).unwrap_or_else(|e| panic!("planted twins: {e:?}"));
+    let (s, a) = (g.closure("face", false), g.closure("face", true));
+    assert!(s.contains_key("pl") && s.contains_key("daemon"), "planted twins: the shipped twin's closure is missed: {s:?}");
+    assert!(!s.contains_key("daemon2") && a.contains_key("daemon2"), "planted twins: the dev-only twin leaked into the shipped closure: {s:?} / {a:?}");
+    // A source-less reference to the twinned name is ambiguous: an error, never a guess.
+    let ambiguous = twin_lock.replace("\"pl 0.1.0 (git+https://a/pl?rev=1)\"", "\"pl 0.1.0\"");
+    assert!(dep_graph(&ambiguous, &twin_ms, &none).is_err(), "planted twins: an ambiguous reference must be an error");
+
+    let ws = workspace();
+    let root: toml::Table = std::fs::read_to_string(ws.join("Cargo.toml")).unwrap().parse().unwrap();
+    let ws_deps = root.get("workspace").and_then(|w| w.get("dependencies")).and_then(|d| d.as_table()).cloned().unwrap_or_default();
+    let mut manifests = BTreeMap::new();
+    let mut pkg_of = BTreeMap::new();
+    for m in members(&ws) {
+        let text = std::fs::read_to_string(ws.join(&m).join("Cargo.toml")).unwrap();
+        let t: toml::Table = text.parse().unwrap();
+        let name = t.get("package").and_then(|p| p.get("name")).and_then(|n| n.as_str()).unwrap_or_else(|| panic!("{m}: no package name")).to_string();
+        pkg_of.insert(m, name.clone());
+        manifests.insert(name, text);
+    }
+    let lock = std::fs::read_to_string(ws.join("Cargo.lock")).unwrap();
+    let g = dep_graph(&lock, &manifests, &ws_deps).unwrap_or_else(|e| panic!("the workspace graph:\n{}", e.join("\n")));
+    let mut wrong = Vec::new();
+    let mut dev_reached = BTreeSet::new();
+    for face in ["tui", "cauldron"] {
+        let (ship, all) = (g.closure(face, false), g.closure(face, true));
+        // SENTINEL (doctrine 9): the shipped closure is a real one — it holds
+        // the choke point's crate and dozens of packages (`cargo tree -e
+        // normal,build` at RV1.S1d: 67 distinct names for cauldron, 218 for tui),
+        // and the dev closure is strictly larger (the dev edges are seen).
+        assert!(ship.len() > 50 && ship.contains_key("env"), "sentinel: {face}'s shipped closure is {} packages", ship.len());
+        assert!(all.len() > ship.len(), "sentinel: {face}'s dev edges add nothing ({} packages)", all.len());
+        for (path, why) in OUT_OF_REACH {
+            let p = pkg_of.get(*path).unwrap_or_else(|| panic!("stale out-of-reach member {path} ({why})"));
+            if ship.contains_key(p) {
+                wrong.push(format!("{path} (`{p}`) IS in {face}'s shipped dependency closure: {} — it is not out of reach ({why})", chain(&ship, p)));
+            } else if all.contains_key(p) {
+                dev_reached.insert(p.clone());
+                if !DEV_ONLY_REACH.iter().any(|(d, ..)| d == p) {
+                    wrong.push(format!("{path} (`{p}`) reaches {face} through dev-dependencies ({}) and no DEV_ONLY_REACH row names it", chain(&all, p)));
+                }
+            }
+        }
+    }
+    for (pkg, from, why) in DEV_ONLY_REACH {
+        assert!(pkg_of.values().any(|n| n == pkg) && OUT_OF_REACH.iter().any(|(p, _)| pkg_of.get(*p).is_some_and(|n| n == pkg)), "{pkg} is not an OUT_OF_REACH member ({why})");
+        let (s, d) = manifest_deps(manifests.get(*from).unwrap_or_else(|| panic!("{from} is not a member")), &ws_deps);
+        if !d.contains(*pkg) || s.contains(*pkg) {
+            wrong.push(format!("DEV_ONLY_REACH {pkg}: {from} does not carry it as a dev-dependency only ({why})"));
+        }
+        if !dev_reached.contains(*pkg) {
+            wrong.push(format!("stale DEV_ONLY_REACH {pkg}: neither face reaches it, even through dev edges ({why})"));
+        }
+    }
+    assert!(wrong.is_empty(), "OUT_OF_REACH does not hold:\n{}", wrong.join("\n"));
+}
 
 /// **F3, SHIPPED: NO DIAL API AND NO DAEMON-CONTROL SPAWN OUTSIDE THE
 /// CHOKE POINT.** Scans the shipped half of every `src/**/*.rs` of every

@@ -188,6 +188,7 @@ impl Sandbox {
             .args(args)
             .env("CAULDRON_HOME", &self.root)
             .env("CAULDRON_ENV", &self.env)
+            .env(crate::grants::ALLOW_ENV, crate::grants::owned(&self.root, &self.daemon.iter().map(Child::id).collect::<Vec<_>>()))
             .output()
             .expect("spawn cauldron");
         (
@@ -254,6 +255,7 @@ impl Sandbox {
             .arg("daemon")
             .env("CAULDRON_HOME", &self.root)
             .env("CAULDRON_ENV", &self.env)
+            .env(crate::grants::ALLOW_ENV, crate::grants::owned(&self.root, &[]))
             .stdout(log.try_clone().unwrap())
             .stderr(log)
             .spawn()
@@ -596,4 +598,129 @@ fn r9c7b3_a_repin_of_the_same_build_without_an_unpin_keeps_the_wait_outlasting_3
     let s2 = sb.deferred_since("k", &v2).unwrap_or_else(|| panic!("the wait was dropped\n{}", sb.log()));
     assert_eq!(s2, s1, "a re-pin with no unpin re-stamped the wait");
     assert_eq!(sb.up("k", port), Some((pid1, v1)), "premise: still waiting\n{}", sb.log());
+}
+
+// ═══════════════════════════════════════════════════════ PIN-RACE ════
+//
+// CLI-ISO-I F2: `pin` SAVED the pin and only then read the park, so with
+// `poll_secs = 1` the holder could revive a failure-park (or a stop could
+// park the service) between the two, and `pin` described a state it was not
+// written over — `r9c7b2_b_a_failure_parked…` went red once under load. Now
+// the read and the save are one step under the env.toml writers' lock, and
+// the holder takes that lock to park. These two tests HOLD that step open
+// (`CAULDRON_TEST_PIN_WINDOW_MS`) and land the other party exactly inside it,
+// at the moment `CAULDRON_TEST_PIN_READ_MARK` says the read is done, so the
+// interleaving the full suite only sometimes hit happens every run.
+
+const PIN_WINDOW_MS: u64 = 4000;
+
+impl Sandbox {
+    /// `cauldron pin name label`, held open between its read of the park and
+    /// its save. Returns the child and the mark file it writes on the read.
+    fn pin_held_open(&self, name: &str, label: &str) -> (Child, PathBuf) {
+        let mark = self.root.join(format!("pin-read-{name}"));
+        let child = Command::new(env!("CARGO_BIN_EXE_cauldron"))
+            .args(["pin", name, label])
+            .env("CAULDRON_HOME", &self.root)
+            .env("CAULDRON_ENV", &self.env)
+            .env("CAULDRON_TEST_PIN_WINDOW_MS", PIN_WINDOW_MS.to_string())
+            .env("CAULDRON_TEST_PIN_READ_MARK", &mark)
+            .env(crate::grants::ALLOW_ENV, crate::grants::owned(&self.root, &self.daemon.iter().map(Child::id).collect::<Vec<_>>()))
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .expect("spawn cauldron pin");
+        (child, mark)
+    }
+
+    fn pinned(&self, name: &str) -> Option<String> {
+        let path = self.root.join("data").join(&self.env).join("env.toml");
+        ::env::decl::Manifest::load(&path).ok()?.pin(name)
+    }
+}
+
+fn finish(child: Child) -> (i32, String) {
+    let out = child.wait_with_output().expect("wait for cauldron pin");
+    (
+        out.status.code().unwrap_or(-1),
+        format!("{}{}", String::from_utf8_lossy(&out.stdout), String::from_utf8_lossy(&out.stderr)),
+    )
+}
+
+/// F2 itself: a pin to a different build than a failure-park's lands while
+/// the holder passes every second. The holder cannot clear the park until the
+/// pin is SAVED, and the pin read the park before saving, so it says the park
+/// is cleared and the new build launched — and both happen.
+#[test]
+fn pin_race_a_failure_park_is_read_before_the_pin_is_saved_and_neither_is_lost() {
+    let mut sb = Sandbox::new("prfail");
+    std::fs::write(sb.root.join("art"), DEAD).unwrap();
+    let port = sb.declare_art("f", "", "art");
+    let bad = sb.build("f");
+    sb.pin("f", &bad);
+    sb.start_daemon();
+    wait_for("f PARKED", Duration::from_secs(240), || sb.log().contains("`f` is PARKED in").then_some(()));
+    std::fs::write(sb.root.join("art"), FAKE).unwrap();
+    let good = sb.build("f");
+    assert_ne!(good, bad);
+
+    let (child, mark) = sb.pin_held_open("f", &good);
+    wait_for("pin to read the park", BUDGET, || mark.exists().then_some(()));
+    // Two holder passes inside the held step: the park still stands, because
+    // the pin that would clear it is not written yet.
+    std::thread::sleep(Duration::from_millis(2000));
+    let row = sb.holder_row("f");
+    assert_eq!(row["parked"], true, "the park was cleared inside pin's read→write step: {row}\n{}", sb.log());
+    assert_eq!(row["parked_on"], bad.as_str(), "{row}");
+    let (rc, said) = finish(child);
+    assert_eq!(rc, 0, "{said}");
+    // The pin's wording is about the park it was written over.
+    assert!(said.contains("clears the park and launches") && said.contains(&good), "{said}");
+    assert!(!said.contains("what its next start launches"), "{said}");
+    // Neither update lost: the pin is in env.toml, and the park it cleared
+    // was the one it read — the daemon launches the good build.
+    assert_eq!(sb.pinned("f").as_deref(), Some(good.as_str()), "the pin was lost");
+    let (_, ver) = wait_for("f revived onto the good build", BUDGET, || sb.up("f", port));
+    assert_eq!(ver, good, "the wording's promise held");
+}
+
+/// A STOP-park requested while a pin is between its read and its save waits
+/// for the save, then lands: the pin is written over the state it read (the
+/// service running), and the park is not lost to the pin (it stays parked, a
+/// pin never revives a stop-park).
+#[test]
+fn pin_race_a_stop_park_landing_inside_pins_read_write_step_waits_for_the_save_and_neither_is_lost() {
+    let mut sb = Sandbox::new("prstop");
+    let (port, v1, _pid1) = sb.up_on_v1("p", "");
+    sb.new_bytes("v2");
+    let v2 = sb.build("p");
+    assert_ne!(v2, v1);
+
+    let (child, mark) = sb.pin_held_open("p", &v2);
+    wait_for("pin to read the park", BUDGET, || mark.exists().then_some(()));
+    let t_read = Instant::now();
+    let (rc, out) = sb.cauldron(&["stop", "p"]);
+    let stop_took = t_read.elapsed();
+    assert_eq!(rc, 0, "stop: {out}\n{}", sb.log());
+    let (rc, said) = finish(child);
+    assert_eq!(rc, 0, "{said}");
+    // The park waited for the pin's save (the step held open PIN_WINDOW_MS
+    // from the read): it did not land between the read and the write.
+    assert!(
+        stop_took >= Duration::from_millis(PIN_WINDOW_MS - 300),
+        "the stop-park landed inside pin's read→write step ({stop_took:?} < {PIN_WINDOW_MS}ms):\n{said}\n{}",
+        sb.log()
+    );
+    // The pin describes the state it was written over: running, under a holder.
+    assert!(said.contains("restarts the running `p`"), "{said}");
+    // Neither update lost: v2 is pinned, and p is stop-parked and down, and
+    // stays so across passes with the new pin in place.
+    assert_eq!(sb.pinned("p").as_deref(), Some(v2.as_str()), "the pin was lost");
+    for _ in 0..3 {
+        let row = sb.holder_row("p");
+        assert_eq!(row["parked"], true, "{row}\n{}", sb.log());
+        assert_eq!(row["parked_by"], "stop", "{row}");
+        assert!(!listening(port), "the stop-park was undone:\n{}", sb.log());
+        std::thread::sleep(Duration::from_millis(1100));
+    }
 }

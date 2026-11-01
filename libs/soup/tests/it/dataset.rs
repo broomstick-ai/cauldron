@@ -2,7 +2,7 @@
 //! test per kind, each forced red by removing that kind from the dataset
 //! (REL-3.S1 report, guards).
 
-use soup::demo::{Dataset, Kind};
+use soup_seed::demo::{Dataset, Kind};
 
 fn present(k: Kind) {
     let ds = Dataset::embedded().expect("the embedded dataset parses");
@@ -75,7 +75,7 @@ fn a_plain_action_is_neither_multi_phase_nor_secret() {
 #[test]
 fn phases_follow_the_human_action_format() {
     let body = "intro prose\n\n## A\n\n**Deliverable:** a.\n\n## prose only\n\ntext\n\n## B\n\n```field\nname: K\nroute: secret-store\n```\n\n## C\n\n```text\nDeliverable: inside a fence is text\n```\n";
-    let p = soup::demo::phases(body);
+    let p = soup_seed::demo::phases(body);
     assert_eq!(p.len(), 2, "{p:?}");
     assert!(p[0].is_empty());
     assert_eq!(p[1], vec![vec![("name".to_string(), "K".to_string()), ("route".to_string(), "secret-store".to_string())]]);

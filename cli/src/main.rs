@@ -3824,6 +3824,51 @@ fn span_words(secs: u64) -> String {
     }
 }
 
+/// **PIN-RACE (CLI-ISO-I F2): WHAT A RE-PIN LANDS ON, read BEFORE it is
+/// written.** The running instance, and the holder's own row for the service
+/// (its park), taken while the pin holds the env.toml writers' lock and before
+/// it saves. The holder takes that same lock to PARK a service (a stop-park or
+/// a failure-park, `daemon::HOLDER_PARK_LOCK_BOUND`), and it cannot act on the
+/// new pin (revive a park, restart onto it) before the save makes the pin
+/// visible. So read-then-save is one step against every park transition: what
+/// [`repin_consequence`] says is the state the pin was written over.
+///
+/// Before, the pin was saved FIRST and the park was read after, and with
+/// `poll_secs = 1` the holder could clear a failure-park and launch the new
+/// build in between, so `pin` said "is not running … next start launches"
+/// for a service it had just revived.
+struct RepinGround {
+    /// The service's row when it answered Live, else `None`.
+    running: Option<Seam>,
+    /// The holder's `STATUS` answer, when a holder answered it.
+    holder: Option<serde_json::Value>,
+    /// A daemon holds this environment.
+    held: bool,
+}
+
+fn repin_ground(env: &Environment, service: &str) -> RepinGround {
+    let running = Table::load(&env.name, &env.data_root, &env.seams())
+        .ok()
+        .and_then(|t| t.seams.get(service).cloned())
+        .filter(|s| matches!(seams::probe(s).state, SeamState::Live | SeamState::LiveUnverified));
+    let addr = held_by_a_daemon(env).ok().flatten();
+    let holder = addr
+        .as_deref()
+        .and_then(|a| ask_supervisor(a, "STATUS").ok())
+        .and_then(|l| serde_json::from_str(&l).ok());
+    RepinGround { running, holder, held: addr.is_some() }
+}
+
+/// PIN-RACE test hook: with `CAULDRON_TEST_PIN_READ_MARK` set, `pin` writes
+/// that file once it has read what the pin lands on (under the lock, before
+/// the save), so a test can land a park exactly inside the read→write step
+/// (`CAULDRON_TEST_PIN_WINDOW_MS` holds it open). Unset, it does nothing.
+fn pin_read_mark() {
+    if let Some(p) = std::env::var_os("CAULDRON_TEST_PIN_READ_MARK") {
+        let _ = std::fs::write(p, b"read\n");
+    }
+}
+
 /// **R9.C7 (gap C-7): WHAT HAPPENS TO THE RUNNING INSTANCE AFTER A RE-PIN**,
 /// said as it is rather than as it was once hoped to be.
 ///
@@ -3835,19 +3880,16 @@ fn span_words(secs: u64) -> String {
 /// `auto_restart = false`, or the daemon will restart it — immediately when
 /// the running version declares no quiet signal, at the first quiet pass when
 /// it does, and NOT AT ALL while that signal cannot be read (fail safe).
-fn repin_consequence(env: &Environment, m: &Manifest, service: &str, label: &str) -> String {
+fn repin_consequence(env: &Environment, m: &Manifest, service: &str, label: &str, ground: &RepinGround) -> String {
     let resolved = decl::resolve_version(&env.builds_for(service), label, &env.name)
         .map(|(l, _)| l)
         .unwrap_or_else(|_| label.to_string());
-    let running = Table::load(&env.name, &env.data_root, &env.seams())
-        .ok()
-        .and_then(|t| t.seams.get(service).cloned())
-        .filter(|s| matches!(seams::probe(s).state, SeamState::Live | SeamState::LiveUnverified));
-    let Some(seam) = running else {
+    let Some(seam) = ground.running.clone() else {
         // R9.C7b2 (R9.C2-3): under a holder a PARKED service does not simply
         // "launch this version next": what it does depends on the park.
-        let holder = holder_status(env);
-        if let Some(row) = holder_row(holder.as_ref(), service).filter(|r| r["parked"].as_bool() == Some(true)) {
+        // PIN-RACE: the park as it stood when the pin was WRITTEN (read before
+        // the save, under the writers' lock), never as it stands afterwards.
+        if let Some(row) = holder_row(ground.holder.as_ref(), service).filter(|r| r["parked"].as_bool() == Some(true)) {
             return match (row["parked_by"].as_str(), row["parked_on"].as_str()) {
                 (Some("stop"), _) => format!(
                     "nothing was started or stopped: `{service}` was STOPPED by request in `{}` and \
@@ -3904,8 +3946,7 @@ fn repin_consequence(env: &Environment, m: &Manifest, service: &str, label: &str
             seam.pid, seam.version
         );
     }
-    let held = held_by_a_daemon(env).ok().flatten();
-    if held.is_none() {
+    if !ground.held {
         return format!(
             "nothing was started or stopped. The running `{service}` (pid {}, version {}) keeps \
              running until it is restarted — no daemon holds `{}` to do that — and `cauldron \
@@ -4121,6 +4162,10 @@ fn verb_pin(args: &[String]) -> Result<i32> {
     // file and have one save drop the other's pin.
     let _env_toml = Manifest::lock(&env.manifest())?;
     let mut m = Manifest::load(&env.manifest())?;
+    // PIN-RACE: what this pin lands on, read under the lock and BEFORE the
+    // save (see `RepinGround`).
+    let ground = repin_ground(&env, &service);
+    pin_read_mark();
     pin_test_window();
     // ── THE HOSTED ADDRESS, CHECKED AGAINST EVERY ENVIRONMENT IN THE ROOT ──
     //
@@ -4216,7 +4261,7 @@ fn verb_pin(args: &[String]) -> Result<i32> {
             drain_cap.map(|c| format!("{c}s")).unwrap_or_else(|| "as declared".into())
         );
     }
-    println!("cauldron: {}.", repin_consequence(&env, &m, &service, &label));
+    println!("cauldron: {}.", repin_consequence(&env, &m, &service, &label, &ground));
     Ok(0)
 }
 
@@ -4312,7 +4357,7 @@ fn verb_rollback(args: &[String]) -> Result<i32> {
         println!(
             "cauldron:   that version started successfully in `{}` before. {}.",
             env.name,
-            repin_consequence(&env, &m, &d.name, &prev)
+            repin_consequence(&env, &m, &d.name, &prev, &repin_ground(&env, &d.name))
         );
     }
     if changed {

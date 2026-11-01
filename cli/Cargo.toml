@@ -30,7 +30,7 @@ path = "tests/it/main.rs"
 [dependencies]
 env = { path = "../libs/env" }
 # REL-3.S1: `env create cauldron-build` seeds the curated dataset it owns.
-soup = { path = "../libs/soup" }
+soup = { package = "soup-seed", path = "../libs/soup" }
 # R5.S2 (DEC-34): the MCP tool host the daemon owns.
 mcp-host = { path = "../libs/mcp-host" }
 serde = { workspace = true }
@@ -38,6 +38,13 @@ serde_json = { workspace = true }
 anyhow = { workspace = true }
 # R6.S6b: the self-update compares the launch path's bytes when only its ctime moved.
 sha2 = { workspace = true }
+# JOBS-DST: a calendar slot is a LOCAL DATE at HH:MM resolved through the
+# zone's rules (`jobs::resolve_local`), which needs the offset at an instant —
+# `chrono::Local` reads it from `TZ` / /etc/localtime with no `/bin/date`
+# spawn and no `unsafe`. Already the workspace's time library (version above,
+# in the lockfile through the tui); this adds chrono, num-traits and
+# iana-time-zone to the shipped CLI.
+chrono = { workspace = true }
 # R9.C7: reads a declaration's `[quiet]` section out of its text.
 toml = { workspace = true }
 # RV1.S12a: `ctl node` reads one soup node over the soup's websocket door —

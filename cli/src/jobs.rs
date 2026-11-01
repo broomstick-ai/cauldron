@@ -66,8 +66,11 @@ struct Live {
 //   neither loses a slot that came due while it was down (it runs once on the
 //   next poll) nor doubles one already started (it is recorded at spawn).
 //   "Newer" means more than HALF A DAY newer: slots are 24 h ± 1 h (DST)
-//   apart, so the margin absorbs a DST shift in the slot arithmetic without
-//   ever swallowing a real slot.
+//   apart, so the margin never swallows a real slot (see [`SLOT_MARGIN`]).
+//   JOBS-DST: a slot is a LOCAL DATE at HH:MM resolved to an instant
+//   ([`resolve_local`]); an ambiguous HH:MM (fall-back) is its FIRST
+//   occurrence, a nonexistent one (spring-forward) is moved forward by the
+//   gap. Wall-clock seconds are never added to or taken from a local time.
 // - An INTERVAL job (`every_secs`) and every RETRY wait on a [`Deadline`]:
 //   due when EITHER the monotonic clock OR the wall clock says the wait has
 //   passed. Sleep advances the wall clock, so a sleep no longer delays it; a
@@ -76,21 +79,21 @@ struct Live {
 //   ledger as R5.S4b-1: the brief allowed interval jobs to stay monotonic;
 //   either-clock costs nothing and makes a long interval sleep-proof too.)
 
-/// The three clock readings a schedule depends on. Injectable so a test can
-/// move the wall clock while the monotonic one stands still — exactly what a
-/// macOS sleep looks like from inside the process.
+/// The clock readings a schedule depends on. Injectable so a test can move
+/// the wall clock while the monotonic one stands still — exactly what a
+/// macOS sleep looks like from inside the process — and can fix the LOCAL
+/// ZONE, so no slot test depends on the machine's `TZ` (JOBS-DST).
 pub(crate) trait Clock {
     /// Monotonic, paused in sleep on macOS (CLOCK_UPTIME_RAW).
     fn mono(&self) -> Instant;
     /// Wall clock, unix seconds. Advances through sleep; may step either way.
     fn wall(&self) -> u64;
-    /// Seconds after LOCAL midnight now, or `None` if it cannot be read.
-    fn sod(&self) -> Option<u64>;
-    /// Seconds after LOCAL midnight at wall time `t` (unix seconds), under
-    /// the zone rules in force AT `t` — so a DST change between now and `t`
-    /// is seen. Only [`next_slot`]'s `exact` refinement of a FUTURE slot
-    /// reads it (R5.S5); the due-ness decision never does.
-    fn sod_at(&self, t: u64) -> Option<u64>;
+    /// **JOBS-DST.** The local zone's offset from UTC, seconds EAST, in force
+    /// AT wall time `t` (unix seconds) — so a DST change between now and `t`
+    /// is seen. `None` if the local zone cannot be read. Every local-time
+    /// answer the scheduler needs is derived from this one reading (see
+    /// [`resolve_local`]); nothing adds wall-clock seconds to a local time.
+    fn offset_at(&self, t: u64) -> Option<i64>;
 }
 
 /// The real clocks.
@@ -101,14 +104,36 @@ impl Clock for SystemClock {
         Instant::now()
     }
     fn wall(&self) -> u64 {
-        epoch()
+        test_now().unwrap_or_else(epoch)
     }
-    fn sod(&self) -> Option<u64> {
-        local_sod()
+    fn offset_at(&self, t: u64) -> Option<i64> {
+        local_offset_at(t)
     }
-    fn sod_at(&self, t: u64) -> Option<u64> {
-        local_sod_at(t)
-    }
+}
+
+/// **JOBS-DST: THE INJECTED "NOW" OF AN ISOLATED PROCESS.** An isolated
+/// `cauldron` (the test-only marker, or a cargo test harness —
+/// [`env::egress::process_isolation`]) reads its scheduling wall clock from
+/// `CAULDRON_TEST_NOW` (unix seconds) when that is set, so an integration
+/// test can ask `status` for a calendar job's slot at a fixed instant —
+/// across a DST change — instead of racing the real clock. His own process
+/// is never isolated, so it never reads the variable. The local zone is
+/// injected the ordinary way: `TZ`, which [`local_offset_at`] honours.
+fn test_now() -> Option<u64> {
+    static NOW: std::sync::OnceLock<Option<u64>> = std::sync::OnceLock::new();
+    *NOW.get_or_init(|| {
+        env::egress::process_isolation()?;
+        std::env::var("CAULDRON_TEST_NOW").ok()?.trim().parse().ok()
+    })
+}
+
+/// The machine's local zone offset at `t` (seconds east of UTC), through
+/// chrono's `Local` — the zone `TZ` names, else `/etc/localtime` — so no
+/// `/bin/date` is spawned per reading and no `unsafe` `localtime_r` is needed.
+fn local_offset_at(t: u64) -> Option<i64> {
+    use chrono::{Offset, TimeZone};
+    let utc = chrono::DateTime::from_timestamp(i64::try_from(t).ok()?, 0)?.naive_utc();
+    Some(i64::from(chrono::Local.offset_from_utc_datetime(&utc).fix().local_minus_utc()))
 }
 
 /// Due when EITHER clock reaches its half.
@@ -137,16 +162,80 @@ enum Next {
     Slot,
 }
 
-/// Half a day: the least gap between two distinct calendar slots that the
-/// slot arithmetic can show under a DST shift is 23 h; the most a DST shift
-/// can misplace one slot is 1 h.
+/// Half a day. Two distinct calendar slots are 23 h to 25 h apart (a DST
+/// day is 23 or 25 h long), so "newer by more than this" never swallows a
+/// real slot. Since JOBS-DST the slots themselves are exact; the margin
+/// still absorbs (a) a `last_slot` persisted by the pre-JOBS-DST arithmetic,
+/// up to an hour off, and (b) the machine's ZONE changing under a running
+/// holder (the offset moves with the wall clock unchanged), which would
+/// otherwise make the slot just run look an hour newer.
 const SLOT_MARGIN: u64 = 43_200;
+
+const DAY: i64 = 86_400;
+
+/// The LOCAL calendar date (days since 1970-01-01, local) at wall time `t`.
+fn local_day(c: &dyn Clock, t: u64) -> Option<i64> {
+    Some((i64::try_from(t).ok()? + c.offset_at(t)?).div_euclid(DAY))
+}
+
+/// **JOBS-DST: THE ONE PLACE A LOCAL TIME BECOMES AN INSTANT.** Local date
+/// `day` (days since 1970-01-01) at `target` seconds after local midnight,
+/// as unix seconds, under the zone rules in force then.
+///
+/// The offsets a day either side are the only candidates (no zone changes
+/// offset twice within two days); a candidate is real when the zone, read at
+/// the instant it names, agrees with the offset it was built from.
+///
+/// **POLICY** (RFC 5545 §3.3.5, and what POSIX `mktime` with `tm_isdst = -1`,
+/// Python's `fold=0` and Temporal's `"compatible"` all do):
+/// - **AMBIGUOUS** (the hour a fall-back repeats, 01:xx on 2026-11-01 in
+///   America/Los_Angeles): the FIRST occurrence (01:30 PDT, not 01:30 PST).
+///   A slot runs once that day; the repeat of the hour is not a new slot.
+/// - **NONEXISTENT** (the hour a spring-forward skips, 02:xx on 2026-03-08):
+///   read through the offset in force BEFORE the gap, i.e. moved forward by
+///   the gap's length (02:30 runs at 03:30 PDT). The day's slot is never
+///   skipped, and it lands after every earlier slot.
+fn resolve_local(c: &dyn Clock, day: i64, target: u64) -> Option<u64> {
+    let naive = day.checked_mul(DAY)?.checked_add(i64::try_from(target).ok()?)?;
+    let at = |off: i64| u64::try_from(naive - off).ok();
+    // A day either side of every candidate (offsets are within ±14 h).
+    let before = c.offset_at(u64::try_from(naive - DAY).ok()?)?;
+    let after = c.offset_at(u64::try_from(naive + DAY).ok()?)?;
+    let real = |off: i64| at(off).filter(|&t| c.offset_at(t) == Some(off));
+    match (real(before), real(after)) {
+        (Some(a), Some(b)) => Some(a.min(b)), // ambiguous (or no change): the first
+        (Some(t), None) | (None, Some(t)) => Some(t),
+        (None, None) => at(before), // nonexistent: shifted forward by the gap
+    }
+}
+
+/// The calendar slot (`target` seconds after local midnight) at or before
+/// wall time `t`, with the local date it belongs to.
+fn slot_at_or_before(c: &dyn Clock, target: u64, t: u64) -> Option<(i64, u64)> {
+    let today = local_day(c, t)?;
+    // Today's slot, else yesterday's. (Two days back only if a gap pushed
+    // yesterday's late slot past midnight and past `t`.)
+    for day in [today, today - 1, today - 2] {
+        let s = resolve_local(c, day, target)?;
+        if s <= t {
+            return Some((day, s));
+        }
+    }
+    None
+}
 
 /// The most recent calendar slot (`target` seconds after local midnight) at
 /// or before now, as unix seconds. `None` if local time cannot be read.
+///
+/// JOBS-DST: computed in LOCAL CALENDAR terms — today's local date, at
+/// `target`, resolved to an instant ([`resolve_local`]) — never by
+/// subtracting wall-clock seconds from now. The old arithmetic (now minus
+/// the local time since the slot) assumed the last 24 h held 86 400 s, and
+/// so put yesterday's slot an hour off from 01:00 PST to 22:59 PST on a
+/// fall-back day, and from 03:00 PDT on a spring-forward day to 00:59 the
+/// next.
 fn most_recent_slot(c: &dyn Clock, target: u64) -> Option<u64> {
-    let sod = c.sod()?;
-    Some(c.wall().saturating_sub((sod % 86_400 + 86_400 - target) % 86_400))
+    slot_at_or_before(c, target, c.wall()).map(|(_, s)| s)
 }
 
 /// **WHEN THE NEXT CALENDAR PASS IS DUE (R5.S5).** The ONE function both
@@ -161,42 +250,21 @@ fn most_recent_slot(c: &dyn Clock, target: u64) -> Option<u64> {
 /// `None` means armed with nothing recorded, so the slot already passed is
 /// not owed (as in `due`). `None` back: local time unreadable.
 ///
-/// `exact`: a FUTURE slot is first placed 24 h after the one before it, which
-/// is what the slot arithmetic will compute on that day only if the local
-/// offset has not changed by then. With `exact`, each future candidate is
-/// re-read through the offset in force AT it ([`Clock::sod_at`], one
-/// `/bin/date` per candidate), so a slot past a DST change is placed where
-/// the holder will actually see it come due. `due` passes `false`: a future
-/// slot is never due now, so refining one could not change its answer, and a
-/// poll every 4 s should not spawn a second `date`. If refinement would place
-/// a future slot at or before now (a target within an hour after a
-/// spring-forward instant) the unrefined slot stands — approximate by under
-/// an hour, and never reported as due when `due` says it is not.
-fn next_slot(c: &dyn Clock, target: u64, last: Option<u64>, exact: bool) -> Option<u64> {
-    let slot = most_recent_slot(c, target)?;
+/// JOBS-DST: each later slot is its own local date at `target`, resolved
+/// through the zone rules in force on that date, so a slot past a DST change
+/// is exactly where the holder will see it come due (the old version placed
+/// it 24 h on and corrected it with a `/bin/date` per candidate).
+fn next_slot(c: &dyn Clock, target: u64, last: Option<u64>) -> Option<u64> {
+    let (day, slot) = slot_at_or_before(c, target, c.wall())?;
     let floor = last.unwrap_or(slot).saturating_add(SLOT_MARGIN);
     if slot > floor {
         return Some(slot);
     }
-    let now = c.wall();
-    let mut t = slot;
     // Bounded: a `last` years ahead (a clock stepped far back) ends in `None`.
-    for _ in 0..800 {
-        t = t.saturating_add(86_400);
-        let mut at = t;
-        if exact && t.saturating_add(3_600) > floor {
-            if let Some(sod) = c.sod_at(t) {
-                // How far past the target the local clock reads at `t`,
-                // folded into (-12 h, +12 h]: the offset change since now.
-                let past = (sod % 86_400 + 86_400 - target) % 86_400;
-                let refined = if past > 43_200 { t.saturating_add(86_400 - past) } else { t.saturating_sub(past) };
-                if refined > now {
-                    at = refined;
-                }
-            }
-        }
-        if at > floor {
-            return Some(at);
+    for k in 1..=800 {
+        let t = resolve_local(c, day + k, target)?;
+        if t > floor {
+            return Some(t);
         }
     }
     None
@@ -208,19 +276,18 @@ fn next_slot(c: &dyn Clock, target: u64, last: Option<u64>, exact: bool) -> Opti
 /// to its slot; else — never run — the slot already passed (not owed).
 fn seed_last_slot(c: &dyn Clock, target: u64, prev: Option<&Record>) -> Option<u64> {
     prev.and_then(|r| r.last_slot)
-        .or_else(|| prev.and_then(|r| r.last_start).and_then(|t| slot_at_or_before(c, target, t)))
+        .or_else(|| prev.and_then(|r| r.last_start).and_then(|t| legacy_slot(c, target, t)))
         .or_else(|| most_recent_slot(c, target))
 }
 
 /// The slot at or before an earlier wall time `t` (a legacy record's
-/// `last_start`), read through today's offset from local midnight.
-fn slot_at_or_before(c: &dyn Clock, target: u64, t: u64) -> Option<u64> {
-    let (now, sod) = (c.wall(), c.sod()?);
-    if t > now {
+/// `last_start`), in local calendar terms at `t`. A `t` in the future is not
+/// trusted: the most recent slot stands in.
+fn legacy_slot(c: &dyn Clock, target: u64, t: u64) -> Option<u64> {
+    if t > c.wall() {
         return most_recent_slot(c, target);
     }
-    let sod_t = (sod % 86_400 + 86_400 - (now - t) % 86_400) % 86_400;
-    Some(t.saturating_sub((sod_t + 86_400 - target) % 86_400))
+    slot_at_or_before(c, target, t).map(|(_, s)| s)
 }
 
 /// One job's schedule state: what is due next, and (calendar jobs) the slot
@@ -503,7 +570,7 @@ impl Sched {
                 }
                 // R5.S5: due iff the next slot is not in the future — the
                 // same function `status` prints the next slot from.
-                next_slot(c, target, self.last_slot, false).is_some_and(|t| t <= c.wall())
+                next_slot(c, target, self.last_slot).is_some_and(|t| t <= c.wall())
             }
         }
     }
@@ -529,7 +596,8 @@ impl Sched {
         match Self::target(s) {
             Some(target) => {
                 self.next = Next::Slot;
-                c.sod().map(|now| env::hosting::secs_until(now, target)).unwrap_or(3600)
+                let now = c.wall();
+                next_slot(c, target, None).map_or(3600, |t| t.saturating_sub(now).max(1))
             }
             None => {
                 let wait = s.every_secs.saturating_sub(elapsed_secs).max(1);
@@ -654,25 +722,6 @@ fn command(env: &Environment, l: &crate::Launchable, args: &[String]) -> Result<
     Ok((cmd, data_dir))
 }
 
-/// Seconds after local midnight, read off `/bin/date` (the CLI forbids
-/// `unsafe`, so no `localtime_r`). `None` if `date` cannot be read.
-fn local_sod() -> Option<u64> {
-    let out = Command::new("/bin/date").arg("+%H:%M:%S").output().ok()?;
-    parse_hms(&String::from_utf8_lossy(&out.stdout))
-}
-
-/// [`local_sod`] at wall time `t` (BSD `date -r <secs>`), under the zone
-/// rules in force at `t`.
-fn local_sod_at(t: u64) -> Option<u64> {
-    let out = Command::new("/bin/date").arg("-r").arg(t.to_string()).arg("+%H:%M:%S").output().ok()?;
-    parse_hms(&String::from_utf8_lossy(&out.stdout))
-}
-
-fn parse_hms(t: &str) -> Option<u64> {
-    let mut it = t.trim().split(':').map(|x| x.parse::<u64>().ok());
-    Some(it.next()??.checked_mul(3600)? + it.next()?? * 60 + it.next()??)
-}
-
 /// `t` (unix seconds) as UTC ISO-8601, `2026-10-16T14:30:00Z`. Pure
 /// arithmetic (days-from-civil inverted), no zone database.
 pub(crate) fn utc_iso(t: u64) -> String {
@@ -722,7 +771,7 @@ pub(crate) struct NextSlot {
 /// exactly as its first look reads them. `None` for an interval job.
 fn next_slot_of(s: &env::hosting::Schedule, rec: Option<&Record>, c: &dyn Clock) -> Option<u64> {
     let target = Sched::target(s)?;
-    next_slot(c, target, seed_last_slot(c, target, rec), true)
+    next_slot(c, target, seed_last_slot(c, target, rec))
 }
 
 fn next_slot_view(s: &env::hosting::Schedule, rec: Option<&Record>, c: &dyn Clock) -> Option<NextSlot> {
@@ -1176,27 +1225,69 @@ mod wall_clock_schedule {
         h * 3600 + m * 60
     }
 
+    /// JOBS-DST: the fake's LOCAL ZONE, injected — no slot test reads the
+    /// machine's `TZ`.
+    #[derive(Debug, Clone, Copy)]
+    enum Zone {
+        /// One offset, always (seconds east of UTC): a zone with no DST.
+        Fixed(i64),
+        /// `before` until wall time `from`, then `after` (R5.S5: a DST
+        /// change ahead of now).
+        Shift { before: i64, from: u64, after: i64 },
+        /// America/Los_Angeles under the US rule in force since 2007: PDT
+        /// (-7 h) from 02:00 PST on the second Sunday of March to 02:00 PDT
+        /// on the first Sunday of November, PST (-8 h) otherwise. 2026:
+        /// 2026-03-08T10:00:00Z and 2026-11-01T09:00:00Z.
+        UsPacific,
+    }
+
+    impl Zone {
+        fn offset_at(self, t: u64) -> i64 {
+            match self {
+                Zone::Fixed(off) => off,
+                Zone::Shift { before, from, after } => {
+                    if t >= from {
+                        after
+                    } else {
+                        before
+                    }
+                }
+                Zone::UsPacific => {
+                    use chrono::{Datelike, NaiveDate, Weekday};
+                    let y = chrono::DateTime::from_timestamp(t as i64, 0).unwrap().year();
+                    let utc = |m, n, h| {
+                        let d = NaiveDate::from_weekday_of_month_opt(y, m, Weekday::Sun, n).unwrap();
+                        d.and_hms_opt(h, 0, 0).unwrap().and_utc().timestamp() as u64
+                    };
+                    if (utc(3, 2, 10)..utc(11, 1, 9)).contains(&t) {
+                        -7 * 3600
+                    } else {
+                        -8 * 3600
+                    }
+                }
+            }
+        }
+    }
+
+    /// The local zone of every R5.S4b/R5.S5 test: UTC-5 (CDT), no DST.
+    const CDT: Zone = Zone::Fixed(-5 * 3600);
+
     struct Fake {
         base: Instant,
         mono: Cell<u64>,
         wall: Cell<u64>,
-        /// Seconds added to UTC to get local time (DST / zone change moves it).
-        off: Cell<i64>,
-        /// R5.S5: a SCHEDULED offset change — from wall time `.0` on, the
-        /// offset is `.1` — so `sod_at` can see a DST change ahead of now.
-        shift: Cell<Option<(u64, i64)>>,
+        /// The local zone (a zone change on the machine replaces it).
+        zone: Cell<Zone>,
     }
 
     impl Fake {
-        /// Local time `t` seconds after day 0's midnight.
+        /// Local time `t` seconds after day 0's midnight, in [`CDT`].
         fn at(t: u64) -> Self {
-            Fake {
-                base: Instant::now(),
-                mono: Cell::new(0),
-                wall: Cell::new(D0 + t),
-                off: Cell::new(-5 * 3600),
-                shift: Cell::new(None),
-            }
+            Fake::utc(D0 + t, CDT)
+        }
+        /// Wall time `t` (unix seconds) in `zone`.
+        fn utc(t: u64, zone: Zone) -> Self {
+            Fake { base: Instant::now(), mono: Cell::new(0), wall: Cell::new(t), zone: Cell::new(zone) }
         }
         /// Time passes with the machine awake: both clocks move.
         fn awake(&self, s: u64) {
@@ -1217,6 +1308,11 @@ mod wall_clock_schedule {
         fn local(&self) -> u64 {
             self.wall.get() - D0
         }
+        /// Seconds after local midnight now.
+        fn sod(&self) -> Option<u64> {
+            let t = self.wall.get();
+            Some((t as i64 + self.offset_at(t)?).rem_euclid(DAY as i64) as u64)
+        }
     }
 
     impl Clock for Fake {
@@ -1226,15 +1322,8 @@ mod wall_clock_schedule {
         fn wall(&self) -> u64 {
             self.wall.get()
         }
-        fn sod(&self) -> Option<u64> {
-            self.sod_at(self.wall.get())
-        }
-        fn sod_at(&self, t: u64) -> Option<u64> {
-            let off = match self.shift.get() {
-                Some((from, off)) if t >= from => off,
-                _ => self.off.get(),
-            };
-            Some((t as i64 + off).rem_euclid(DAY as i64) as u64)
+        fn offset_at(&self, t: u64) -> Option<i64> {
+            Some(self.zone.get().offset_at(t))
         }
     }
 
@@ -1365,7 +1454,7 @@ mod wall_clock_schedule {
             let mut sc = Sched::new();
             assert!(!sc.due(&s, &c, None));
             assert_eq!(polls(&mut sc, &s, &c, 30, 90), 1);
-            c.off.set(c.off.get() + shift);
+            c.zone.set(Zone::Fixed(-5 * 3600 + shift)); // the machine's zone changes
             assert_eq!(polls(&mut sc, &s, &c, 30, hm(3, 0)), 0, "a {shift} s DST shift re-ran the slot");
             // Opposed: the next day's slot (local) still runs.
             assert_eq!(polls(&mut sc, &s, &c, 30, hm(24, 0)), 1, "after a {shift} s shift the next slot was lost");
@@ -1575,7 +1664,7 @@ mod wall_clock_schedule {
             let s = alarm();
             let c = Fake::at(hm(22, 0));
             // 02:00 local tomorrow (old offset) the zone changes.
-            c.shift.set(Some((D0 + DAY + hm(2, 0), new_off)));
+            c.zone.set(Zone::Shift { before: -5 * 3600, from: D0 + DAY + hm(2, 0), after: new_off });
             let naive = D0 + DAY + hm(9, 30);
             let want = (naive as i64 + (-5 * 3600 - new_off)) as u64;
             assert_ne!(naive, want, "sentinel: the shift moves the slot");
@@ -1586,7 +1675,7 @@ mod wall_clock_schedule {
         }
     }
 
-    /// `due` and the inexact `next_slot` agree with the original predicate
+    /// `due` and `next_slot` agree with the original predicate
     /// (`most_recent_slot > last + SLOT_MARGIN`) at every minute of two days,
     /// for last slots on either side of now — the refactor changed no answer.
     #[test]
@@ -1597,13 +1686,158 @@ mod wall_clock_schedule {
             let c = Fake::at(minute * 60);
             for last in [D0 - DAY + target, D0 + target, D0 + DAY + target, D0 + 2 * DAY + target] {
                 let old = most_recent_slot(&c, target).unwrap() > last + SLOT_MARGIN;
-                let new = next_slot(&c, target, Some(last), false).is_some_and(|t| t <= c.wall());
+                let new = next_slot(&c, target, Some(last)).is_some_and(|t| t <= c.wall());
                 assert_eq!(new, old, "minute {minute}, last {last}");
                 checked.1 += usize::from(old);
                 checked.0 += 1;
             }
         }
         assert!(checked.1 > 0 && checked.1 < checked.0, "sentinel: both answers occur ({checked:?})");
+    }
+
+    // ── JOBS-DST: slots in LOCAL CALENDAR terms, over both 2026 US ─────────
+    // transitions (America/Los_Angeles: 2026-03-08 spring-forward, 2026-11-01
+    // fall-back) and a zone with no DST (America/Phoenix, -7 h all year).
+    //
+    // THE ORACLE IS LITERAL. Each row is a zone, a target `at`, the first of
+    // five consecutive LOCAL dates (days since 1970-01-01), and that `at`'s
+    // instant on each of the five — written down from Python's `zoneinfo`
+    // (`datetime(y, m, d, h, mi, tzinfo=ZoneInfo(zone))`, `fold=0`, which is
+    // the policy [`resolve_local`] documents) when this table was authored,
+    // never computed at test time and never by this crate. Neither the product
+    // code nor `/bin/date` produces an expected value here.
+    //
+    // Every LA row's middle date is the transition day. The rows cover every
+    // hour boundary of the night of each change, plus the ambiguous (01:xx on
+    // Nov 1) and nonexistent (02:xx on Mar 8) cases and the far side of the
+    // day (12:00, 23:00, 23:59), where "yesterday's slot" was wrong.
+    #[rustfmt::skip]
+    const SLOTS: &[(Zone, &str, &str, i64, [u64; 5])] = &[
+        (Zone::UsPacific, "LA spring-forward (Mar 8)", "00:00", 20518, [1772784000, 1772870400, 1772956800, 1773039600, 1773126000]), // 06T08:00Z, 07T08:00Z, 08T08:00Z, 09T07:00Z, 10T07:00Z
+        (Zone::UsPacific, "LA spring-forward (Mar 8)", "00:30", 20518, [1772785800, 1772872200, 1772958600, 1773041400, 1773127800]), // 06T08:30Z, 07T08:30Z, 08T08:30Z, 09T07:30Z, 10T07:30Z
+        (Zone::UsPacific, "LA spring-forward (Mar 8)", "01:00", 20518, [1772787600, 1772874000, 1772960400, 1773043200, 1773129600]), // 06T09:00Z, 07T09:00Z, 08T09:00Z, 09T08:00Z, 10T08:00Z
+        (Zone::UsPacific, "LA spring-forward (Mar 8)", "01:30", 20518, [1772789400, 1772875800, 1772962200, 1773045000, 1773131400]), // 06T09:30Z, 07T09:30Z, 08T09:30Z, 09T08:30Z, 10T08:30Z
+        (Zone::UsPacific, "LA spring-forward (Mar 8)", "01:59", 20518, [1772791140, 1772877540, 1772963940, 1773046740, 1773133140]), // 06T09:59Z, 07T09:59Z, 08T09:59Z, 09T08:59Z, 10T08:59Z
+        (Zone::UsPacific, "LA spring-forward (Mar 8)", "02:00", 20518, [1772791200, 1772877600, 1772964000, 1773046800, 1773133200]), // 06T10:00Z, 07T10:00Z, 08T10:00Z, 09T09:00Z, 10T09:00Z
+        (Zone::UsPacific, "LA spring-forward (Mar 8)", "02:30", 20518, [1772793000, 1772879400, 1772965800, 1773048600, 1773135000]), // 06T10:30Z, 07T10:30Z, 08T10:30Z, 09T09:30Z, 10T09:30Z
+        (Zone::UsPacific, "LA spring-forward (Mar 8)", "02:59", 20518, [1772794740, 1772881140, 1772967540, 1773050340, 1773136740]), // 06T10:59Z, 07T10:59Z, 08T10:59Z, 09T09:59Z, 10T09:59Z
+        (Zone::UsPacific, "LA spring-forward (Mar 8)", "03:00", 20518, [1772794800, 1772881200, 1772964000, 1773050400, 1773136800]), // 06T11:00Z, 07T11:00Z, 08T10:00Z, 09T10:00Z, 10T10:00Z
+        (Zone::UsPacific, "LA spring-forward (Mar 8)", "03:15", 20518, [1772795700, 1772882100, 1772964900, 1773051300, 1773137700]), // 06T11:15Z, 07T11:15Z, 08T10:15Z, 09T10:15Z, 10T10:15Z
+        (Zone::UsPacific, "LA spring-forward (Mar 8)", "12:00", 20518, [1772827200, 1772913600, 1772996400, 1773082800, 1773169200]), // 06T20:00Z, 07T20:00Z, 08T19:00Z, 09T19:00Z, 10T19:00Z
+        (Zone::UsPacific, "LA spring-forward (Mar 8)", "23:00", 20518, [1772866800, 1772953200, 1773036000, 1773122400, 1773208800]), // 07T07:00Z, 08T07:00Z, 09T06:00Z, 10T06:00Z, 11T06:00Z
+        (Zone::UsPacific, "LA spring-forward (Mar 8)", "23:59", 20518, [1772870340, 1772956740, 1773039540, 1773125940, 1773212340]), // 07T07:59Z, 08T07:59Z, 09T06:59Z, 10T06:59Z, 11T06:59Z
+        (Zone::UsPacific, "LA fall-back (Nov 1)", "00:00", 20756, [1793343600, 1793430000, 1793516400, 1793606400, 1793692800]), // 30T07:00Z, 31T07:00Z, 01T07:00Z, 02T08:00Z, 03T08:00Z
+        (Zone::UsPacific, "LA fall-back (Nov 1)", "00:30", 20756, [1793345400, 1793431800, 1793518200, 1793608200, 1793694600]), // 30T07:30Z, 31T07:30Z, 01T07:30Z, 02T08:30Z, 03T08:30Z
+        (Zone::UsPacific, "LA fall-back (Nov 1)", "01:00", 20756, [1793347200, 1793433600, 1793520000, 1793610000, 1793696400]), // 30T08:00Z, 31T08:00Z, 01T08:00Z, 02T09:00Z, 03T09:00Z
+        (Zone::UsPacific, "LA fall-back (Nov 1)", "01:30", 20756, [1793349000, 1793435400, 1793521800, 1793611800, 1793698200]), // 30T08:30Z, 31T08:30Z, 01T08:30Z, 02T09:30Z, 03T09:30Z
+        (Zone::UsPacific, "LA fall-back (Nov 1)", "01:59", 20756, [1793350740, 1793437140, 1793523540, 1793613540, 1793699940]), // 30T08:59Z, 31T08:59Z, 01T08:59Z, 02T09:59Z, 03T09:59Z
+        (Zone::UsPacific, "LA fall-back (Nov 1)", "02:00", 20756, [1793350800, 1793437200, 1793527200, 1793613600, 1793700000]), // 30T09:00Z, 31T09:00Z, 01T10:00Z, 02T10:00Z, 03T10:00Z
+        (Zone::UsPacific, "LA fall-back (Nov 1)", "02:30", 20756, [1793352600, 1793439000, 1793529000, 1793615400, 1793701800]), // 30T09:30Z, 31T09:30Z, 01T10:30Z, 02T10:30Z, 03T10:30Z
+        (Zone::UsPacific, "LA fall-back (Nov 1)", "02:59", 20756, [1793354340, 1793440740, 1793530740, 1793617140, 1793703540]), // 30T09:59Z, 31T09:59Z, 01T10:59Z, 02T10:59Z, 03T10:59Z
+        (Zone::UsPacific, "LA fall-back (Nov 1)", "03:00", 20756, [1793354400, 1793440800, 1793530800, 1793617200, 1793703600]), // 30T10:00Z, 31T10:00Z, 01T11:00Z, 02T11:00Z, 03T11:00Z
+        (Zone::UsPacific, "LA fall-back (Nov 1)", "03:15", 20756, [1793355300, 1793441700, 1793531700, 1793618100, 1793704500]), // 30T10:15Z, 31T10:15Z, 01T11:15Z, 02T11:15Z, 03T11:15Z
+        (Zone::UsPacific, "LA fall-back (Nov 1)", "12:00", 20756, [1793386800, 1793473200, 1793563200, 1793649600, 1793736000]), // 30T19:00Z, 31T19:00Z, 01T20:00Z, 02T20:00Z, 03T20:00Z
+        (Zone::UsPacific, "LA fall-back (Nov 1)", "23:00", 20756, [1793426400, 1793512800, 1793602800, 1793689200, 1793775600]), // 31T06:00Z, 01T06:00Z, 02T07:00Z, 03T07:00Z, 04T07:00Z
+        (Zone::UsPacific, "LA fall-back (Nov 1)", "23:59", 20756, [1793429940, 1793516340, 1793606340, 1793692740, 1793779140]), // 31T06:59Z, 01T06:59Z, 02T07:59Z, 03T07:59Z, 04T07:59Z
+        (Zone::Fixed(-7 * 3600), "Phoenix (no DST), Mar", "01:30", 20518, [1772785800, 1772872200, 1772958600, 1773045000, 1773131400]), // 06T08:30Z, 07T08:30Z, 08T08:30Z, 09T08:30Z, 10T08:30Z
+        (Zone::Fixed(-7 * 3600), "Phoenix (no DST), Mar", "02:30", 20518, [1772789400, 1772875800, 1772962200, 1773048600, 1773135000]), // 06T09:30Z, 07T09:30Z, 08T09:30Z, 09T09:30Z, 10T09:30Z
+        (Zone::Fixed(-7 * 3600), "Phoenix (no DST), Mar", "23:00", 20518, [1772863200, 1772949600, 1773036000, 1773122400, 1773208800]), // 07T06:00Z, 08T06:00Z, 09T06:00Z, 10T06:00Z, 11T06:00Z
+        (Zone::Fixed(-7 * 3600), "Phoenix (no DST), Nov", "01:30", 20756, [1793349000, 1793435400, 1793521800, 1793608200, 1793694600]), // 30T08:30Z, 31T08:30Z, 01T08:30Z, 02T08:30Z, 03T08:30Z
+        (Zone::Fixed(-7 * 3600), "Phoenix (no DST), Nov", "02:30", 20756, [1793352600, 1793439000, 1793525400, 1793611800, 1793698200]), // 30T09:30Z, 31T09:30Z, 01T09:30Z, 02T09:30Z, 03T09:30Z
+        (Zone::Fixed(-7 * 3600), "Phoenix (no DST), Nov", "23:00", 20756, [1793426400, 1793512800, 1793599200, 1793685600, 1793772000]), // 31T06:00Z, 01T06:00Z, 02T06:00Z, 03T06:00Z, 04T06:00Z
+    ];
+
+    /// The named cases, as ISO strings a reader can check by eye: an
+    /// ambiguous local time is its FIRST occurrence, a nonexistent one is
+    /// moved forward by the gap, and an ordinary one is untouched.
+    #[test]
+    fn jobs_dst_ambiguous_and_nonexistent_local_times_follow_the_documented_policy() {
+        let c = Fake::utc(1_793_000_000, Zone::UsPacific);
+        let (mar8, nov1, nov2) = (20_520, 20_758, 20_759);
+        for (day, at, want, why) in [
+            (nov1, hm(1, 30), "2026-11-01T08:30:00Z", "ambiguous 01:30 → the first, 01:30 PDT (not 09:30Z, 01:30 PST)"),
+            (nov1, hm(1, 0), "2026-11-01T08:00:00Z", "ambiguous 01:00 → 01:00 PDT"),
+            (nov1, hm(1, 59), "2026-11-01T08:59:00Z", "ambiguous 01:59 → 01:59 PDT"),
+            (nov1, hm(2, 0), "2026-11-01T10:00:00Z", "02:00 on fall-back day happens once, PST"),
+            (nov1, hm(0, 59), "2026-11-01T07:59:00Z", "00:59 PDT, before the change"),
+            (nov2, hm(1, 30), "2026-11-02T09:30:00Z", "the day after: 01:30 PST, 25 h after the slot before"),
+            (mar8, hm(2, 0), "2026-03-08T10:00:00Z", "nonexistent 02:00 → 03:00 PDT"),
+            (mar8, hm(2, 30), "2026-03-08T10:30:00Z", "nonexistent 02:30 → 03:30 PDT (shifted by the 1 h gap)"),
+            (mar8, hm(2, 59), "2026-03-08T10:59:00Z", "nonexistent 02:59 → 03:59 PDT"),
+            (mar8, hm(1, 59), "2026-03-08T09:59:00Z", "01:59 PST, before the gap"),
+            (mar8, hm(3, 0), "2026-03-08T10:00:00Z", "03:00 PDT, the first instant after the gap"),
+        ] {
+            assert_eq!(utc_iso(resolve_local(&c, day, at).unwrap()), want, "{why}");
+        }
+        // Sentinel: the fake zone really changes at the 2026 instants.
+        let z = Zone::UsPacific;
+        assert_eq!((z.offset_at(1_772_963_999), z.offset_at(1_772_964_000)), (-8 * 3600, -7 * 3600));
+        assert_eq!((z.offset_at(1_793_523_599), z.offset_at(1_793_523_600)), (-7 * 3600, -8 * 3600));
+    }
+
+    /// Each row's five slots, resolved from their local dates, are the
+    /// literal instants — and at EVERY quarter hour from the first slot to
+    /// the last (four days, through the whole night of the change), the most
+    /// recent slot is the latest literal at or before now and the next slot
+    /// is the earliest after it. Forced red (JOBS-DST report): with the old
+    /// wall-clock arithmetic restored this fails on both LA transitions.
+    #[test]
+    fn jobs_dst_the_most_recent_and_next_slot_at_every_quarter_hour_across_both_2026_transitions() {
+        let mut checked = 0;
+        for &(zone, label, at, day0, slots) in SLOTS {
+            let target = env::hosting::parse_at(at).unwrap();
+            assert!(slots.windows(2).all(|w| (82_800..=90_000).contains(&(w[1] - w[0]))), "{label} {at}: table");
+            let c = Fake::utc(slots[0], zone);
+            for (k, &want) in slots.iter().enumerate() {
+                let got = resolve_local(&c, day0 + k as i64, target).unwrap();
+                assert_eq!(got, want, "{label} {at}, local date +{k}: {} not {}", utc_iso(got), utc_iso(want));
+            }
+            let mut now = slots[0];
+            while now < slots[4] {
+                let c = Fake::utc(now, zone);
+                let recent = *slots.iter().rev().find(|&&s| s <= now).unwrap();
+                let next = *slots.iter().find(|&&s| s > now).unwrap();
+                let got = most_recent_slot(&c, target).unwrap();
+                assert_eq!(got, recent, "{label} {at} at {}: most recent slot {} not {}", utc_iso(now), utc_iso(got), utc_iso(recent));
+                let got = next_slot(&c, target, None).unwrap();
+                assert_eq!(got, next, "{label} {at} at {}: next slot {} not {}", utc_iso(now), utc_iso(got), utc_iso(next));
+                // `status`'s view from a record three slots back: due, at the most recent.
+                let rec = Record { last_slot: Some(recent - 3 * DAY), ..Record::default() };
+                // (`next_slot_of` is `next_slot_view` without its `/bin/date` local string.)
+                let got = next_slot_of(&sched(Some(at), 0, false), Some(&rec), &c).unwrap();
+                assert_eq!(got, recent, "{label} {at} at {}: status's due slot {}", utc_iso(now), utc_iso(got));
+                checked += 1;
+                now += 900;
+            }
+        }
+        assert!(checked > 10_000, "sentinel: {checked} instants checked");
+    }
+
+    /// The HOLDER over the same table: armed just after the first slot and
+    /// polled every minute, awake, for four days, it starts exactly one pass
+    /// per local date, each AT that date's literal slot — the ambiguous hour
+    /// is not run twice and the skipped hour is not lost.
+    #[test]
+    fn jobs_dst_the_holder_runs_each_local_date_once_at_its_literal_slot_through_both_transitions() {
+        for &(zone, label, at, _, slots) in SLOTS {
+            let s = sched(Some(at), 0, false);
+            let c = Fake::utc(slots[0] + 60, zone);
+            let mut sc = Sched::new();
+            let mut fired = vec![];
+            while c.wall() <= slots[4] + 60 {
+                if sc.due(&s, &c, None) {
+                    fired.push(c.wall());
+                    sc.started(&s, &c);
+                    let wait = sc.ended(&s, &c, false, 0);
+                    let next = slots.iter().find(|&&t| t > c.wall()).copied();
+                    if let Some(next) = next {
+                        assert_eq!(c.wall() + wait, next, "{label} {at}: the recorded next_in_secs");
+                    }
+                }
+                c.awake(60);
+            }
+            assert_eq!(fired, slots[1..].to_vec(), "{label} {at}: passes started at the wrong instants");
+        }
     }
 
     #[test]

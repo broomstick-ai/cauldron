@@ -1245,6 +1245,10 @@ fn supervise(env: &Environment, d: &Daemon, policy: &Policy, once: bool) -> Resu
                 }
                 Ask::Stop(name) => {
                     warn_at!("stop of `{name}` requested on the supervisor seam");
+                    // PIN-RACE: the stop and its park are ONE step against a
+                    // `cauldron pin`, which reads the park and saves under
+                    // this lock (`park_lock`).
+                    let _env_toml = park_lock(env, &name);
                     if let Ok(t) = Table::load(&env.name, &env.data_root, &env.seams()) {
                         if let Some(seam) = t.seams.get(&name) {
                             let (sig, esc) = crate::stop_terms(env, seam);
@@ -2119,6 +2123,10 @@ fn exhausted(
         }
     }
     // ── PARK ───────────────────────────────────────────────────
+    // PIN-RACE: under the env.toml writers' lock, taken BEFORE the child
+    // table, so it never lands between a `cauldron pin`'s read of the park
+    // and its save (`park_lock`).
+    let _env_toml = park_lock(env, &name);
     let mut kids = d.children.lock().map_err(|_| anyhow::anyhow!("poisoned"))?;
     let ent = kids.get_mut(&name).expect("inserted above");
     ent.parked = true;
@@ -2937,6 +2945,33 @@ pub(crate) fn pin_drain_override(
 /// env.toml take no lock at all: the save is an atomic rename, so a reader sees
 /// the old file or the new one, never a torn one.
 pub(crate) const HOLDER_ENV_LOCK_BOUND: Duration = Duration::from_millis(500);
+
+/// **PIN-RACE (CLI-ISO-I F2): the longest the holder waits for the env.toml
+/// writers' lock before it PARKS a service.** `cauldron pin` reads the park
+/// (the holder's `STATUS`) and saves the pin as one step under that lock, so a
+/// park taken under it lands wholly before the pin's read or wholly after its
+/// save, and the pin's wording is about the park it was written over. A pin
+/// holds the lock for milliseconds; this bound only matters when one is stuck
+/// (stopped, under a debugger), and then the park is taken WITHOUT the lock
+/// after the bound and says so: a park is never skipped or deferred, because
+/// an undone stop or a relaunched failing build is worse than a pin that
+/// described the moment before.
+pub(crate) const HOLDER_PARK_LOCK_BOUND: Duration = Duration::from_secs(5);
+
+/// The env.toml writers' lock for a park ([`HOLDER_PARK_LOCK_BOUND`]); `None`
+/// (and a warning) when it stayed busy past the bound.
+fn park_lock(env: &Environment, service: &str) -> Option<::env::decl::ManifestLock> {
+    match Manifest::lock_within(&env.manifest(), HOLDER_PARK_LOCK_BOUND) {
+        Ok(l) => Some(l),
+        Err(e) => {
+            warn_at!(
+                "parking `{service}` WITHOUT the env.toml lock: {e:#}. A `cauldron pin` running \
+                 now may describe the moment before this park"
+            );
+            None
+        }
+    }
+}
 
 pub(crate) fn pin_completed(env: &Environment, service: &str, pin: &str) {
     let path = env.manifest();
