@@ -47,27 +47,23 @@ recorded in [CHANGELOG.md](CHANGELOG.md).
   clusters that claim it; `import-corpus` brings an older corpus's clusters
   in with their claims; and `soup_changes` can wait for the next change
   (`wait_secs`), the polling half of issue #7.
+- **0.1.17: the consumer interface as written** (issue #1): every tool in
+  the interface table of issue #10 answers when called as the table writes
+  it, a Claude Code project can have a server for one cauldron, who may act
+  for the owner becomes the owner's setting (issue #25), and the prebuilt
+  bundle carries local inference and the account helper scripts (issue
+  #30).
+- **0.1.18: installing and upgrading from a prebuilt bundle** (issues #30
+  to #35): `install --replace-running` moves the threads daemon to the new
+  build as it does the MCP service, so the account helpers it lays down
+  are the ones the running daemon reads; account login runs on macOS's own
+  bash and reports where it stalled; an account is named by its email
+  address; and text can be selected and copied on every surface of the
+  terminal interface.
 
 ## Next
 
-- **0.1.17: the consumer interface as written** (issue #1): every tool in
-  the interface table of issue #10 answers when called as the table writes
-  it (`soup_link` takes one flat link too), and a Claude Code project can
-  have a server for one cauldron (`cauldron mcp stdio --cauldron` pins it,
-  `cauldron mcp config` prints its `.mcp.json` entry). With it, a quiet
-  threads store is read safely, and the plugin launcher finds the project
-  root from a subdirectory. **Who may act for the owner** (issue #25):
-  granting, approving and turning automatic ripples on stay the owner's
-  acts at a terminal by default, and the owner can let agents do them
-  (`cauldron owner-acts`, the `CAULDRON_OWNER_ACTS` variable,
-  `scripts/install --owner-acts`), with every act recorded as a person's or
-  an agent's; a Claude Code session can approve and reject through
-  `soup_approve` / `soup_reject` where the owner allows it. **Local
-  inference on a prebuilt install**: the bundle carries the `inference` and
-  `ripples` services (installed, never started by the installer), `cauldron
-  inference models pull` fetches one of the two measured models after a
-  yes, and `cauldron inference status` says what is missing.
-- **Threads on a local model**, in a release after it: the `inference`
+- **Threads on a local model**, in a later release: the `inference`
   service stays the one owner of `llama-server`, the model registry and the
   memory budget, and the threads daemon leases a loaded model from it for a
   turn (load, renew, release), so one budget covers both. The chat face

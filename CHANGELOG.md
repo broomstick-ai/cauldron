@@ -22,11 +22,139 @@ Planned, and not released yet. Ripples and the soup engine arrive in 0.2.0.
 
 - **Fix: threads daemon boot with an oversized write-ahead log.** The daemon
   will fold the log once at boot, before recovery, and its periodic fold will
-  first run at 30 seconds instead of 5 minutes. Through 0.1.17, a large log
+  first run at 30 seconds instead of 5 minutes. Through 0.1.18, a large log
   left from earlier runs can stall startup until the supervisor kills the daemon.
 - **Fix: re-login re-enables a disabled account.** A verified login will lift
-  the disable and trigger a fresh usage reading. Through 0.1.17, only an
+  the disable and trigger a fresh usage reading. Through 0.1.18, only an
   explicit enable clears it.
+
+## [0.1.18] — 2026-11-24
+
+Installing and upgrading from a prebuilt bundle, from the issues filed
+after a test of 0.1.17 on a second machine (issues #30 to #35). An upgrade
+with `--replace-running` now moves the threads daemon to the new build, as
+it already moved the MCP service. The account helper scripts run on
+macOS's own bash. An account is named by its email address. Text can be
+selected and copied on every surface of the terminal interface.
+
+### Fixed
+
+- **`install --replace-running` left `threads` on the old build** (issue
+  #31). Upgrading a 0.1.16 install with 0.1.17's installer re-pinned `mcp`
+  and left `threads` pinned to 0.1.16, so the account helpers the new
+  installer laid down were not where the running daemon looked, and the
+  fix for #30 never reached it. A `threads` pin at another build is now
+  built from the bundle (or the checkout) and re-pinned like `mcp`'s,
+  keeping its address; the supervisor restarts the daemon on the new
+  build. Without `--replace-running` the pin is left, and the install says,
+  in step 4b and in its closing lines, that threads is still the old build.
+  Running this release's install with `--replace-running` over a 0.1.16 or
+  0.1.17 install moves both services; the manual `build threads` and `pin
+  threads` steps of the issue's workaround are no longer needed.
+- **Account login asked for a newer bash** (issue #33). `add-account` and
+  `claude-accounts` required bash 4.4 and, under the daemon (whose PATH
+  finds macOS's `/bin/bash` 3.2) on a Mac without Homebrew's bash, refused
+  with "needs bash 4.4 or newer ... brew install bash". Both now run on bash
+  3.2, and the requirement is gone.
+- **The terminal UI gave up on a login before the daemon answered** (issue
+  #30, comment of 2026-11-23; this release does NOT move the login out of
+  the daemon, see Known limitations). The face bounded every request at 30
+  seconds, and the daemon gives the login script 60 seconds to print its
+  URL (180 for the pasted code), so the only thing shown was "the daemon did
+  not answer within 30s". The face now waits 120 seconds for `begin` and 240
+  for `complete`, longer than the daemon's own bounds. When the script
+  prints no URL in time, the daemon's refusal carries the last lines it
+  wrote, so the step it stalled on shows. The daemon's own keychain read
+  before the login, which had no bound, is bounded at 20 seconds and
+  refused naming a keychain dialog or a locked keychain as the likely cause.
+- **Typing the account's email address was refused as a label** (issue
+  #35). An account may now be named by its email address, its one name:
+  the terminal UI asks for the address when adding a Claude Code account,
+  and the daemon, `add-account` and `claude-accounts` accept it (lowercase).
+  Older names stay valid, so an existing install keeps its accounts.
+  `claude-accounts login <address>` names a new account by the address;
+  an account already filed under the older derived name (`a-b-example-com`)
+  keeps it. The face shows an account by its address, in full, everywhere
+  it names it (until now every address was drawn masked, `a•••@e•••`); an
+  account's id, a settings key, still never carries the address, and an
+  address OTHER than the account's own in a daemon's or tool's message is
+  still masked. An address name has to be the account's own login: an
+  address-named account logs in only as that address (a different
+  `--email` is refused), and renaming a slot to an address is refused
+  unless the slot's login records that address (its login hint, or the
+  account in its `.claude.json`), or when it records none.
+
+### Added
+
+- **Select and copy on every surface** (issue #34). A drag selects the text
+  on screen in the cauldron face, in modals (the login modal's error and
+  URL among them), notices, lists, pages and settings, and the release
+  sends it to the terminal's clipboard (OSC 52). A press acts only as a
+  click: released on the cell it was pressed on, it does what it always
+  did; dragged, it only selects, and the button, toggle, option, row or tab
+  it started on is never activated or changed. The divider drags are
+  unchanged. OSC 52 has no acknowledgement, so the notice says the text was
+  SENT and how to copy otherwise in the terminal in use: Terminal.app does
+  not accept OSC 52 (turn off View > Allow Mouse Reporting, or hold Fn
+  while dragging, then Cmd-C); iTerm2 accepts it only with "Applications in
+  terminal may access clipboard" on (else hold Option while dragging);
+  other terminals: hold Shift while dragging for their own selection. The
+  chat face's copy notice says the same.
+- **`cauldron --version` names the release** (issue #32):
+  `cauldron 0.1.18 (012345678901)`, the commit shortened as build labels
+  shorten it. `--build-stamp` still carries the full commit.
+- **Where the daemon finds the account helpers** (issue #32): the threads
+  daemon's `/health` answer carries `helpers`, the resolved path of
+  `add-account`, `claude-accounts` and `claude-login-browser` and whether
+  each passes its trust check, so an upgrade can be checked without starting
+  a login.
+
+### Changed
+
+- **`live:unverified` says it is expected** for a hosted service such as
+  `threads` (issue #32): the status line says nothing needs doing, and the
+  README explains the state.
+- The installer's closing `status:` line names the binary an environment
+  other than `prod` actually has (`cauldron-<env>`).
+- **A re-pin replaces any other build, and says how to go back.**
+  `--replace-running` replaces a `threads` or `mcp` pin at any build other
+  than the bundle's (older, newer or hand-built), and now says so and
+  prints `cauldron --env <env> rollback <service>`, the way back.
+- **Tests never reach the real keychain.** Every `security` the threads
+  daemon runs is `/usr/bin/false` in a process a cargo test started, and
+  the suites that read or write the real login keychain by design
+  (`claude-accounts-prune`, `claude-accounts` and `add-account-login`
+  conformance, `prove-accounts.sh`, and three codesigning-identity tests)
+  run only with `CAULDRON_TEST_ALLOW_REAL_KEYCHAIN=1`.
+- `q()`, the account scripts' quoting for messages, escapes every byte
+  outside printable ASCII (an 8-bit control byte could reach the terminal
+  raw in the C locale); the release check parses under macOS's bash 3.2.
+
+### Known limitations
+
+- **A real account login from a prebuilt install is still not confirmed by
+  the project** (issue #30 stays open). Login, rotation and set-live are
+  tested against stand-in scripts, a stand-in `claude`, fake keychains and
+  a fake daemon; the issue's report is what a real one does. What stalled
+  the reported login is not known; 0.1.18 makes the daemon say where it
+  stalls and waits for it.
+- **0.1.18 does not do what the #30 comment asks**: the login still runs
+  `add-account` and `claude auth login` as a child of the threads daemon,
+  with no terminal. What changed is what is shown when it stalls (above).
+  Moving the login into the terminal UI's own session (the UI runs `claude
+  auth login`; the daemon keeps the account checks before and after it) is
+  the planned next step.
+- Existing accounts are not renamed to their addresses automatically.
+  `threads accounts rename <old> <address>` does it, slot and keychain item
+  together, only when the slot's login records that address; a slot whose
+  login records none must be logged in again under its current name first.
+- **Going back to 0.1.17**: `cauldron --env <env> rollback threads` and
+  `rollback mcp` re-pin the builds that ran before; running 0.1.17's
+  installer instead moves `mcp` back but leaves `threads` on 0.1.18. Rename
+  any account named by an address to an `[A-Za-z0-9_-]` name first: 0.1.17
+  refuses an address name (it cannot rename or delete such an account).
+- Selection covers what is on screen and does not scroll. Whether a copy
+  landed is the terminal's to say; the face cannot know.
 
 ## [0.1.17] — 2026-11-20
 
@@ -2351,7 +2479,8 @@ The first public release.
   paths ship) and `scripts/check-no-personal-data.sh` (what the shipped files
   say).
 
-[Unreleased]: https://github.com/broomstick-ai/cauldron/compare/v0.1.17...HEAD
+[Unreleased]: https://github.com/broomstick-ai/cauldron/compare/v0.1.18...HEAD
+[0.1.18]: https://github.com/broomstick-ai/cauldron/compare/v0.1.17...v0.1.18
 [0.1.17]: https://github.com/broomstick-ai/cauldron/compare/v0.1.16...v0.1.17
 [0.1.16]: https://github.com/broomstick-ai/cauldron/compare/v0.1.15...v0.1.16
 [0.1.15]: https://github.com/broomstick-ai/cauldron/compare/v0.1.14...v0.1.15

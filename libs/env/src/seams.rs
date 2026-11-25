@@ -735,7 +735,9 @@ pub fn probe(seam: &Seam) -> Verdict {
                 state: SeamState::LiveUnverified,
                 detail: format!(
                     "listening on {} and its health check {} answered 200. No boot token, so \
-                     this is health, not identity",
+                     this is health, not identity. That is EXPECTED for a hosted service (one \
+                     that does not speak cauldron's handshake, such as threads): \
+                     live:unverified is as far as its check goes, and nothing needs doing",
                     seam.addr, seam.health
                 ),
                 identity: None,

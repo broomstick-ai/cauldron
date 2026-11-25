@@ -1414,11 +1414,34 @@ pub(crate) async fn handle(
         // that would have been easy to get wrong by reasoning alone.
         "accounts/login/begin" => {
             let account = req_str(&params, "account")?;
+            // #35: an account named by its address is ONE name. It is
+            // lowercased (an address is case-insensitive, and a slot is one
+            // directory), and with no separate `email` it is also the address
+            // the login must come back as, so the crossed-login guard checks
+            // exactly the name he typed.
+            // ASCII only (F10): a Unicode lowercase folded the Kelvin sign
+            // into `k`, so a name the scripts refuse got this far.
+            let account = if account.contains('@') { account.trim().to_ascii_lowercase() } else { account };
+            // F10: the name is validated BEFORE anything reads the slot or
+            // the keychain for it (the snapshot below did both first).
+            crate::accounts::validate_account_name(&account)?;
+            let email = params.get("email").and_then(Value::as_str).map(str::to_string);
+            // an account named by an address logs in AS that address; a
+            // different `email` would put another account's login under it.
+            if crate::accounts::is_address_label(&account) {
+                if let Some(e) = &email {
+                    let same = crate::accounts::AccountId::parse(e).map(|id| id.as_str() == account).unwrap_or(false);
+                    if !same {
+                        return Err(crate::error::Error::Config(format!(
+                            "{account:?} is named by its address, so it logs in as {account:?}, not as {e:?}; \
+                             log {e:?} in under its own address instead"
+                        )));
+                    }
+                }
+            }
+            let email = email.or_else(|| crate::accounts::is_address_label(&account).then(|| account.clone()));
             let opts = crate::login::LoginOptions {
-                email: params
-                    .get("email")
-                    .and_then(Value::as_str)
-                    .map(str::to_string),
+                email,
                 force: params
                     .get("force")
                     .and_then(Value::as_bool)
@@ -1678,6 +1701,8 @@ pub(crate) async fn handle(
         "accounts/{account}/rename" => {
             let old = req_str(&params, "account")?;
             let new = req_str(&params, "new_name")?;
+            // #35: an address is lowercased (ASCII only), as login/begin does.
+            let new = if new.contains('@') { new.trim().to_ascii_lowercase() } else { new };
             let data_dir = manager.data_dir();
             let registry = crate::accounts::Registry::load(&data_dir.join("accounts.toml"))?;
             // The existing-name set is the registry PLUS any directory on disk

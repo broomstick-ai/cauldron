@@ -390,3 +390,19 @@ fn the_census_counts_invocations_not_mentions() {
     let inc = "#[path = \"support/first_exec.rs\"]\nmod first_exec;\n// #[path = \"x.rs\"] mod x;";
     assert_eq!(path_includes(&lex(inc)), vec!["support/first_exec.rs".to_string()]);
 }
+
+/// **Round 2: a daemon a test spawns never reaches the real keychain.** The
+/// tripwire above guards the harness process; the threads binary a test
+/// starts (directly, or under a wrapper) is not a harness executable, and
+/// used to run `/usr/bin/security` by absolute path. Every `security` it
+/// runs now goes through `accounts::security_command`, which finds the
+/// harness among its ancestors and runs `/usr/bin/false` instead. Read-only:
+/// `--keychain-guard` only prints the program it would run.
+#[test]
+fn a_spawned_daemon_runs_no_real_security() {
+    let bin = env!("CARGO_BIN_EXE_threads");
+    let direct = Command::new(bin).arg("--keychain-guard").output().expect("run threads");
+    assert_eq!(String::from_utf8_lossy(&direct.stdout).trim(), "security: /usr/bin/false", "a child of the harness");
+    let wrapped = Command::new("/bin/sh").args(["-c", "exec /bin/sh -c \"$0 --keychain-guard\"", bin]).output().expect("run threads under sh");
+    assert_eq!(String::from_utf8_lossy(&wrapped.stdout).trim(), "security: /usr/bin/false", "a grandchild, under a wrapper");
+}

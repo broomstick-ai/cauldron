@@ -103,10 +103,16 @@
 #      (127.0.0.1:3653) only if it is free and unclaimed; every other
 #      environment gets its OWN free loopback port, never one of prod's
 #      (3653, 3651, 3753, 9010). The supervisor installed in step 5 launches
-#      it. Done ONLY for an environment this run creates in step 4: an
-#      existing env.toml is never edited, so an existing pin (its version and
-#      its address) is untouched; an existing env with no threads pin is told
-#      the two commands that add one. ONE exception, so a re-run completes a
+#      it. Done for an environment this run creates in step 4; an existing
+#      env with no threads pin is told the two commands that add one. AN
+#      EXISTING threads PIN at another build than this one's (an older
+#      install's; issue #31) is UPGRADED under `--replace-running`, as step
+#      4c does for mcp: the same build, then `cauldron pin threads
+#      <label>+<env>` WITHOUT --addr, so its address is kept, and the holder
+#      moves the running daemon to the new build. Without
+#      `--replace-running` that pin is left as it is (version and address),
+#      and the run says plainly, here and in its closing lines, that the
+#      threads daemon is still the old build. ONE exception, so a re-run completes a
 #      partial install (REL-4.S5b): step 4 writes a marker,
 #      <root>/data/.install-threads-pending.<env>, BEFORE it runs
 #      `env create` (REL-4.S5c M2: written after, a stop between the two left
@@ -312,6 +318,14 @@ run()  {
 # .mcp.json runs the bare command `cauldron`, resolved on the PATH of the
 # Claude Code process, which is not always a terminal's.
 # The closing line for an mcp pin left on an old build (step 4c).
+# The closing line for a threads pin left on an old build (step 4b, #31).
+old_threads_note() {
+    [[ ${THREADS_OLD_LEFT:-0} -eq 1 ]] || return 0
+    say ""
+    say "threads:  the threads daemon is still the old build (${THREADS_PIN}); the account helpers"
+    say "            this install laid down are not read by it. To upgrade it, run this install"
+    say "            again with --replace-running"
+}
 old_mcp_note() {
     [[ ${MCP_OLD_LEFT:-0} -eq 1 ]] || return 0
     say ""
@@ -616,6 +630,48 @@ MCP_HEAD=""
 MCP_STATE=""
 MCP_REPIN=0
 if [[ -e "${MANIFEST}" ]] && mcp_pinned; then MCP_PIN="$(pinned_version mcp)"; fi
+# An EXISTING threads pin (step 4b, issue #31), the same way: THREADS_PIN is
+# its version, THREADS_HEAD the commit this run installs, THREADS_STATE
+# `current`, `old` or `unknown`, and THREADS_REPIN: 4b rebuilds and re-pins
+# it (an old pin, under --replace-running). Only for an environment this run
+# neither creates nor resumes: those get their threads pin in 4b anyway.
+THREADS_PIN=""
+THREADS_HEAD=""
+THREADS_STATE=""
+THREADS_REPIN=0
+if [[ -e "${MANIFEST}" && ${NEED_THREADS} -eq 0 ]] && threads_pinned; then THREADS_PIN="$(pinned_version threads)"; fi
+# pin_state <pinned version> <commit, 12 characters>: `current` when the
+# version's label starts with that commit (`<commit>-<profile>+<env>`) and is
+# not a `-dirty` build, else `old`.
+pin_state() {
+    local base="${1%%+*}"
+    if [[ "${base}" == "$2-"* && "${base}" != *-dirty.* ]]; then echo current; else echo old; fi
+}
+# plan_repin <service> <state> <pin> <commit> <what>: the plan's lines for
+# an existing pin, and whether the step re-pins it (stdout of the caller is
+# the plan; the decision is returned as rc 0 = re-pin).
+plan_repin() {
+    local svc="$1" state="$2" pin="$3" head="$4" what="$5"
+    if [[ "${state}" == current ]]; then
+        say "${svc} is pinned at ${pin}, ${what}'s build (commit ${head}); it is left as it is"
+        return 1
+    fi
+    if [[ "${state}" == old ]]; then
+        say "${svc} is pinned at ${pin}, which is NOT ${what}'s build (commit ${head})"
+    else
+        say "${svc} is pinned at ${pin}, and whether that is ${what}'s build cannot be told yet"
+    fi
+    if [[ ${REPLACE_RUNNING} -eq 1 ]]; then
+        # F5: "another build" is not always an older one (a newer pin, or a
+        # hand-signed source build, is replaced the same way): said plainly,
+        # with the way back.
+        say "  --replace-running: ${svc} is installed from ${what} and re-pinned, replacing that pin whatever"
+        say "  it is (older, newer or hand-built); \`cauldron --env ${ENV_NAME} rollback ${svc}\` goes back to it"
+        return 0
+    fi
+    say "  without --replace-running it is left as it is; the ${svc} service stays the old build"
+    return 1
+}
 # A service name no declaration uses: `versions` of it is refused with the
 # two places declarations are looked for, `<root>/services/<name>.toml` and
 # then `<workspace the binary was built from>/services/<name>.toml`.
@@ -877,6 +933,17 @@ if [[ -n "${PREBUILT}" ]]; then
                 fi ;;
         esac
     fi
+    if [[ -n "${THREADS_PIN}" ]]; then
+        if [[ -n "${PB_COMMIT}" ]]; then
+            THREADS_HEAD="${PB_COMMIT:0:12}"
+            THREADS_STATE="$(pin_state "${THREADS_PIN}" "${THREADS_HEAD}")"
+        else
+            THREADS_STATE=unknown
+        fi
+        if plan_repin threads "${THREADS_STATE}" "${THREADS_PIN}" "${THREADS_HEAD:-?}" "this bundle"; then
+            THREADS_REPIN=1
+        fi
+    fi
 fi
 
 if [[ -z "${PREBUILT}" ]]; then
@@ -911,6 +978,21 @@ if [[ -n "${MCP_PIN}" ]]; then
                 say "  without --replace-running step 4c leaves it as it is; the mcp service stays the old build"
             fi ;;
     esac
+fi
+if [[ -n "${THREADS_PIN}" ]]; then
+    THREADS_STATE=unknown
+    if command -v git >/dev/null 2>&1; then
+        resolve_base_tree
+        build_tree threads
+        if THREADS_HEAD="$(git -C "${TREE}" rev-parse --short=12 HEAD 2>/dev/null)" && [[ -n "${THREADS_HEAD}" ]]; then
+            THREADS_HEAD="${THREADS_HEAD:0:12}"
+            THREADS_STATE="$(pin_state "${THREADS_PIN}" "${THREADS_HEAD}")"
+        fi
+    fi
+    if plan_repin threads "${THREADS_STATE}" "${THREADS_PIN}" "${THREADS_HEAD:-?}" "this checkout"; then
+        THREADS_REPIN=1
+        NEED_THREADS=1
+    fi
 fi
 if [[ ${NEED_THREADS} -eq 0 && ${NEED_MCP} -eq 0 ]]; then
     say "steps 4b and 4c will build nothing for '${ENV_NAME}' (threads is not built here, and mcp is already pinned), so the tree is not checked"
@@ -1010,9 +1092,26 @@ fi
 step "4b. threads daemon for '${ENV_NAME}'"
 THREADS_SIGNER="${REPO}/services/threads/scripts/build-threads.sh"
 THREADS_PINNED=""
-if [[ ${CREATED_ENV} -eq 0 && ${RESUME_THREADS} -eq 0 ]]; then
+THREADS_OLD_LEFT=0
+if [[ ${THREADS_REPIN} -eq 1 && -e "${THREADS_PENDING}" ]]; then
+    say "an earlier install pinned threads and stopped before clearing its marker; clearing it"
+    run rm -f "${THREADS_PENDING}"
+fi
+if [[ ${CREATED_ENV} -eq 0 && ${RESUME_THREADS} -eq 0 && ${THREADS_REPIN} -eq 0 ]]; then
     if threads_pinned; then
         say "threads is already pinned in ${MANIFEST}; left exactly as it is (its version and address are not changed)"
+        if [[ "${THREADS_STATE}" == old || "${THREADS_STATE}" == unknown ]]; then
+            # Said plainly, with the commands, here and again at the end (#31).
+            THREADS_OLD_LEFT=1
+            say "  THE threads DAEMON IS STILL THE OLD BUILD: it is pinned at ${THREADS_PIN}, and this install is commit ${THREADS_HEAD:-?}."
+            say "  The account helpers this run lays down are read by this release's threads, not by that one. To upgrade it:"
+            say "    run this install again with --replace-running, which builds and re-pins it"
+            if [[ -n "${PREBUILT}" ]]; then
+            say "  or, by hand:"
+            say "    ${CAULDRON} --env ${ENV_NAME} build threads --env-copy --artifact ${PB_LIBEXEC}/threads"
+            say "    then: ${CAULDRON} --env ${ENV_NAME} pin threads <the label that build printed>"
+            fi
+        fi
         if [[ -e "${THREADS_PENDING}" ]]; then
             say "an earlier install pinned it and stopped before clearing its marker; clearing it"
             run rm -f "${THREADS_PENDING}"
@@ -1034,6 +1133,16 @@ else
         say "an earlier install created ${MANIFEST} and stopped before pinning threads"
         say "  (${THREADS_PENDING} is still there); finishing step 4b now"
     fi
+    if [[ ${THREADS_REPIN} -eq 1 ]]; then
+        # THE UPGRADE OF AN EXISTING PIN (--replace-running, issue #31): the
+        # same build as a new environment's, then `cauldron pin` without
+        # --addr, which keeps this environment's address for threads. The
+        # holder moves the running daemon to the new build, and step 5
+        # restarts the holder; the script stops and kills nothing itself.
+        say "threads is pinned in ${MANIFEST} at ${THREADS_PIN}, not this install's build: re-pinning it"
+        say "  (upgrade, --replace-running). Its address and every other pin and setting in env.toml are"
+        say "  left exactly as they are"
+    fi
     if [[ -z "${PREBUILT}" ]]; then
     [[ -f "${THREADS_SIGNER}" ]] || die "no threads signer at ${THREADS_SIGNER}; this checkout is incomplete."
     if [[ ${DRY} -eq 0 ]]; then
@@ -1048,7 +1157,9 @@ else
     else
         say "signer     ad-hoc (set HARNESS_SIGN_SCRIPT to sign with an identity)"
     fi
-    if [[ "${ENV_NAME}" == prod ]]; then
+    if [[ ${THREADS_REPIN} -eq 1 ]]; then
+        say "ports      unchanged: the re-pin keeps the address env.toml already gives threads"
+    elif [[ "${ENV_NAME}" == prod ]]; then
         say "ports      prod keeps the declared default (127.0.0.1:3653) ONLY if it is free and no"
         say "           other environment claims it; otherwise it gets its own port (pin --addr auto)"
     else
@@ -1118,6 +1229,17 @@ else
     # Signed and in place: from here a failure leaves it, never removes it.
     CLAIMED=""
     fi
+    if [[ ${THREADS_REPIN} -eq 1 ]]; then
+        # Right before the pin: another writer may have re-pinned threads
+        # while this run built. Its pin stands; the version built here is
+        # left in place (it is signed, and nothing pins it).
+        if [[ ${DRY} -eq 0 ]] && [[ "$(pinned_version threads)" != "${THREADS_PIN}" ]]; then
+            say "threads was re-pinned in ${MANIFEST} while this run built it; that pin is left as it is"
+        else
+            run "${CAULDRON}" --env "${ENV_NAME}" pin threads "${ENV_LABEL}"
+            THREADS_PINNED="${ENV_LABEL}"
+        fi
+    else
     # The pin is the one edit of env.toml: re-check, right before it, that
     # the file is still the one this install (or the one it resumes) created.
     if [[ ${DRY} -eq 0 ]] && ! marker_owns_manifest; then
@@ -1133,6 +1255,7 @@ else
         write_marker created "${fp}"
     else
         write_marker created "<fingerprint of ${MANIFEST}>"
+    fi
     fi
 fi
 
@@ -1263,6 +1386,16 @@ place_helpers() {
     if [[ -n "${PREBUILT}" ]]; then src="${REL_DIR}/share/cauldron/scripts/threads"; else src="${REPO}/services/threads/scripts"; fi
     n="${d}/.threads.new.$$"
     run mkdir -p "${d}"
+    # F7: a run killed between building its staging copy and the swap below
+    # left it behind; such leftovers (this script's own pattern only) go.
+    # The swap itself is two renames: a kill exactly between them leaves no
+    # threads/ (the daemon then refuses a login, naming this install), and a
+    # re-run puts it back. The daemon never falls back to threads.prev: that
+    # could run another release's helper without saying so.
+    local stale
+    for stale in "${d}"/.threads.new.*; do
+        if [[ -d "${stale}" && "${stale}" != "${n}" ]]; then run rm -rf "${stale}"; fi
+    done
     run chmod 0755 "${ROOT}/share" "${ROOT}/share/cauldron" "${d}"
     run rm -rf "${n}"
     run mkdir "${n}"
@@ -1312,6 +1445,7 @@ if [[ ${DRY} -eq 1 ]]; then
     else
         say "(no built cauldron at ${CAULDRON} yet, so the label and paths it would resolve are not shown)"
     fi
+    old_threads_note
     old_mcp_note
     local_inference_note
     bridge_note
@@ -1322,18 +1456,24 @@ fi
 
 step "done"
 say "installed cauldron for $(id -un): ${ROOT}/bin/$( [[ "${ENV_NAME}" == prod ]] && echo cauldron || echo "cauldron-${ENV_NAME}" )"
-say "status:   ${ROOT}/bin/cauldron --env ${ENV_NAME} status"
-if [[ -n "${THREADS_PINNED}" ]]; then
-    say "services: threads pinned at ${THREADS_PINNED}; the supervisor launches it (its address: ${ROOT}/bin/cauldron --env ${ENV_NAME} status)."
+INSTALLED_BIN="${ROOT}/bin/$( [[ "${ENV_NAME}" == prod ]] && echo cauldron || echo "cauldron-${ENV_NAME}" )"
+say "status:   ${INSTALLED_BIN} --env ${ENV_NAME} status"
+if [[ -n "${THREADS_PINNED}" && ${THREADS_REPIN} -eq 1 ]]; then
+    say "services: threads re-pinned at ${THREADS_PINNED} (it was ${THREADS_PIN}); the supervisor restarts the daemon on that build, at the same address."
+    say "            to go back: ${INSTALLED_BIN} --env ${ENV_NAME} rollback threads"
+elif [[ -n "${THREADS_PINNED}" ]]; then
+    say "services: threads pinned at ${THREADS_PINNED}; the supervisor launches it (its address: ${INSTALLED_BIN} --env ${ENV_NAME} status)."
 fi
 if [[ -n "${MCP_PINNED}" && ${MCP_REPIN} -eq 1 ]]; then
     say "services: mcp re-pinned at ${MCP_PINNED} (it was ${MCP_PIN}); the supervisor runs that build, and every grant is kept."
+    say "            to go back: ${INSTALLED_BIN} --env ${ENV_NAME} rollback mcp"
     say "            to check: ${ROOT}/bin/cauldron mcp status --env ${ENV_NAME} (its version, beside this cauldron's)"
 elif [[ -n "${MCP_PINNED}" ]]; then
     say "services: mcp pinned at ${MCP_PINNED}; every cauldron is closed to it until you run, in a terminal:"
     say "            ${ROOT}/bin/cauldron mcp grant <cauldron> --env ${ENV_NAME} --project <dir>"
 fi
 say "more:     cauldron build <service>   then   cauldron pin <service> <label>"
+old_threads_note
 old_mcp_note
 name_only_note
 # `cauldron` is only a bare command once ${ROOT}/bin is on PATH; install

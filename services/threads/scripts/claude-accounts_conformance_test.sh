@@ -25,6 +25,15 @@
 # byte-for-byte the same at the end.
 set -uo pipefail
 
+# ── THE REAL KEYCHAIN: OPT-IN ONLY ───────────────────────────────────────────
+# This suite is not hermetic: it READS your live login`s keychain item (`Claude Code-credentials`, metadata) and DELETES `Claude Code-credentials-<8 hex>` items in your login keychain; with a built `threads` it also ADDS and RENAMES them (through /usr/bin/security, which no PATH fake intercepts). It refuses to run unless
+# CAULDRON_TEST_ALLOW_REAL_KEYCHAIN=1 is set, so nobody runs it by accident
+# (an outside contributor, a full-suite loop, an agent).
+if [ "${CAULDRON_TEST_ALLOW_REAL_KEYCHAIN:-}" != 1 ]; then
+  echo "claude-accounts_conformance_test.sh: NOT RUN: it READS your live login's keychain item ('Claude Code-credentials', metadata) and DELETES 'Claude Code-credentials-<8 hex>' items in your login keychain; with a built 'threads' it also ADDS and RENAMES them (through /usr/bin/security, which no PATH fake intercepts). Set CAULDRON_TEST_ALLOW_REAL_KEYCHAIN=1 to run it on purpose." >&2
+  exit 3
+fi
+
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 THREADS_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 REPO_ROOT="$(cd "$THREADS_DIR/../.." && pwd)"
@@ -462,7 +471,7 @@ KCBIN="$TMP/kcbin"; mkdir -p "$KCBIN" "$TMP/home-9b"
 cat > "$KCBIN/security" <<'PY'
 #!/usr/bin/env python3
 import json, os, shlex, sys
-# R12.10 (N4): the sentinel only a test fake answers; claude-accounts refuses a
+# R12.10: the sentinel only a test fake answers; claude-accounts refuses a
 # guarded write under test unless the `security` on PATH answers it.
 if sys.argv[1:] == ["--claude-accounts-fake"]: sys.exit(0)
 store_path = os.environ.get("FAKE_KC")
@@ -797,6 +806,113 @@ if [ ! -e "$THREADS_DIR/accounts/.rotate.lock" ]; then
 else bad "a rotation lock was left in $THREADS_DIR/accounts"; fi
 if [ -f "$TMP/rotation.log" ]; then ok "the rotation log went to the temp dir"
 else bad "no rotation log in the temp dir"; fi
+
+echo "== 14. every shipped helper runs on macOS's own /bin/bash 3.2, Homebrew hidden (issue #33) =="
+# The threads daemon runs these with PATH=/usr/bin:/bin:/usr/sbin:/sbin, so
+# `#!/usr/bin/env bash` is /bin/bash, 3.2.57 on every Mac. Each script is run
+# here BY ITS OWN SHEBANG with a PATH whose only `bash` is /bin/bash, and —
+# where sandbox-exec exists — with /opt/homebrew and /usr/local unreadable, so
+# no re-exec into a newer bash could have rescued it. Only harmless paths run:
+# help, usage, refusals and --dry-run against the fakes. No browser opens, no
+# real `claude` or `security` runs, no real home is read.
+OLDB="$TMP/oldbash"; mkdir -p "$OLDB/bin" "$OLDB/home" "$OLDB/store/accounts" "$OLDB/work"
+ln -s /bin/bash "$OLDB/bin/bash"
+cp "$KCBIN/security" "$OLDB/bin/security"
+cp "$FAKE" "$OLDB/bin/claude"
+printf '{"items": {}, "clock": 0}' > "$OLDB/kc.json"
+printf '(version 1)\n(allow default)\n(deny file-read* file-read-metadata process-exec (subpath "/opt/homebrew") (subpath "/usr/local"))\n' > "$OLDB/nobrew.sb"
+SANDBOX=()
+if [ -x /usr/bin/sandbox-exec ] \
+   && /usr/bin/sandbox-exec -f "$OLDB/nobrew.sb" /bin/test ! -e /opt/homebrew/bin/bash 2>/dev/null \
+   && /usr/bin/sandbox-exec -f "$OLDB/nobrew.sb" /bin/test ! -e /usr/local/bin/bash 2>/dev/null; then
+  SANDBOX=(/usr/bin/sandbox-exec -f "$OLDB/nobrew.sb")
+  ok "Homebrew's and /usr/local's bash are unreachable inside the sandbox"
+else
+  printf '  note sandbox-exec unavailable: /bin/bash is still the only bash on PATH\n'
+fi
+old_bash() {  # old_bash <env assignments...> <cmd...>: a clean env, /bin/bash first
+  ${SANDBOX[@]+"${SANDBOX[@]}"} env -i PATH="$OLDB/bin:/usr/bin:/bin:/usr/sbin:/sbin" \
+    HOME="$OLDB/home" USER="${USER:-claude-code-user}" TMPDIR="${TMPDIR:-/tmp}" \
+    FAKE_KC="$OLDB/kc.json" FAKE_CALLS="$OLDB/claude-calls" "$@" 2>&1 </dev/null
+}
+v="$(old_bash bash -c 'printf %s "${BASH_VERSINFO[0]}.${BASH_VERSINFO[1]}"')"
+check "the bash these run under is 3.2" "$v" "3.2"
+old_case() {  # old_case <name> <want rc> <want substring> <env/cmd...>
+  local name="$1" want_rc="$2" want="$3"; shift 3
+  local out rc; out="$(old_bash "$@")"; rc=$?
+  if [ "$rc" = "$want_rc" ]; then ok "$name: rc=$rc"; else bad "$name: rc=$rc want $want_rc: ${out:0:300}"; fi
+  contains "$name: says what it should" "$out" "$want"
+  lacks "$name: no 'needs bash 4.4'" "$out" "needs bash 4.4"
+  lacks "$name: no 'bad substitution'" "$out" "bad substitution"
+  lacks "$name: no unbound variable" "$out" "unbound variable"
+}
+SEAMS="CLAUDE_ACCOUNTS_TEST=1 CLAUDE_ACCOUNTS_HEALTH_JSON=$FIXTURE CLAUDE_ACCOUNTS_DIR=$OLDB/work CLAUDE_ACCOUNTS_LOG=$OLDB/rotation.log CLAUDE_ACCOUNTS_CLAUDE_BIN=$FAKE CLAUDE_ACCOUNTS_THREADS_BIN=/usr/bin/false"
+old_case "claude-accounts help" 0 "which Claude accounts" "$CA" help
+old_case "claude-accounts list (fixture)" 0 "work-2" $SEAMS "$CA" list
+old_case "claude-accounts set-live-login --dry-run (read_facts)" 0 "already-live:" $SEAMS "$CA" set-live-login work-2 --dry-run
+old_case "claude-accounts delete, unconfirmed (read_facts)" 1 "nothing deleted" $SEAMS "$CA" delete half
+old_case "claude-accounts rotate --dry-run (arrays, trap)" 0 "claude was not invoked" $SEAMS "$CA" rotate --dry-run
+old_case "claude-accounts rotate --json --dry-run" 0 '"outcome": "would-refresh"' $SEAMS "$CA" rotate --json --dry-run
+old_case "claude-accounts expiry (fake keychain)" 0 '"machine-default"' $SEAMS "$CA" expiry --json
+old_case "claude-accounts refuses an unknown command" 2 "unknown command 'frobnicate'" "$CA" frobnicate
+old_case "claude-accounts quotes like \${x@Q} did" 1 "invalid label 'it'\''s'" "$CA" login "it's"
+old_case "add-account --help" 2 "usage:" "$SCRIPT_DIR/add-account" --help
+old_case "add-account --login --dry-run (fakes)" 0 "stopping before invoking claude" \
+  CLAUDE_ACCOUNTS_HOME="$OLDB/store" "$SCRIPT_DIR/add-account" --login old-bash --no-browser --dry-run
+old_case "add-account --login <address> --dry-run (fakes)" 0 "login as         : old.bash@example.com" \
+  CLAUDE_ACCOUNTS_HOME="$OLDB/store" "$SCRIPT_DIR/add-account" --login old.bash@example.com --dry-run
+old_case "add-account refuses a bad label" 1 "invalid label" \
+  CLAUDE_ACCOUNTS_HOME="$OLDB/store" "$SCRIPT_DIR/add-account" --login "../x" --dry-run
+old_case "claude-login-browser usage" 2 "usage: claude-login-browser" "$SCRIPT_DIR/claude-login-browser"
+old_case "claude-login-browser refuses a non-http URL" 2 "refusing non-http(s) URL" "$SCRIPT_DIR/claude-login-browser" "file:///nonexistent"
+old_case "use-account usage" 2 "usage: use-account" "$SCRIPT_DIR/use-account"
+old_case "claude-account-expiry-alarm help" 0 "daily watch" "$SCRIPT_DIR/claude-account-expiry-alarm" help
+if [ -e "$OLDB/claude-calls" ]; then bad "a fake claude was invoked by a harmless path"; else ok "no claude was invoked"; fi
+if [ -z "$(ls -A "$OLDB/store/accounts" 2>/dev/null | grep -v '^\.gitignore$')" ]; then ok "no slot dir was created"
+else bad "a slot dir was created: $(ls -A "$OLDB/store/accounts")"; fi
+
+echo "== 15. an account's label may be its email address (issue #35) =="
+STUB_THREADS="$TMP/stub-threads"; STUB_THREADS_LOG="$TMP/stub-threads.log"
+printf '#!/bin/sh\nprintf "%%s\\n" "$*" >> "%s"\nexit 0\n' "$STUB_THREADS_LOG" > "$STUB_THREADS"; chmod +x "$STUB_THREADS"
+STUB_AA="$TMP/stub-add-account"; STUB_AA_LOG="$TMP/stub-add-account.log"
+printf '#!/bin/sh\nprintf "%%s\\n" "$*" >> "%s"\nexit 0\n' "$STUB_AA_LOG" > "$STUB_AA"; chmod +x "$STUB_AA"
+addr_ca() { : > "$STUB_THREADS_LOG"; : > "$STUB_AA_LOG"
+  run_ca CLAUDE_ACCOUNTS_THREADS_BIN="$STUB_THREADS" CLAUDE_ACCOUNTS_ADD_ACCOUNT="$STUB_AA" "$@" </dev/null; }
+out="$(addr_ca "$CA" rename work a.b@x.test)"; rc=$?
+check "rename to an address label exits 0" "$rc" "0"
+check "…and reaches threads with the address" "$(cat "$STUB_THREADS_LOG")" "accounts rename work a.b@x.test"
+out="$(addr_ca "$CA" rename a.b@x.test work)"; rc=$?
+check "rename from an address label reaches threads" "$(cat "$STUB_THREADS_LOG")" "accounts rename a.b@x.test work"
+for bad_label in "A@x.test" "a..b@x.test" ".a@x.test" "a.@x.test" "a@x" "a@x_y.test" "a b@x.test"; do
+  out="$(addr_ca "$CA" rename work "$bad_label")"; rc=$?
+  if [ "$rc" -ne 0 ] && printf '%s' "$out" | grep -q "invalid name" && [ ! -s "$STUB_THREADS_LOG" ]; then
+    ok "rename refuses $bad_label before threads runs"
+  else bad "rename $bad_label (rc=$rc): ${out:0:200}"; fi
+  out="$(addr_ca "$CA" delete "$bad_label" --yes)"; rc=$?
+  if [ "$rc" -ne 0 ] && printf '%s' "$out" | grep -q "invalid name" && [ ! -s "$STUB_THREADS_LOG" ]; then
+    ok "delete refuses $bad_label before threads runs"
+  else bad "delete $bad_label (rc=$rc): ${out:0:200}"; fi
+done
+out="$(addr_ca "$CA" delete a.b@x.test --yes)"; rc=$?
+contains "delete accepts an address label (and looks it up)" "$out" "there is no account 'a.b@x.test'"
+out="$(addr_ca "$CA" set-live-login "a..b@x.test" --dry-run)"; rc=$?
+if [ "$rc" -ne 0 ] && printf '%s' "$out" | grep -q "invalid name"; then ok "set-live-login refuses an invalid address"
+else bad "set-live-login a..b@x.test (rc=$rc): ${out:0:200}"; fi
+out="$(addr_ca "$CA" set-live-login zed@x.test --dry-run)"; rc=$?
+contains "set-live-login accepts an address label (and looks it up)" "$out" "there is no account 'zed@x.test'"
+out="$(addr_ca "$CA" login New.Person@X.test --dry-run)"; rc=$?
+check "login <address> --dry-run exits 0" "$rc" "0"
+check "…and add-account is given the lower-case address as label AND email" \
+  "$(cat "$STUB_AA_LOG")" "--login new.person@x.test --email new.person@x.test --dry-run"
+mkdir -p "$TMP/work/new-person-x-test"
+out="$(addr_ca "$CA" login new.person@x.test --dry-run)"; rc=$?
+check "…but an existing legacy folder keeps the address's slot" \
+  "$(cat "$STUB_AA_LOG")" "--login new-person-x-test --email new.person@x.test --dry-run"
+rmdir "$TMP/work/new-person-x-test"
+out="$(addr_ca "$CA" login "a@x_y.test" --dry-run)"; rc=$?
+if [ "$rc" -ne 0 ] && printf '%s' "$out" | grep -q "invalid label" && [ ! -s "$STUB_AA_LOG" ]; then
+  ok "login refuses an address that is not a valid label, before add-account runs"
+else bad "login a@x_y.test (rc=$rc): ${out:0:200}"; fi
 
 echo "== 13. the live login is exactly as we found it =="
 check "live keychain mdat unchanged" "$(live_mdat)" "$LIVE_MDAT_BEFORE"

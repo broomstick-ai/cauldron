@@ -15,16 +15,25 @@ use chrono::{DateTime, Utc};
 use serde_json::Value;
 use shapewire::subtree::{is_active, Rollup};
 
-/// **THE ONE MASKER** (V1-CLEAN1 F1, V1-CLEAN2 B1). An account key as a face
-/// may draw it: a key that is not an address is drawn as it is; an address
-/// (anything holding `@`) is MASKED to the first character of each side,
-/// `p•••@e•••` — never the address, never its local part, never its domain.
+/// **THE MASKER** (V1-CLEAN1 F1, V1-CLEAN2 B1): an address (anything holding
+/// `@`) masked to the first character of each side, `p•••@e•••`; a key that
+/// is not an address is returned as it is.
 ///
-/// Every path by which an account key reaches the screen, a dump or a log
-/// goes through here: the pool board and Status › Tokens (`Card::title`),
-/// Config › Accounts and its modal titles (`App::account_name`), an
-/// account's id (`menu::account_id`, the slug of this), and notes quoting a
-/// key ([`masked_in`]). Nothing else masks an account.
+/// **Where it is still used, and why** (#35). It was made the one
+/// way an account key reached any screen, dump or log, when account keys
+/// first became addresses (V1.5's inspection, F1). Since 0.1.18 an account's
+/// address IS its one name, so the face draws the name in full
+/// ([`shown_among`]) wherever it names the account. The mask stays where it
+/// was meant to protect an address from leaving the screen it belongs to:
+/// * an account's **id** (`menu::account_id`, the slug of this plus a keyed
+///   digest): the id is a settings key, a `--settings` path and a file
+///   name, so it must never carry the address (unchanged, so no stored
+///   setting moves);
+/// * **prose the face did not write** ([`masked_text`]: a daemon's refusal,
+///   a tool's stderr, a shape's dead reason): it can name an address that is
+///   not this account's — the other identity of a crossed login, the
+///   machine's login — and is the text most often copied into a report;
+///   the account's own name in it is kept ([`masked_in`]).
 pub fn shown_name(key: &str) -> String {
     match key.split_once('@') {
         None => key.to_string(),
@@ -35,15 +44,15 @@ pub fn shown_name(key: &str) -> String {
     }
 }
 
-/// `text` with every occurrence of account key `key` drawn as
-/// [`shown_name`] — for prose the face did not write (a daemon's refusal, a
-/// tool's stderr) that may quote the key — and then every OTHER address in
-/// it masked too ([`masked_text`]).
+/// `text`, prose the face did not write about account `key` (a daemon's
+/// refusal, a tool's stderr), with the account's own name kept in full (it
+/// is the name the face draws, #35) and every OTHER address in it masked
+/// ([`masked_text`]).
 pub fn masked_in(text: &str, key: &str) -> String {
     if key.is_empty() {
         return masked_text(text);
     }
-    masked_text(&text.replace(key, &shown_name(key)))
+    text.split(key).map(masked_text).collect::<Vec<_>>().join(key)
 }
 
 /// `text` with every ADDRESS in it drawn through [`shown_name`] — for prose
@@ -372,13 +381,21 @@ pub mod install_key {
     }
 }
 
-/// **[`shown_name`], TOLD APART FROM ITS TWINS** (V1-ACCT, V1-CLEAN2-I Q1).
-/// Two addresses with the same first letters on both sides mask the same
-/// (`c•••@b•••`); when another of `keys` shows the same, the name carries the
-/// shortest prefix (at least three digits) of its id's digest that no twin
-/// shares — `c•••@b••• ·d64` — and nothing more of the address. A name with
-/// no twin is [`shown_name`] exactly.
+/// **AN ACCOUNT'S NAME AS THE FACE DRAWS IT: THE KEY, IN FULL** (#35 round
+/// 2, N3). An account named by its address has that address as its one
+/// name, and two addresses are told apart by themselves. (Until 0.1.18 this
+/// drew [`shown_name`]'s mask, told apart from a twin that masked the same
+/// by a digest suffix, `c•••@b••• ·d64`; `keys` is what that compared
+/// against, kept so every caller stays as it was.)
 pub fn shown_among<'a>(key: &str, keys: impl IntoIterator<Item = &'a str>) -> String {
+    let _ = keys;
+    key.to_string()
+}
+
+/// The masked form [`shown_among`] drew before 0.1.18, still used where a
+/// mask is meant (an id's slug); not a name.
+#[allow(dead_code)]
+fn masked_among<'a>(key: &str, keys: impl IntoIterator<Item = &'a str>) -> String {
     let shown = shown_name(key);
     if shown == key {
         return shown;

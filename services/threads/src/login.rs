@@ -72,6 +72,43 @@ use crate::error::{Error, Result};
 /// the distinct-account preflight and a `security` call or two.
 pub const URL_TIMEOUT: Duration = Duration::from_secs(60);
 
+/// How long the pre-login snapshot of the slot (a keychain read and, when a
+/// credential is there, a keychain copy) may take before the login is
+/// refused (#30). Each `security` call answers in milliseconds; a wait this
+/// long is a dialog or a locked keychain, not a slow machine.
+pub const SNAPSHOT_TIMEOUT: Duration = Duration::from_secs(20);
+
+/// The refusal for a login script that printed no URL in time (#30): the
+/// bound, and the last lines it wrote on each stream, so whoever reads it
+/// can see where it stalled. Nothing it prints is a credential (the script
+/// never prints one), and the face masks addresses.
+pub fn timed_out_saying(bound: Duration, stdout: &str, stderr: &str) -> String {
+    fn tail(s: &str) -> String {
+        let lines: Vec<&str> = s.lines().map(str::trim_end).filter(|l| !l.trim().is_empty()).collect();
+        lines[lines.len().saturating_sub(6)..].join("\n")
+    }
+    let mut out = format!(
+        "timed out after {}s waiting for the login URL: the login script did not reach the step \
+         that prints it",
+        bound.as_secs()
+    );
+    let (o, e) = (tail(stdout), tail(stderr));
+    if o.is_empty() && e.is_empty() {
+        out.push_str(". It printed nothing at all, so it stalled before its first step (starting bash, or a keychain read).");
+    } else {
+        out.push_str(". The last it said:");
+        if !e.is_empty() {
+            out.push('\n');
+            out.push_str(&e);
+        }
+        if !o.is_empty() {
+            out.push('\n');
+            out.push_str(&o);
+        }
+    }
+    out
+}
+
 /// How long to wait for the child to finish after the code is pasted.
 ///
 /// The token exchange is one HTTPS round trip, but `add-account` then does its
@@ -160,7 +197,7 @@ impl SecurityKeychain {
 
     fn read_secret(service: &str) -> Option<Vec<u8>> {
         Self::tripwire(service);
-        let out = std::process::Command::new("/usr/bin/security")
+        let out = crate::accounts::security_command()
             .args(["find-generic-password", "-a", &crate::accounts::keychain_account(), "-w", "-s", service])
             .stdin(Stdio::null())
             .stderr(Stdio::null())
@@ -195,7 +232,7 @@ impl SlotKeychain for SecurityKeychain {
         Self::tripwire(to);
         let hex: String = secret.iter().map(|b| format!("{b:02x}")).collect();
         drop(secret);
-        let Ok(mut child) = std::process::Command::new("/usr/bin/security")
+        let Ok(mut child) = crate::accounts::security_command()
             .arg("-i")
             .stdin(Stdio::piped())
             .stdout(Stdio::null())
@@ -218,7 +255,7 @@ impl SlotKeychain for SecurityKeychain {
 
     fn delete(&self, service: &str) -> bool {
         Self::tripwire(service);
-        let _ = std::process::Command::new("/usr/bin/security")
+        let _ = crate::accounts::security_command()
             .args(["delete-generic-password", "-a", &crate::accounts::keychain_account(), "-s", service])
             .stdin(Stdio::null())
             .stdout(Stdio::null())
@@ -595,9 +632,31 @@ impl LoginSessions {
             let kc = self.keychain();
             let home = threads_home.to_path_buf();
             let (acct, email) = (account.to_string(), opts.email.clone());
-            tokio::task::spawn_blocking(move || take_snapshot(kc.as_ref(), &home, &acct, email.as_deref()))
-                .await
-                .map_err(|e| Error::Config(format!("the login snapshot task failed: {e}")))??
+            let mut task =
+                tokio::task::spawn_blocking(move || take_snapshot(kc.as_ref(), &home, &acct, email.as_deref()));
+            // BOUNDED (#30): the snapshot reads the keychain, and a keychain
+            // read can wait on a macOS access dialog nobody sees. Unbounded,
+            // that wait outlived every timeout and the person saw only the
+            // face's. Past the bound the login is refused saying so; the
+            // read, which cannot be cancelled, is left to finish, and a copy
+            // it parks is dropped then (nothing was started).
+            match tokio::time::timeout(SNAPSHOT_TIMEOUT, &mut task).await {
+                Ok(joined) => joined.map_err(|e| Error::Config(format!("the login snapshot task failed: {e}")))??,
+                Err(_) => {
+                    let kc = self.keychain();
+                    tokio::spawn(async move {
+                        if let Ok(Ok(late)) = task.await {
+                            let _ = tokio::task::spawn_blocking(move || late.discard(kc.as_ref())).await;
+                        }
+                    });
+                    return Err(Error::Config(format!(
+                        "the login was not started: reading {account}'s keychain item before the login \
+                         took longer than {}s. macOS may be showing a keychain access dialog (allow it, \
+                         then log in again), or the login keychain is locked. Nothing was changed.",
+                        SNAPSHOT_TIMEOUT.as_secs()
+                    )));
+                }
+            }
         };
 
         let mut cmd = tokio::process::Command::new(script);
@@ -685,10 +744,8 @@ impl LoginSessions {
             }
             let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
             if remaining.is_zero() {
-                break Err(format!(
-                    "timed out after {}s waiting for the login URL",
-                    URL_TIMEOUT.as_secs()
-                ));
+                let errs = errors.lock().await.clone();
+                break Err(timed_out_saying(URL_TIMEOUT, &transcript, &errs));
             }
             match tokio::time::timeout(remaining, stdout.read(&mut buf)).await {
                 // EOF: the child exited before printing a URL. That is a
@@ -709,10 +766,8 @@ impl LoginSessions {
                 Ok(Ok(n)) => transcript.push_str(&String::from_utf8_lossy(&buf[..n])),
                 Ok(Err(e)) => break Err(format!("reading from the login script: {e}")),
                 Err(_) => {
-                    break Err(format!(
-                        "timed out after {}s waiting for the login URL",
-                        URL_TIMEOUT.as_secs()
-                    ))
+                    let errs = errors.lock().await.clone();
+                    break Err(timed_out_saying(URL_TIMEOUT, &transcript, &errs));
                 }
             }
         };
@@ -1223,6 +1278,21 @@ fn find_url(s: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// #30: a login that printed no URL in time says where it stalled — the
+    /// last lines of each stream — instead of a bare timeout.
+    #[test]
+    fn a_url_timeout_carries_the_scripts_last_words() {
+        let e = "add-account --login work\n  step 1\n\n  reading the keychain baseline\n";
+        let msg = timed_out_saying(URL_TIMEOUT, "", e);
+        assert!(msg.starts_with("timed out after 60s waiting for the login URL"), "{msg}");
+        assert!(msg.contains("The last it said:\n") && msg.ends_with("reading the keychain baseline"), "{msg}");
+        let many: String = (1..=20).map(|i| format!("line {i}\n")).collect();
+        let msg = timed_out_saying(URL_TIMEOUT, &many, "");
+        assert!(msg.contains("line 15") && msg.contains("line 20") && !msg.contains("line 14"), "only the tail: {msg}");
+        let msg = timed_out_saying(URL_TIMEOUT, "", "");
+        assert!(msg.contains("printed nothing at all"), "{msg}");
+    }
 
     #[test]
     fn the_url_is_taken_from_the_line_that_names_it() {

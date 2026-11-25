@@ -211,6 +211,15 @@ fn fake_unsigned_rebuild(path: &Path, tag: &str) {
 /// `cargo build` from forging a deploy, so weakening the check to make the test
 /// self-contained would delete the feature.
 fn sign_for_deploy(path: &Path) -> bool {
+    // Round 2: this reads the login keychain (`security find-identity`), so
+    // it runs only on an explicit opt-in.
+    if std::env::var_os("CAULDRON_TEST_ALLOW_REAL_KEYCHAIN").map_or(true, |v| v != "1") {
+        eprintln!(
+            "NOT RUN: this would read the login keychain (/usr/bin/security find-identity -v -p codesigning) \
+             to find a codesigning identity. Set CAULDRON_TEST_ALLOW_REAL_KEYCHAIN=1 to allow it."
+        );
+        return false;
+    }
     let have_identity = std::process::Command::new("/usr/bin/security")
         .args(["find-identity", "-v", "-p", "codesigning"])
         .output()

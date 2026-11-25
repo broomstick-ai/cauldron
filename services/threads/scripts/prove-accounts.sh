@@ -52,6 +52,15 @@
 #
 # Exit codes: 0 ran · 2 bad usage · 3 REFUSED (preflight) · 1 error.
 set -euo pipefail
+
+# ── THE REAL KEYCHAIN: OPT-IN ONLY ───────────────────────────────────────────
+# This suite is not hermetic: it READS the credentials of your captured Claude accounts from your login keychain and runs ONE REAL Claude turn per account against Anthropic`s API (which spends usage). It refuses to run unless
+# CAULDRON_TEST_ALLOW_REAL_KEYCHAIN=1 is set, so nobody runs it by accident
+# (an outside contributor, a full-suite loop, an agent).
+if [ "${CAULDRON_TEST_ALLOW_REAL_KEYCHAIN:-}" != 1 ]; then
+  echo "prove-accounts.sh: NOT RUN: it READS the credentials of your captured Claude accounts from your login keychain and runs ONE REAL Claude turn per account against Anthropic's API (which spends usage). Set CAULDRON_TEST_ALLOW_REAL_KEYCHAIN=1 to run it on purpose." >&2
+  exit 3
+fi
 # REL-4.S7i: bash 3.2 (this machine's /bin/bash) exits 0 from a `set -u`
 # abort under `set -e` when an EXIT trap is set. Every deliberate `exit`
 # marks itself; the EXIT trap ends in __abort_guard, which turns an UNMARKED

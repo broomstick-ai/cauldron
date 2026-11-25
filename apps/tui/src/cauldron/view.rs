@@ -23,6 +23,13 @@ use crate::cauldron::tags;
 pub const GRABBER: &str = "⣿";
 
 pub fn draw(frame: &mut Frame, app: &mut App) {
+    draw_face(frame, app);
+    // #34: the frame as drawn is what a drag selects; the selection is
+    // painted over it.
+    crate::cauldron::select::draw(app, frame.buffer_mut());
+}
+
+fn draw_face(frame: &mut Frame, app: &mut App) {
     // Every colour below is read from the theme in force, so setting it here,
     // each frame, is what makes the switch live.
     palette::set_theme(app.theme());
@@ -1384,6 +1391,8 @@ fn draw_modal_body(frame: &mut Frame, app: &mut App, area: Rect) {
         | Modal::Name { name, error, .. } => {
             let title = match &app.modal {
                 Some(Modal::Name { title, .. }) => title.clone(),
+                // #35: a Claude Code account is named by its email address.
+                Some(Modal::AddAccount { pool, .. }) if pool == crate::cauldron::menu::CLAUDE_CODE => "Add an account: its email address".to_string(),
                 Some(Modal::AddAccount { pool, .. }) => format!("Add an account to {}", crate::cauldron::menu::pool_label(pool)),
                 Some(Modal::AddItem { list, .. }) => format!("Add to {}", list.def().label),
                 _ => "Name the new cauldron".to_string(),

@@ -54,6 +54,15 @@ fn known_bool(v: &Value, path: &[&str]) -> Option<bool> {
 /// keychain operation and cannot be faked, so the properly-signed half of the
 /// contrast is asserted only where it can actually be produced.
 fn can_sign() -> bool {
+    // Round 2: this reads the login keychain (`security find-identity`), so
+    // it runs only on an explicit opt-in.
+    if std::env::var_os("CAULDRON_TEST_ALLOW_REAL_KEYCHAIN").map_or(true, |v| v != "1") {
+        eprintln!(
+            "NOT RUN: this would read the login keychain (/usr/bin/security find-identity -v -p codesigning) \
+             to find a codesigning identity. Set CAULDRON_TEST_ALLOW_REAL_KEYCHAIN=1 to allow it."
+        );
+        return false;
+    }
     std::process::Command::new("/usr/bin/security")
         .args(["find-identity", "-v", "-p", "codesigning"])
         .output()

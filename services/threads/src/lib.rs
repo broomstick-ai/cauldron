@@ -434,7 +434,13 @@ pub async fn run_daemon(config: Config) -> Result<()> {
     // whether a drain is under way, so the supervisor can drain before it
     // relaunches a wedged daemon.
     let gate_503 = manager.update.clone();
-    let extras: liveness::Extras = std::sync::Arc::new(move || gate_503.health_extras());
+    // #32: and where the account helpers are, and whether each would run.
+    let helpers_home = manager.data_dir().to_path_buf();
+    let extras: liveness::Extras = std::sync::Arc::new(move || {
+        let mut m = gate_503.health_extras();
+        m.insert("helpers".into(), crate::helpers::report(&helpers_home));
+        m
+    });
     let _ = door_ready.set((heartbeat.clone(), std::sync::Arc::clone(&extras)));
     let app = liveness::layer(chassis::chassis(std::sync::Arc::new(manager)).into_router(), heartbeat, extras);
     // R9.C7h: the port has been served since the bind; from here the chassis

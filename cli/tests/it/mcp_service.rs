@@ -1660,7 +1660,7 @@ fn rv4_the_real_older_mcp_service_rejects_nothing_and_says_why() {
 /// whenever the workspace version is not this constant, so every release
 /// bump makes someone check rv3 and rv4 against the new relation and move
 /// it.
-const OLDER_SERVICE_TESTS_CHECKED_AT: &str = "0.1.17";
+const OLDER_SERVICE_TESTS_CHECKED_AT: &str = "0.1.18";
 
 #[test]
 fn rv0_the_older_service_tests_were_checked_against_the_workspace_version() {

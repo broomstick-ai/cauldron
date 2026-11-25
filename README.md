@@ -159,8 +159,8 @@ your dumps into records:
   (`soup_claim`, `cauldron soup claim`); `import-corpus` brings an older
   corpus's clusters in with their claims; and `soup_changes` can wait for
   the next change ([Clusters and claims](#clusters-and-claims)).
-- 0.1.17 (unreleased): every tool answers when called as the consumer's
-  interface table writes it (`soup_link {from, kind, to}`); an MCP server
+- 0.1.17: every tool answers when called as the consumer's interface
+  table writes it (`soup_link {from, kind, to}`); an MCP server
   for one cauldron, pinned with `cauldron mcp stdio --cauldron` and written
   out by `cauldron mcp config`; a wrong edge or citation fixed on the record
   itself (`soup_unlink`, `soup_cite`, and `cauldron soup link | unlink |
@@ -174,6 +174,12 @@ your dumps into records:
   when you ask, and `cauldron inference status` says what is still missing
   ([Local inference](#local-inference)); and two fixes, to reads of a quiet
   threads store and to the plugin launcher in a subdirectory.
+- 0.1.18: installing and upgrading from a prebuilt bundle (issues #30 to
+  #35): `install --replace-running` moves the threads daemon to the new
+  build as it does the MCP service; account login runs on macOS's own bash
+  and says where it stalled; an account is named by its email address; and
+  text can be selected and copied on every surface of the terminal
+  interface ([Known limitations](#known-limitations)).
 
 cauldron has three parts:
 
@@ -196,7 +202,7 @@ the bucket, and dumps, each of which is saved; the Threads tab, which shows
 each environment's threads pinned or recent, read live from its threads
 daemon; the Ledger, a time-ordered event flow of the environment's own dumps;
 Status → Tokens, the real account pool and its usage pressure; Config →
-Accounts, the threads daemon's accounts, masked as `a•••@e•••`, with login from
+Accounts, the threads daemon's accounts, each named by its email address (from 0.1.18 shown in full), with login from
 the face and each account switched on or off per cauldron; secret human
 actions, typed into a masked input and routed to an env file or the macOS
 keychain; the threads face, with persistent Claude Code conversations on the
@@ -246,16 +252,16 @@ From 0.1.15, each release on GitHub carries two files: the bundle
 terminal UI, the `threads` daemon, the `mcp` service, from 0.1.17 the
 `inference` and `ripples` services, their declarations and the installer)
 and `SHA256SUMS`, its checksum. Download both with `curl`,
-check the checksum, unpack, and install (the commands are for 0.1.17;
+check the checksum, unpack, and install (the commands are for 0.1.18;
 change the version for another release):
 
 ```sh
 mkdir cauldron-download && cd cauldron-download
-curl -fLO https://github.com/broomstick-ai/cauldron/releases/download/v0.1.17/cauldron-0.1.17-aarch64-apple-darwin.tar.gz
-curl -fLO https://github.com/broomstick-ai/cauldron/releases/download/v0.1.17/SHA256SUMS
+curl -fLO https://github.com/broomstick-ai/cauldron/releases/download/v0.1.18/cauldron-0.1.18-aarch64-apple-darwin.tar.gz
+curl -fLO https://github.com/broomstick-ai/cauldron/releases/download/v0.1.18/SHA256SUMS
 shasum -a 256 -c SHA256SUMS
-tar -xzf cauldron-0.1.17-aarch64-apple-darwin.tar.gz
-cauldron-0.1.17-aarch64-apple-darwin/install --prebuilt cauldron-0.1.17-aarch64-apple-darwin.tar.gz
+tar -xzf cauldron-0.1.18-aarch64-apple-darwin.tar.gz
+cauldron-0.1.18-aarch64-apple-darwin/install --prebuilt cauldron-0.1.18-aarch64-apple-darwin.tar.gz
 ```
 
 `shasum -a 256 -c SHA256SUMS` must print `OK` for the tarball. The installer
@@ -279,7 +285,11 @@ then does exactly what the from-source
 install does below: makes `prod`, pins the services, puts the supervisor under
 launchd, and prints the same closing lines. `--dry-run` checks a local tarball
 and prints the plan without installing anything. To upgrade, run the new
-release's install the same way with `--replace-running`.
+release's install the same way with `--replace-running`: it moves both
+`threads` and `mcp` to the new release's build (see **Upgrading** below).
+`cauldron --version` names the release and the commit it was built from
+(`cauldron 0.1.18 (012345678901)`), the commit shortened as every build
+label in `cauldron status` shortens it.
 
 **What "ad-hoc signed" means here.** Every binary in the bundle is signed
 with `codesign --sign -`, an ad-hoc signature: it carries no developer
@@ -344,21 +354,35 @@ stops and prints the command to replace it
 (`./scripts/install --replace-running`).
 
 **Upgrading.** After a `git pull`, run `./scripts/install --replace-running`
-from a clean checkout (the upgrade builds the `mcp` service, and a build
-needs one). An environment installed before the MCP service existed (0.1.5
-or earlier) has no `mcp` pin; the upgrade builds the service and pins it. An
-environment whose `mcp` pin is an older build (0.1.6 or 0.1.7) has it
-rebuilt from this checkout and re-pinned; the supervisor moves the running
-service to the new build, and your grants are kept. A pin that is already
-this checkout's build is left as it is, so a second run changes nothing.
-Without `--replace-running` an older `mcp` pin is left as it is, and the
-install says plainly that the mcp service is still the old build and prints
-the two commands that upgrade it:
+from a clean checkout (the upgrade builds the `threads` and `mcp` services,
+and a build needs one). An environment installed before the MCP service
+existed (0.1.5 or earlier) has no `mcp` pin; the upgrade builds the service
+and pins it. A `threads` or `mcp` pin at an older build has it rebuilt from
+this checkout (or, with `--prebuilt`, installed from the bundle) and
+re-pinned; `threads` keeps its address, the supervisor moves the running
+service to the new build, and your grants are kept. Through 0.1.17 the
+installer moved only `mcp` and left `threads` on the old build, so the
+account helper scripts a 0.1.17 upgrade laid down were not the ones the
+running daemon looked for (issue #31); running the 0.1.18 install with
+`--replace-running` moves it. A pin that is already this build is left as
+it is, so a second run changes nothing. Without `--replace-running` an
+older pin is left as it is, and the install says plainly that the service
+is still the old build; for `mcp` it prints the two commands that upgrade
+it:
 
 ```sh
 cauldron --env prod build mcp --env-copy
 cauldron --env prod pin mcp <the label that build printed>
 ```
+
+In `cauldron status`, a hosted `threads` shows as `live:unverified`: its
+health check answered, but it does not speak cauldron's handshake, so the
+supervisor cannot also confirm its identity with a boot token. That is the
+expected state for `threads`, and the status line says so; nothing needs
+doing. Its health answer (the URL `status` prints, for example `curl -s
+http://127.0.0.1:<port>/health`) carries `helpers`: where the running daemon
+finds `add-account`, `claude-accounts` and `claude-login-browser`, and
+whether each passes the check it makes before running one.
 
 `cauldron mcp status` shows the running service's version beside the
 `cauldron` command's, and says when they differ; so does a Claude Code
@@ -1916,6 +1940,30 @@ This is an early release. These are known:
 - **A cluster cannot be changed or retired.** `cauldron@1` has no
   `supersedes`, no state and no removal: a wrong handle or boundary stays.
   Write a new cluster and move the claims to it.
+- **Selecting text in the terminal UI** (from 0.1.18): drag over any text
+  in the cauldron face (a modal, an error, a list, a page, a setting) and
+  release to send it to the terminal's clipboard (OSC 52). A drag never
+  activates or changes what it starts on; a press acts only as a click
+  (released where it was pressed). OSC 52 is not acknowledged, so the face
+  cannot know whether the copy landed, and says so: Terminal.app does not
+  accept OSC 52 (turn off View > Allow Mouse Reporting, Cmd-R, or hold Fn
+  while dragging to use its own selection); iTerm2 accepts it only with
+  Settings > General > Selection > "Applications in terminal may access
+  clipboard" on (else hold Option while dragging); most other terminals
+  accept it, and Shift held while dragging gives their own selection.
+- **Going back from 0.1.18.** `cauldron --env <env> rollback threads` and
+  `rollback mcp` re-pin the builds that ran before the upgrade (the
+  installer's closing lines print both). Running an older release's
+  installer instead moves only `mcp` back. Rename any account named by an
+  address to an `[A-Za-z0-9_-]` name before going back to 0.1.17, which
+  refuses address names.
+- **Tests that touch the real keychain are opt-in.** The account-script
+  suites `claude-accounts-prune`, `claude-accounts` and
+  `add-account-login` (conformance), `prove-accounts.sh` (which also runs
+  a real Claude turn per account), and the codesigning-identity tests read
+  or write your login keychain; each refuses to run unless
+  `CAULDRON_TEST_ALLOW_REAL_KEYCHAIN=1` is set. A threads daemon a test
+  starts never runs the real `security`.
 - **The prebuilt binaries are for Apple silicon only, and are not
   notarised.** They are ad-hoc signed (see [Install](#install)). On an Intel
   Mac, build from source. The prebuilt `threads` keeps the bundle's ad-hoc
@@ -1936,7 +1984,23 @@ This is an early release. These are known:
   is refused, and a missing one is refused naming the install that lays it
   down. `TUI_POOL_ACCOUNTS_TOOL` still names another copy, checked the same
   way. Run by hand, an installed copy needs the store named
-  (`CLAUDE_ACCOUNTS_HOME=<root>/data/<env>/threads/store`).
+  (`CLAUDE_ACCOUNTS_HOME=<root>/data/<env>/threads/store`). From 0.1.18 the
+  scripts run on macOS's own `/bin/bash` (3.2); no second bash is needed
+  (issue #33). A new account is named by its email address (the terminal
+  UI asks for it) and shown by it in full; an older account keeps its
+  name, and can take its address with `threads accounts rename <old>
+  <address>`, which is refused unless the slot's login records that very
+  address (its login hint or the account in its `.claude.json`), and
+  refused when it records none: log the slot in again under its current
+  name first (issue #35). An address-named account logs in only as that
+  address. A
+  login from the terminal UI waits for the daemon's answer, and a login
+  that stalls says what the script printed last (issue #30). The login
+  still runs as a child of the threads daemon, not in the terminal UI's
+  own session; moving it there is planned and not in 0.1.18. **A login
+  from a prebuilt install has still not been confirmed with a real
+  account by the project**: the paths are tested against stand-in
+  scripts, a stand-in `claude` and a fake keychain only.
 - **A dump is removed from a shell only.** `cauldron soup dump-remove
   <DM-n> --env <env> --cauldron <cauldron> --yes` erases one dump's content
   from the cauldron's directory and leaves a tombstone; it is refused while

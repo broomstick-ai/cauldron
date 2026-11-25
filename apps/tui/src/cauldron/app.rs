@@ -601,6 +601,7 @@ pub const KEYMAP: &[(&str, &str)] = &[
     ("click", "a setting, band or button acts at once · else select, and click again to open"),
     ("click, on Cauldron", "its reference at the caret, in place of the one there · double click: a quote"),
     ("drag a ⣿", "resize the sidebar · the bucket"),
+    ("drag over text", "select it; the release copies it (Shift or Option held while dragging: the terminal's own)"),
     ("⇧Tab · F1 … F9", "next tab: the environment bar's, then the global bar's"),
     ("⌥⇧Tab", "to the other bar: the tab last shown there"),
     ("→ ←, on a sub-tab strip · click one", "the next / previous sub-tab (Status)"),
@@ -854,6 +855,8 @@ pub struct App {
     pub dragging: bool,
     /// The bucket's divider is being dragged.
     pub dragging_bucket: bool,
+    /// The mouse selection over the drawn frame, on every surface (#34).
+    pub select: crate::cauldron::select::Select,
     /// Where the last frame drew the open modal (its colour is painted there).
     pub modal_rect: Option<Rect>,
     /// The last left press on an item or row, and when: a second press on
@@ -1085,6 +1088,7 @@ impl App {
             layout_store,
             dragging: false,
             dragging_bucket: false,
+            select: Default::default(),
             modal_rect: None,
             last_click: None,
             gc_at: std::time::Instant::now(),
@@ -4479,6 +4483,19 @@ impl App {
         if matches!(event, Event::Key(_) | Event::Mouse(MouseEvent { kind: MouseEventKind::Down(_), .. })) {
             self.flash = None;
         }
+        // #34: a left press is held until it is a click (released where it
+        // was pressed: the press, then its release, go on below as they
+        // always did) or a selection (dragged: it never acts).
+        match crate::cauldron::select::event(self, &event) {
+            crate::cauldron::select::Then::Take => return,
+            crate::cauldron::select::Then::Pass => {}
+            crate::cauldron::select::Then::Replay(down) => self.dispatch(Event::Mouse(down)),
+        }
+        self.dispatch(event)
+    }
+
+    /// An event the selection has passed on: what every event did before #34.
+    fn dispatch(&mut self, event: Event) {
         if self.first_run.is_some() && self.modal.is_none() {
             return self.first_run_event(&event);
         }
@@ -4537,6 +4554,11 @@ impl App {
             Event::Mouse(m) => self.mouse(m),
             _ => {}
         }
+    }
+
+    /// [`Self::hit_at`], for the selection's divider test.
+    pub(crate) fn hit_at_pub(&self, col: u16, row: u16) -> Option<Hit> {
+        self.hit_at(col, row)
     }
 
     fn hit_at(&self, col: u16, row: u16) -> Option<Hit> {

@@ -634,11 +634,10 @@ impl App {
                 .into_iter()
                 .map(|k| {
                     let id = account_id(&k);
-                    // The drawn name, masked ONCE here: his rename (itself
-                    // through the masker, in case he typed an address), else
-                    // the key told apart from its twins (V1-ACCT).
+                    // The drawn name (#35): his rename, else the key — in
+                    // full, an address included.
                     let label = match f.renamed.get(&format!("{pool}/{id}")) {
-                        Some(r) => crate::pool::model::shown_name(r),
+                        Some(r) => r.clone(),
                         None => crate::pool::model::shown_among(&k, keys.iter().map(String::as_str)),
                     };
                     AcctView { id, label, seed: None, key: Some(k) }
@@ -668,20 +667,17 @@ impl App {
         out
     }
 
-    /// **WHAT ACCOUNT `id` OF `pool` IS CALLED ON SCREEN — NEVER A RAW
-    /// ADDRESS** (V1-CLEAN2, V1-CLEAN1-I B1). Its label when this face lists
-    /// it, else the daemon's key of the live card (or loading card) whose id
-    /// it is — the Status › Tokens card Enter opens — and every one of them
-    /// through [`crate::pool::model::shown_name`], the one masker. Only an id
-    /// nothing names is drawn as it is, and an id never carries an address
-    /// ([`account_id`]).
+    /// **WHAT ACCOUNT `id` OF `pool` IS CALLED ON SCREEN**: its name, in
+    /// full — an address included, since an account's address is its one
+    /// name (#35 round 2; until 0.1.18 an address was masked here). Its label
+    /// when this face lists it, else the daemon's key of the live card (or
+    /// loading card) whose id it is — the Status › Tokens card Enter opens.
+    /// Only an id nothing names is drawn as it is; an id itself never carries
+    /// an address ([`account_id`]).
     pub fn account_name(&self, pool: &str, id: &str) -> String {
-        use crate::pool::model::{shown_among, shown_name};
+        use crate::pool::model::shown_among;
         if let Some(x) = self.accounts(pool).into_iter().find(|x| x.id == id) {
-            // A daemon-keyed row's label is already the drawn name (masked
-            // once in `accounts`); masking it again would strip its twin
-            // mark. Any other label is masked here, once.
-            return if x.key.is_some() { x.label } else { shown_name(&x.label) };
+            return x.label;
         }
         if pool == CLAUDE_CODE {
             if let Some(pl) = self.live.pool() {
@@ -2609,7 +2605,7 @@ impl App {
                         if let Some(i) = at {
                             self.set_settings_sel(i);
                         }
-                        self.notice = Some(format!("added {} to {pool}", crate::pool::model::shown_name(name.trim())));
+                        self.notice = Some(format!("added {} to {pool}", name.trim()));
                     }
                     Err(e) => {
                         if let Some(Modal::AddAccount { error, .. }) = &mut self.modal {

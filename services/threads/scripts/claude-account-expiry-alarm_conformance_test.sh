@@ -232,5 +232,18 @@ run "$TMP/fthr.json" --threshold 14
 [ -f "$(tf tunable)" ] && r=1 || r=0
 check "$r" "   the same fixture at --threshold 14 -> fires (the threshold is real)"
 
+# ── a slot whose label is its email address (issue #35) ─────────────────────
+# The ticket id keeps the plain name grammar (`@` and `.` become `-`), and the
+# ticket itself still names the address.
+reset_ws
+mkfixture "$TMP/faddr.json" "first.last@example.com:3.0"
+run "$TMP/faddr.json"
+[ -f "$(tf first-last-example-com)" ] && r=1 || r=0
+check "$r" "an address-labelled slot -> a ticket under a plain id (claude-login-first-last-example-com)"
+grep -qF 'first.last@example.com' "$(tf first-last-example-com)" 2>/dev/null && r=1 || r=0
+check "$r" "   and the ticket names the address"
+grep -qF 'claude-accounts login first.last@example.com' "$WS/human-actions/"*.md "$WS/human-actions/"*/* 2>/dev/null && r=1 || r=0
+check "$r" "   and its copyable command signs in that address"
+
 printf '\n  %d passed, %d failed\n\n' "$PASS" "$FAIL"
 [ "$FAIL" -eq 0 ]

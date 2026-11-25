@@ -146,7 +146,9 @@ if [[ "${commit}" =~ ^[0-9a-f]{40}$ && "cauldron-${version}-aarch64-apple-darwin
 # The tarball's metadata, in its normal form (see the header).
 commit_time="$(sed -n 's/^commit_time=//p' "${B}/BUNDLE" 2>/dev/null || true)"
 if [[ "${commit_time}" =~ ^[0-9]+$ ]]; then
-    meta_out="$(python3 -I - "${TARBALL}" "${BASE}" "${commit_time}" <<'PY2'
+    # Written to a file, then run: bash 3.2 (macOS's) cannot parse a heredoc
+# holding quotes and parentheses inside $( ... ) (F8).
+cat > "${TMP}/meta.py" <<'PY2'
 import sys, tarfile
 path, top, when = sys.argv[1], sys.argv[2], int(sys.argv[3])
 raw = open(path, "rb").read(10)
@@ -180,7 +182,7 @@ for b in bad[:12]:
     print(b)
 sys.exit(1 if bad else 0)
 PY2
-)" && meta_rc=0 || meta_rc=$?
+meta_out="$(python3 -I "${TMP}/meta.py" "${TARBALL}" "${BASE}" "${commit_time}")" && meta_rc=0 || meta_rc=$?
     if [[ ${meta_rc} -eq 0 ]]; then
         pass "tarball metadata: owner 0:0 root:wheel, mtime ${commit_time} (the commit, UTC), modes 0755/0644, byte order, no extension headers, gzip without name or time"
     else
@@ -223,7 +225,9 @@ done
 # found in that directory. Checked on the text: a python run with arguments
 # that do not start with -I fails, through any spelling (python, python3,
 # python3.x, a path to one, or a variable naming one).
-iso_out="$(python3 -I - "${B}" <<'PYSCAN'
+# Written to a file, then run: bash 3.2 (macOS's) cannot parse a heredoc
+# holding quotes and parentheses inside $( ... ) (F8).
+cat > "${TMP}/iso.py" <<'PYSCAN'
 import os, re, sys
 root = sys.argv[1]
 call = re.compile(r'''(?:^|[\s|;&(`'"])((?:[\w./${}-]*/)?python[0-9.]*|"?\$\{?PY[0-9]?\}?"?)\s+(\S+)''')
@@ -254,7 +258,7 @@ for d, _, files in os.walk(root):
             print("NOISO " + b)
         print(("PATHOK " if has_path_rule else "NOPATH ") + rel)
 PYSCAN
-)"
+iso_out="$(python3 -I "${TMP}/iso.py" "${B}")"
 noiso="$(grep '^NOISO ' <<<"${iso_out}" | sed 's/^NOISO //' || true)"
 if [[ -z "${noiso}" ]]; then pass "every python every shipped script runs is isolated (-I)"; else fail "a shipped script runs python without -I (a module planted where it is started would be imported): ${noiso}"; fi
 nopath="$(grep '^NOPATH ' <<<"${iso_out}" | sed 's/^NOPATH //' | tr '\n' ' ' || true)"

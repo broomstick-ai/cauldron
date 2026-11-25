@@ -430,10 +430,13 @@ impl Copied {
     /// The notice. It says what was done, never what was hoped (honesty rule 6
     /// applied where there is no echo to render).
     pub fn notice(&self) -> String {
+        // #34: "sent", and how to copy otherwise in THIS
+        // terminal — the same words as the cauldron face's (term-shell).
+        let otherwise = term_shell::copy_fallback_here();
         match self.path {
-            CopyPath::Direct => format!("{} chars copied (OSC 52)", self.chars),
+            CopyPath::Direct => format!("{} chars sent to the terminal's clipboard (OSC 52); {otherwise}", self.chars),
             CopyPath::Passthrough => {
-                format!("{} chars copied (OSC 52 via tmux passthrough)", self.chars)
+                format!("{} chars sent to the terminal's clipboard (OSC 52 via tmux passthrough); {otherwise}", self.chars)
             }
             CopyPath::RawInTmux => format!(
                 "{} chars sent RAW — tmux allow-passthrough is off, and with set-clipboard \

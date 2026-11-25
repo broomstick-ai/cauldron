@@ -110,6 +110,12 @@ async fn main() {
     if args.iter().any(|a| a == "--build-stamp") {
         build_stamp();
     }
+    // Hidden, read-only: which `security` this process would run (round 2:
+    // a test proves a daemon it spawns can never reach the real keychain).
+    if args.iter().any(|a| a == "--keychain-guard") {
+        println!("security: {}", threads::accounts::security_command().get_program().to_string_lossy());
+        std::process::exit(0);
+    }
     tracing_subscriber_init();
     let config_path = parse_flag(&mut args, "--config");
     let as_json = take_flag(&mut args, "--json");
@@ -1288,6 +1294,14 @@ fn accounts_pressure(data_dir: &std::path::Path, as_json: bool) {
 /// derived from the directory path, so a rename that skipped it would orphan
 /// the credential; see `accounts::rename_account` for the ordering argument.
 fn accounts_rename(data_dir: &std::path::Path, old: &str, new: &str) {
+    // #35: an address is lowercased (ASCII only), as login/begin does.
+    let lowered;
+    let new = if new.contains('@') {
+        lowered = new.trim().to_ascii_lowercase();
+        lowered.as_str()
+    } else {
+        new
+    };
     let registry_path = data_dir.join("accounts.toml");
     let registry = match accounts::Registry::load(&registry_path) {
         Ok(r) => r,

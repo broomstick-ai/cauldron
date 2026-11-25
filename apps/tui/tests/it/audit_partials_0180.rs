@@ -12,7 +12,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 
 use env::paths::Source;
 use env::Environment;
-use ratatui::crossterm::event::{Event, KeyCode, KeyEvent, KeyModifiers};
+use ratatui::crossterm::event::{Event, KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
 use tui::cauldron::app::{App, CTab, Focus, Hit, Modal, KTab};
 use tui::cauldron::menu::{CfgTab, Entry, SPage};
 use tui::cauldron::status::StatusTab;
@@ -261,7 +261,12 @@ fn v7_every_config_row_has_an_explained_tip() {
     a.open_settings_path("providers/claude_code").unwrap();
     let ix = a.entries().iter().position(|f| matches!(&f.entry, Entry::Row(_))).expect("an account's row");
     screen(&mut a);
-    a.handle(Event::Mouse(tip_click(&a, ix)));
+    {
+        // #34: a press acts as a click on its release.
+        let m = tip_click(&a, ix);
+        a.handle(Event::Mouse(m));
+        a.handle(Event::Mouse(MouseEvent { kind: MouseEventKind::Up(MouseButton::Left), ..m }));
+    }
     match &a.modal {
         Some(Modal::Help { text, .. }) => assert!(text.contains("A click opens its settings"), "{text}"),
         m => panic!("no help: {m:?}"),

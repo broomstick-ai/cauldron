@@ -288,7 +288,7 @@ shot "2. after the release — the highlight is kept, and the footer says what w
 FOOT="$($S capture-pane -p -t probe | tail -1)"
 printf '(footer: %s)\n' "$FOOT" >> "$OUT"
 case "$FOOT" in
-    *"chars copied"*) ok "the footer names the copy: $FOOT" ;;
+    *"chars sent to the terminal"*) ok "the footer names the copy: $FOOT" ;;
     *) bad "the release said nothing about a copy: $FOOT" ;;
 esac
 

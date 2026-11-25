@@ -524,6 +524,8 @@ fn an_account_is_opportunistic_by_its_pressure_and_its_switch_and_every_flip_is_
         render_to_text(a, 140, 120).unwrap();
         let (r, _) = *a.hits.iter().find(|(_, h)| *h == Hit::Opt { row: row as u16, cell: 1, opt: o }).expect("opportunistic's option on the row");
         a.handle(Event::Mouse(MouseEvent { kind: MouseEventKind::Down(MouseButton::Left), column: r.x + 1, row: r.y, modifiers: KeyModifiers::NONE }));
+        // #34: a press acts as a click on its release, as a terminal always sends.
+        a.handle(Event::Mouse(MouseEvent { kind: MouseEventKind::Up(MouseButton::Left), column: r.x + 1, row: r.y, modifiers: KeyModifiers::NONE }));
     };
     opt(&mut a, 2);
     assert_eq!(a.opportunistic("claude_code", &acct(&a, "sam-broomstick")), Some(false));

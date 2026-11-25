@@ -309,6 +309,20 @@ impl Link {
         method: M,
         params: Value,
     ) -> Result<Value, shapewire::envelope::Refusal> {
+        self.request_within(method, params, REQUEST_TIMEOUT).await
+    }
+
+    /// [`Self::request`] with its own bound, for the few commands the daemon
+    /// itself bounds LONGER than [`REQUEST_TIMEOUT`] (an account login: #30).
+    /// The face must wait past the daemon's bound, or the daemon's own answer
+    /// (its refusal, with what the login script said) never reaches the screen
+    /// and the face's timeout is all anyone sees.
+    pub async fn request_within<M: shapewire::surface::Dialable>(
+        &self,
+        method: M,
+        params: Value,
+        within: std::time::Duration,
+    ) -> Result<Value, shapewire::envelope::Refusal> {
         let (reply, rx) = oneshot::channel();
         self.tx
             .send(Request {
@@ -320,7 +334,7 @@ impl Link {
             .map_err(|_| {
                 shapewire::envelope::Refusal::new(codes::ERROR, "the seam's link task is gone")
             })?;
-        match tokio::time::timeout(REQUEST_TIMEOUT, rx).await {
+        match tokio::time::timeout(within, rx).await {
             Ok(Ok(r)) => r,
             Ok(Err(_)) => Err(shapewire::envelope::Refusal::new(
                 codes::ERROR,
@@ -328,7 +342,7 @@ impl Link {
             )),
             Err(_) => Err(shapewire::envelope::Refusal::new(
                 codes::ERROR,
-                "the daemon did not answer within 30s",
+                format!("the daemon did not answer within {}s", within.as_secs()),
             )),
         }
     }

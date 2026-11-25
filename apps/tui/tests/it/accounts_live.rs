@@ -132,9 +132,9 @@ fn roster_of(n: usize) -> impl Fn(&App) -> bool {
     move |a: &App| matches!(a.roster(), Roster::Known(k) if k.len() == n && a.live.pool().is_some_and(|p| p.loading.is_empty()))
 }
 
-/// The screen line of `key`'s row (its masked name), as words.
+/// The screen line of `key`'s row (its name, the address in full), as words.
 fn row_words(s: &str, key: &str) -> Vec<String> {
-    let m = masked(key);
+    let m = key.to_string();
     s.lines().find(|l| l.contains(&m)).map(|l| l.split_whitespace().map(str::to_string).collect()).unwrap_or_else(|| panic!("no row for {m}:\n{s}"))
 }
 
@@ -221,7 +221,7 @@ fn the_in_pool_switch_says_what_the_pool_board_says() {
 // ── G1: the roster is the daemon's ────────────────────────────────────────
 
 /// **G1**: the fake serves alpha and beta; Config › Accounts lists exactly
-/// those two, masked, and none of the seed's.
+/// those two, by their addresses in full (#35 round 2), and none of the seed's.
 #[test]
 fn g1_accounts_lists_exactly_the_daemons_two_and_none_of_the_seeds() {
     let rt = rt();
@@ -230,14 +230,14 @@ fn g1_accounts_lists_exactly_the_daemons_two_and_none_of_the_seeds() {
     let mut frames = Vec::new();
     pump(&mut a, &mut frames, "two accounts", roster_of(2));
     let rows: Vec<String> = a.accounts(CLAUDE_CODE).into_iter().map(|x| x.label).collect();
-    assert_eq!(rows, vec![masked(ALPHA), masked(BETA)]);
+    assert_eq!(rows, vec![ALPHA.to_string(), BETA.to_string()]);
     let s = screen(&mut a);
-    assert!(s.contains(&masked(ALPHA)) && s.contains(&masked(BETA)), "{s}");
+    assert!(s.contains(ALPHA) && s.contains(BETA), "{s}");
     for n in seed_names(&a) {
         assert!(!s.contains(&n), "the seed's account `{n}` is on Config › Accounts:\n{s}");
     }
     for f in &frames {
-        assert!(!f.contains(ALPHA) && !f.contains(BETA), "an address drawn whole:\n{f}");
+        assert!(!f.contains(&masked(ALPHA)) && !f.contains(&masked(BETA)), "an account's name drawn masked:\n{f}");
     }
 }
 
@@ -398,8 +398,8 @@ fn g3_without_the_daemons_frame_the_row_stays_in_past_the_100ms_debounce_and_a_1
 /// answers ok; `then` frames after `complete` (the daemon adding gamma).
 fn login_conn(publish: bool) -> Conn {
     let mut c = two()
-        .respond("begin", json!({"session_id": "s-1", "account": "gamma", "url": "https://login.example.com/oauth?state=abc", "next": "accounts/login/{session_id}/complete", "expires_in_secs": 600}))
-        .respond("complete", json!({"account": "gamma", "ok": true, "exit_code": 0, "identity": GAMMA, "refused": null, "recheck": null, "reopened": [], "output": format!("signed in as {GAMMA}")}));
+        .respond("begin", json!({"session_id": "s-1", "account": GAMMA, "url": "https://login.example.com/oauth?state=abc", "next": "accounts/login/{session_id}/complete", "expires_in_secs": 600}))
+        .respond("complete", json!({"account": GAMMA, "ok": true, "exit_code": 0, "identity": GAMMA, "refused": null, "recheck": null, "reopened": [], "output": format!("signed in as {GAMMA}")}));
     if publish {
         c = c.then("complete", members(&[ALPHA, BETA, GAMMA])).then("complete", account(GAMMA, false));
     }
@@ -429,11 +429,11 @@ fn g4_g5_a_login_round_trip_lists_the_account_only_from_the_shape_and_never_prin
     let mut a = face(fake.port);
     let mut frames = Vec::new();
     pump(&mut a, &mut frames, "two accounts", roster_of(2));
-    add_account(&mut a, "gamma");
+    add_account(&mut a, GAMMA);
     pump(&mut a, &mut frames, "the login's address", awaiting);
     let s = screen(&mut a);
     assert!(s.contains("https://login.example.com/oauth?state=abc"), "the address to sign in at:\n{s}");
-    assert_eq!(fake.log().iter().find(|r| r.leaf() == "begin").map(|r| r.params["account"].clone()), Some(json!("gamma")));
+    assert_eq!(fake.log().iter().find(|r| r.leaf() == "begin").map(|r| r.params["account"].clone()), Some(json!(GAMMA)));
     // The ack of `begin` added nothing.
     assert_eq!(a.roster_keys().len(), 2, "an account listed before the daemon listed it");
     typed(&mut a, SENTINEL);
@@ -451,8 +451,9 @@ fn g4_g5_a_login_round_trip_lists_the_account_only_from_the_shape_and_never_prin
     assert!(frames.iter().any(|f| f.contains("•••••")), "sentinel: the typed code was drawn, as dots");
     for f in &frames {
         assert!(!f.contains(SENTINEL), "the code was drawn:\n{f}");
-        assert!(!f.contains(GAMMA), "an address drawn whole:\n{f}");
     }
+    // #35: the new account is named by its address, in full.
+    assert!(frames.iter().any(|f| f.contains(GAMMA)), "the account's name is drawn");
     let lines = tap.lines();
     assert!(lines.iter().all(|l| !l.contains(SENTINEL)), "the code is in the flight recorder: {lines:?}");
     assert!(!format!("{:?}", tui::acts::AccountVerb::LoginComplete { session_id: "s".into(), code: SENTINEL.into() }).contains(SENTINEL), "a Debug of the verb prints the code");
@@ -468,7 +469,7 @@ fn g4_a_signed_in_ack_without_the_shape_lists_nothing_past_the_100ms_debounce_an
     let mut a = face(fake.port);
     let mut frames = Vec::new();
     pump(&mut a, &mut frames, "two accounts", roster_of(2));
-    add_account(&mut a, "gamma");
+    add_account(&mut a, GAMMA);
     pump(&mut a, &mut frames, "the login's address", awaiting);
     typed(&mut a, "some-code");
     a.handle(key_enter());
@@ -506,10 +507,13 @@ fn g4_a_refused_begin_is_shown_and_adds_nothing() {
     let mut a = face(fake.port);
     let mut frames = Vec::new();
     pump(&mut a, &mut frames, "two accounts", roster_of(2));
-    add_account(&mut a, "gamma");
+    add_account(&mut a, GAMMA);
     pump(&mut a, &mut frames, "the refusal", |a| matches!(login_stage(a), Some(LoginStage::Done { ok: false, .. })));
     let s = screen(&mut a);
-    assert!(s.contains("refused the login") && s.contains(&masked(GAMMA)) && !s.contains(GAMMA), "{s}");
+    // #35 round 2: the account's own name in the daemon's words is in full.
+    // The title names it, and so does the daemon's refusal (wrapped in the
+    // modal), in full both times.
+    assert!(s.contains("refused the login") && s.contains("no slot for") && s.matches(GAMMA).count() >= 2, "{s}");
     idle(&mut a, &mut frames, OUTLAST);
     assert_eq!(a.roster_keys().len(), 2);
     assert!(sent(&fake, "complete").is_empty() && sent(&fake, "cancel").is_empty());
@@ -529,7 +533,7 @@ fn b1_a_frame_reads_one_pool_while_the_mirror_moves_under_it() {
     let mut a = face(fake.port);
     let mut frames = Vec::new();
     pump(&mut a, &mut frames, "two accounts", roster_of(2));
-    add_account(&mut a, "gamma");
+    add_account(&mut a, GAMMA);
     pump(&mut a, &mut frames, "the login's address", awaiting);
     let rows = a.dash_rows().len();
     typed(&mut a, "some-code");

@@ -71,30 +71,44 @@
 # Run that from the repo root. Then `claude-accounts` works from anywhere.
 set -uo pipefail
 
-# ── INTERPRETER GUARD: this script needs bash ≥ 4.4 ──────────────────────────
-# It uses `${x@Q}` (4.4+) and associative arrays (4.0+). macOS ships bash 3.2 at
-# /bin/bash, and `#!/usr/bin/env bash` finds THAT whenever /bin precedes
-# homebrew on PATH — which it does on this machine. The failure mode without
-# this guard is the worst kind for a credential tool: it parses fine, prints its
-# banner, and dies with "bad substitution" partway INTO a login. So re-exec
-# under a modern bash before a single line of work runs.
-if [ "${BASH_VERSINFO[0]:-0}" -lt 4 ] \
-   || { [ "${BASH_VERSINFO[0]}" -eq 4 ] && [ "${BASH_VERSINFO[1]:-0}" -lt 4 ]; }; then
-  # The candidate is version-checked BEFORE the exec, so the re-exec'd shell
-  # cannot re-enter this branch and there is no loop to guard against. (A
-  # marker env var would be worse than useless here: it would be inherited by
-  # `add-account`, which carries the same guard and re-execs for itself.)
-  for _newer_bash in /opt/homebrew/bin/bash /usr/local/bin/bash /bin/bash; do
-    [ -x "$_newer_bash" ] || continue
-    case "$("$_newer_bash" -c 'echo "${BASH_VERSINFO[0]}.${BASH_VERSINFO[1]}"' 2>/dev/null)" in
-      4.4|4.[5-9]|[5-9].*|[1-9][0-9].*)
-        exec "$_newer_bash" "${BASH_SOURCE[0]}" "$@" ;;
-    esac
-  done
-  echo "claude-accounts: needs bash 4.4 or newer; this is ${BASH_VERSION:-unknown}." >&2
-  echo "  Install one and re-run — nothing else is needed:  brew install bash" >&2
+# ── INTERPRETER: any bash from 3.2 up ────────────────────────────────────────
+# macOS ships bash 3.2.57 at /bin/bash, and the threads daemon runs this with
+# PATH=/usr/bin:/bin:/usr/sbin:/sbin, so `#!/usr/bin/env bash` IS that 3.2. The
+# script is written for it: no `${x@Q}` (see `q` below), no associative arrays
+# (`read_facts` fills plain `F_<key>` variables), no `mapfile`, and every
+# possibly-empty array expanded as `${a[@]+"${a[@]}"}` (an empty `"${a[@]}"` is
+# an unbound-variable error under `set -u` before 4.4). The only floor is 3.2
+# itself; nothing here needs Homebrew's bash.
+if [ "${BASH_VERSINFO[0]:-0}" -lt 3 ] \
+   || { [ "${BASH_VERSINFO[0]}" -eq 3 ] && [ "${BASH_VERSINFO[1]:-0}" -lt 2 ]; }; then
+  echo "claude-accounts: needs bash 3.2 or newer; this is ${BASH_VERSION:-unknown}." >&2
   exit 1
 fi
+
+# q <string>: the string quoted for a message so it is safe to print and to
+# paste back into a shell. Printable ASCII only: single-quoted exactly as
+# bash 4.4's `${x@Q}` prints it ('it'\''s'). Anything else — a control byte,
+# DEL, or any byte at or above 0x80 (an 8-bit C1 control such as 0x9b, CSI,
+# is one) — is written byte by byte as $'...' with octal escapes, whatever
+# the locale, so no such byte can reach the terminal raw (F6: the first
+# version passed high bytes through in the C locale the daemon gives it).
+q() {
+  local LC_ALL=C s="$1" out="" c i v
+  case "$s" in
+    *[![:print:]]*) ;;
+    *) local r="'\''"; s="${s//\'/$r}"; printf "'%s'" "$s"; return 0 ;;
+  esac
+  for ((i = 0; i < ${#s}; i++)); do
+    c="${s:i:1}"
+    case "$c" in
+      \\|\') out="$out\\$c" ;;
+      [[:print:]]) out="$out$c" ;;
+      # bash 3.2 sign-extends a byte >= 0x80 here (negative): back to 0..255.
+      *) v=$(printf '%d' "'$c"); out="$out$(printf '\\%03o' $(( (v + 256) % 256 )))" ;;
+    esac
+  done
+  printf "\$'%s'" "$out"
+}
 
 # ── NOTHING IS FOUND THROUGH THE DIRECTORY THIS WAS STARTED FROM ─────────────
 # This may be started from anywhere, a cloned project included, so nothing it
@@ -224,7 +238,7 @@ assert_safe_env() {
   CLAUDE_SECURESTORAGE_CONFIG_DIR\`) and re-run. Note that an empty value is NOT
   the same as unset, and inherited empty values are the whole hazard here."
     fi
-    die "REFUSING: CLAUDE_SECURESTORAGE_CONFIG_DIR is set (${CLAUDE_SECURESTORAGE_CONFIG_DIR@Q}).
+    die "REFUSING: CLAUDE_SECURESTORAGE_CONFIG_DIR is set ($(q "$CLAUDE_SECURESTORAGE_CONFIG_DIR")).
   It decouples the keychain service name from the config dir, which makes every
   service name this tool derives wrong. Unset it and re-run."
   fi
@@ -510,6 +524,30 @@ if not isinstance(email, str) or "@" not in email:
 out("ok", email.strip())
 PY
 
+# ── THE LABEL RULE (the same one the daemon and `add-account` apply) ─────────
+# An account's label is EITHER a classic name, `^[A-Za-z0-9_-]{1,64}$` (every
+# existing label), OR its email address: one name per account, not a second
+# one to invent beside the address that already identifies it. An address
+# label is all lower case, `^[a-z0-9._%+-]+@[a-z0-9-]+(\.[a-z0-9-]+)+$`, at most
+# 254 characters, its local part neither starts nor ends with `.`, and it has
+# no `..` anywhere. Nothing else is a label: no `/`, no whitespace, no `..`, so
+# `accounts/<label>` is always exactly one directory below `accounts/`.
+is_classic_label() {
+  case "$1" in *[[:cntrl:]]*) return 1 ;; esac   # grep is line-based: no newline may hide
+  printf '%s' "$1" | LC_ALL=C grep -Eq '^[A-Za-z0-9_-]{1,64}$'
+}
+is_address_label() {
+  local l="$1" local_part
+  case "$l" in *[[:cntrl:]]*|*..*) return 1 ;; esac
+  [ "${#l}" -le 254 ] || return 1
+  printf '%s' "$l" | LC_ALL=C grep -Eq '^[a-z0-9._%+-]+@[a-z0-9-]+(\.[a-z0-9-]+)+$' || return 1
+  local_part="${l%%@*}"
+  case "$local_part" in .*|*.) return 1 ;; esac
+  return 0
+}
+valid_label() { is_classic_label "$1" || is_address_label "$1"; }
+LABEL_RULE="use [A-Za-z0-9_-] (max 64 chars), or the account's email address in lower case"
+
 # Normalise an address exactly as `accounts::AccountId::parse` does (G1d): trim;
 # no whitespace; exactly one `@`; a non-empty local part; a domain with an
 # interior `.`; the WHOLE address lower-cased. Plus-addressing and dots are
@@ -643,14 +681,14 @@ login_guard_revert() {  # login_guard_revert <slot dir> <snapshot dir> <reason>
   want_sha="$(snap_meta "$snap" secret_sha8)"
   if [ -n "$(kc_secret_sha8 "$svc")" ]; then
     retire_keychain_item "$svc" "refused login: $reason" 0 "$slot" >&2 || {
-      warn "  ✗ the crossed credential ${svc@Q} could NOT be retired; it is still in the slot."
+      warn "  ✗ the crossed credential $(q "$svc") could NOT be retired; it is still in the slot."
       fail=1; }
   fi
   if [ -n "$parked" ]; then
     if kc_copy "$parked" "$svc" && [ "$(kc_secret_sha8 "$svc")" = "$want_sha" ]; then
       security delete-generic-password -a "${USER:-claude-code-user}" -s "$parked" >/dev/null 2>&1 || true
     else
-      warn "  ✗ the previous credential could not be put back; it is parked at ${parked@Q}."
+      warn "  ✗ the previous credential could not be put back; it is parked at $(q "$parked")."
       fail=1
     fi
   fi
@@ -669,7 +707,7 @@ login_guard_revert() {  # login_guard_revert <slot dir> <snapshot dir> <reason>
 # extends THIS function with its `recheck_flags`; nothing else should be added
 # at the two call sites.
 on_login_verified() {  # on_login_verified <login|set-live-login> <label> <email>
-  say "  ✓ identity verified by the server: ${2@Q} authenticates as $3"
+  say "  ✓ identity verified by the server: $(q "$2") authenticates as $3"
   recheck_flags "$2"
 }
 
@@ -684,7 +722,7 @@ recheck_flags() {  # recheck_flags <label>
   local bin out rc
   bin="$(threads_cli)"
   if [ -z "$bin" ]; then
-    warn "  ! flags on ${1@Q} not re-checked now: no threads binary here; the daemon re-reads the slot on its next credential sample."
+    warn "  ! flags on $(q "$1") not re-checked now: no threads binary here; the daemon re-reads the slot on its next credential sample."
     return 0
   fi
   out="$(THREADS_HOME="$THREADS_DIR" "$bin" accounts recheck "$1" 2>&1)"; rc=$?
@@ -693,10 +731,10 @@ recheck_flags() {  # recheck_flags <label>
   elif [ "$rc" -eq 2 ] && printf '%s' "$out" | head -1 | grep -q '^usage:'; then
     # R12.10 inspect finding 1: a threads binary that predates the verb prints
     # its usage and exits 2. Say what is missing, in a sentence, not "usage:".
-    warn "  ! flags on ${1@Q} were NOT re-checked: the threads binary at $bin has no 'accounts recheck' command (it is older than the flag re-check, R12.10)."
+    warn "  ! flags on $(q "$1") were NOT re-checked: the threads binary at $bin has no 'accounts recheck' command (it is older than the flag re-check, R12.10)."
     warn "    Until a newer threads is installed, a wiped or expired flag lifts on the daemon's next credential sample, and a login bar only when its timer runs out."
   else
-    warn "  ! flags on ${1@Q} not re-checked now (threads accounts recheck rc=$rc): $(printf '%s' "$out" | head -1)"
+    warn "  ! flags on $(q "$1") not re-checked now (threads accounts recheck rc=$rc): $(printf '%s' "$out" | head -1)"
     warn "    the daemon re-reads the slot on its next credential sample."
   fi
   return 0
@@ -753,7 +791,7 @@ refuse_real_login_writes_under_test() {  # <what is about to be written>
   local rh sec
   rh="$(real_home)"
   if [ -z "$rh" ] || same_file "${HOME:-/}" "$rh"; then
-    die "REFUSED under test: HOME is the real home (${HOME@Q}), and $1 would write
+    die "REFUSED under test: HOME is the real home ($(q "$HOME")), and $1 would write
   its .claude.json. Run the test with HOME pointed at a temp dir."
   fi
   sec="$(command -v security 2>/dev/null)"
@@ -765,17 +803,24 @@ refuse_real_login_writes_under_test() {  # <what is about to be written>
   return 0
 }
 
-# An email given where a label is expected names the slot whose login hint is
-# that address, or else the slot an email is filed under (`a.b@c.d` → `a-b-c-d`,
-# the existing folder grammar).
+# An email given where a label is expected names, in this order:
+#   1. the slot whose login hint is that address (whatever its label);
+#   2. the slot folder an address used to be filed under, when one exists
+#      (`a.b@c.d` → `a-b-c-d`, the old derived grammar), so an existing
+#      install keeps its slot;
+#   3. otherwise the address ITSELF: a new account gets one name, its address.
 label_for_email() {  # label_for_email <normalised email>
-  local want="$1" d h
+  local want="$1" d h legacy
   for d in "$ACCOUNTS_DIR"/*/; do
     [ -f "${d}login-hint" ] || continue
     h="$(head -1 "${d}login-hint")"
     [ "$(normalize_email "$h" 2>/dev/null)" = "$want" ] && { basename "${d%/}"; return 0; }
   done
-  printf '%s' "$want" | tr -c 'a-z0-9' '-'
+  legacy="$(printf '%s' "$want" | LC_ALL=C tr -c 'a-z0-9' '-')"
+  if [ -n "$legacy" ] && [ -d "$ACCOUNTS_DIR/$legacy" ]; then
+    printf '%s' "$legacy"; return 0
+  fi
+  printf '%s' "$want"
 }
 
 # Days until a store's LOGIN (not its access token) expires, from that store's
@@ -987,8 +1032,15 @@ all_credential_services() {
 # be read. The caller must treat that as "unknown", never as "no references".
 referencing_labels() {
   local db="$THREADS_DIR/threads.db" toml="$THREADS_DIR/accounts.toml" out d
-  # The registry file: every `[accounts.<label>]` stanza.
-  [ -f "$toml" ] && sed -n 's/^\[accounts\.\([^]]*\)\]$/\1/p' "$toml"
+  # The registry file: every `[accounts.<label>]` stanza. A label that is an
+  # address is a QUOTED key there (`[accounts."a@b.c"]`: the dots would
+  # otherwise nest), so the quotes are stripped — without that, an
+  # address-labelled slot would read as unreferenced and its keychain item
+  # could be retired.
+  [ -f "$toml" ] && sed -n \
+    -e 's/^\[accounts\."\([^"]*\)"\]$/\1/p' \
+    -e "s/^\\[accounts\\.'\\([^']*\\)'\\]\$/\\1/p" \
+    -e 's/^\[accounts\.\([^]"'"'"']*\)\]$/\1/p' "$toml"
   # Live slot directories. A `.claude.json` OR a `manifest.toml` counts —
   # matching the Rust enumerator (`accounts::collect_slot_reports`) exactly.
   #
@@ -1099,14 +1151,14 @@ retire_keychain_item() {
      && [ "$(kc_service "$reverting_slot")" = "$svc" ]; then
     :
   elif why="$(service_is_referenced "$svc")"; then
-    warn "  REFUSED — ${svc@Q} is NOT safe to retire: $why"
+    warn "  REFUSED — $(q "$svc") is NOT safe to retire: $why"
     warn "            nothing was copied and nothing was deleted."
     return 1
   fi
 
   before="$(kc_secret_sha8 "$svc")"
   if [ -z "$before" ]; then
-    warn "  skipped ${svc@Q}: there is no such keychain item."
+    warn "  skipped $(q "$svc"): there is no such keychain item."
     return 1
   fi
 
@@ -1114,8 +1166,8 @@ retire_keychain_item() {
   dormant="$RETIRED_SERVICE_PREFIX.$stamp.$(printf %s "$svc" | shasum -a 256 | cut -c1-8)"
 
   if [ "$dry" = "1" ]; then
-    say "  would retire  ${svc@Q}  (secret $before)"
-    say "             →  ${dormant@Q}"
+    say "  would retire  $(q "$svc")  (secret $before)"
+    say "             →  $(q "$dormant")"
     say "                $reason"
     return 0
   fi
@@ -1131,14 +1183,14 @@ retire_keychain_item() {
 
   after="$(kc_secret_sha8 "$dormant")"
   if [ "$after" != "$before" ]; then
-    warn "  REFUSED — the dormant copy of ${svc@Q} did not verify"
+    warn "  REFUSED — the dormant copy of $(q "$svc") did not verify"
     warn "            (wanted $before, got ${after:-<none>}). NOTHING was deleted."
     return 1
   fi
 
   if ! security delete-generic-password -a "$acct" -s "$svc" >/dev/null 2>&1; then
-    warn "  the copy verified but deleting ${svc@Q} failed. Nothing is lost —"
-    warn "  ${dormant@Q} is now a duplicate of it."
+    warn "  the copy verified but deleting $(q "$svc") failed. Nothing is lost —"
+    warn "  $(q "$dormant") is now a duplicate of it."
     return 1
   fi
 
@@ -1150,8 +1202,8 @@ retire_keychain_item() {
     "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$svc" "$before" "$dormant" "$reason" >> "$ledger"
   chmod 600 "$ledger" 2>/dev/null
 
-  say "  retired  ${svc@Q}  (secret $before)"
-  say "        →  ${dormant@Q}   [dormant: nothing derives or refreshes this]"
+  say "  retired  $(q "$svc")  (secret $before)"
+  say "        →  $(q "$dormant")   [dormant: nothing derives or refreshes this]"
   say "           $reason"
   return 0
 }
@@ -1176,7 +1228,7 @@ reap_orphan_slot_items() {
       # items accumulated behind three accounts without anyone noticing.
       case "$why" in
         "the live slot "*) : ;;
-        *) say "  kept  ${svc@Q}" ; say "        $why" ;;
+        *) say "  kept  $(q "$svc")" ; say "        $why" ;;
       esac
       continue
     fi
@@ -1213,7 +1265,7 @@ prune_live_login_backups() {
   [ "${#restorable[@]}" -gt "$KEEP_LIVE_LOGIN_BACKUPS" ] || return 0
   local -a sorted=()
   while IFS= read -r stamp; do [ -n "$stamp" ] && sorted+=("$stamp"); done \
-    < <(printf '%s\n' "${restorable[@]}" | sort)
+    < <(printf '%s\n' ${restorable[@]+"${restorable[@]}"} | sort)
   retired_dir="$ACCOUNTS_DIR/backups/live-login-retired"
   for (( i = 0; i < ${#sorted[@]} - KEEP_LIVE_LOGIN_BACKUPS; i++ )); do
     stamp="${sorted[$i]}"
@@ -1439,20 +1491,19 @@ cmd_login() {
   case "$label" in
     *@*)
       local by_email; by_email="$(normalize_email "$label")" \
-        || die "not an email address: ${label@Q}"
+        || die "not an email address: $(q "$label")"
       [ -z "$email" ] || [ "$(normalize_email "$email")" = "$by_email" ] \
-        || die "two different addresses: ${label@Q} and --email ${email@Q}"
+        || die "two different addresses: $(q "$label") and --email $(q "$email")"
       email="$by_email"; label="$(label_for_email "$by_email")" ;;
   esac
-  printf '%s' "$label" | grep -Eq '^[A-Za-z0-9_-]{1,64}$' \
-    || die "invalid label ${label@Q}: use [A-Za-z0-9_-], max 64 chars"
+  valid_label "$label" || die "invalid label $(q "$label"): $LABEL_RULE"
 
   [ -n "$email" ] || email="$(read_login_hint "$label")"
 
   # SAY WHICH ACCOUNT, BEFORE ANYTHING OPENS. This is the operator's stated
   # pain point — several browsers, no idea which account is being registered.
   say ""
-  say "  ════ about to sign in the slot ${label@Q} ════"
+  say "  ════ about to sign in the slot $(q "$label") ════"
   if [ -n "$email" ]; then
     say "    as: $email"
     say "        (passed to claude as --email, so the consent page is pre-filled"
@@ -1481,7 +1532,7 @@ cmd_login() {
   # accounts silently either). With neither, the read must still succeed.
   local slot="$ACCOUNTS_DIR/$label" want="" snap=""
   if [ -n "$email" ]; then
-    want="$(normalize_email "$email")" || die "not an email address: ${email@Q}"
+    want="$(normalize_email "$email")" || die "not an email address: $(q "$email")"
   else
     want="$(normalize_email "$(slot_email_from_config "$label")" 2>/dev/null)" || want=""
   fi
@@ -1491,7 +1542,7 @@ cmd_login() {
     mkdir -p "$ACCOUNTS_DIR/backups/pre-login" && chmod 700 "$ACCOUNTS_DIR/backups" \
       "$ACCOUNTS_DIR/backups/pre-login" 2>/dev/null
     login_guard_snapshot "$slot" "$snap" || { rm -rf "$snap"; die \
-      "could not snapshot ${label@Q} before signing in, so a wrong-account login could
+      "could not snapshot $(q "$label") before signing in, so a wrong-account login could
   not be undone. NOTHING was started; the slot is exactly as it was."; }
   fi
 
@@ -1516,7 +1567,7 @@ cmd_login() {
       # did not look. That is unverified, never "nothing happened".
       if [ "$rc" -eq 0 ]; then
         warn ""
-        warn "claude-accounts: REFUSED — add-account reported a login for ${label@Q}, but no new"
+        warn "claude-accounts: REFUSED — add-account reported a login for $(q "$label"), but no new"
         warn "  credential is in the slot that was checked ($slot)."
         warn "  The login landed where it was not checked; it is NOT verified. Nothing here changed."
         return 5
@@ -1525,7 +1576,7 @@ cmd_login() {
       local verdict=0; identity_verdict "$(kc_service "$slot")" "$want" || verdict=$?
       if [ "$verdict" -ne 0 ]; then
         warn ""
-        warn "claude-accounts: REFUSED — the login for ${label@Q} authenticated as another account:"
+        warn "claude-accounts: REFUSED — the login for $(q "$label") authenticated as another account:"
         warn "  wanted ${want:-<any readable identity>}, got $GUARD_GOT"
         if login_guard_revert "$slot" "$snap" "wanted ${want:-?}, got $GUARD_GOT"; then
           warn "  Reverted: the slot's files and keychain item are back to what they were"
@@ -1533,7 +1584,7 @@ cmd_login() {
         else
           warn "  The revert was INCOMPLETE (see above); the snapshot is kept at $snap"
         fi
-        warn "  ${label@Q} is NOT signed in by this run. Sign in again and pick ${want:-the right account}."
+        warn "  $(q "$label") is NOT signed in by this run. Sign in again and pick ${want:-the right account}."
         return "$verdict"
       fi
       login_guard_discard "$snap"
@@ -1617,27 +1668,30 @@ for k, v in out.items():
     print(f"{k}{v}")
 PY
 
-# read_facts <json> <label> — fills the caller's `F` associative array. Every
-# key is pre-seeded so a `set -u` shell can read any of them, and an unparseable
-# inventory fails loudly HERE rather than reading as "no such account" three
-# lines later — which, in a command that changes credentials, would be the worst
-# possible way to be wrong.
+# read_facts <json> <label> — fills the `F_<key>` variables (plain variables,
+# not an associative array: this runs under macOS's bash 3.2). Every key is
+# pre-seeded so a `set -u` shell can read any of them, only the known keys are
+# ever assigned (a line from python can never name another variable), and an
+# unparseable inventory fails loudly HERE rather than reading as "no such
+# account" three lines later — which, in a command that changes credentials,
+# would be the worst possible way to be wrong.
+FACT_KEYS=" target_found target_is_default target_is_live target_state target_mode"
+FACT_KEYS="$FACT_KEYS target_dir target_secret target_acct target_email target_days"
+FACT_KEYS="$FACT_KEYS live_label live_is_named live_acct live_email default_days default_secret "
 read_facts() {
   local json="$1" label="$2" k v
-  for k in target_found target_is_default target_is_live target_state target_mode \
-           target_dir target_secret target_acct target_email target_days \
-           live_label live_is_named live_acct live_email default_days default_secret; do
-    F["$k"]=""
-  done
+  for k in $FACT_KEYS; do printf -v "F_$k" '%s' ""; done
   while IFS=$'\x1f' read -r k v; do
-    [ -n "${k:-}" ] && F["$k"]="${v:-}"
+    [ -n "${k:-}" ] || continue
+    case "$FACT_KEYS" in
+      *" $k "*) printf -v "F_$k" '%s' "${v:-}" ;;
+    esac
   done < <(printf '%s' "$json" | py -c "$FACTS_PY" "$label")
-  [ -n "${F[target_found]}" ] || die "could not read the account inventory
+  [ -n "$F_target_found" ] || die "could not read the account inventory
   (\`threads accounts health --json\` produced nothing usable). Build the crate:
       $(build_hint)"
 }
 
-valid_label() { printf '%s' "$1" | grep -Eq '^[A-Za-z0-9_-]{1,64}$'; }
 
 # ── set-live-login ───────────────────────────────────────────────────────────
 #
@@ -1701,12 +1755,12 @@ cmd_set_live_login() {
   case "$label" in
     *@*)
       local by_email; by_email="$(normalize_email "$label")" \
-        || die "not an email address: ${label@Q}"
+        || die "not an email address: $(q "$label")"
       [ -z "$email" ] || [ "$(normalize_email "$email")" = "$by_email" ] \
-        || die "two different addresses: ${label@Q} and --email ${email@Q}"
+        || die "two different addresses: $(q "$label") and --email $(q "$email")"
       email="$by_email"; label="$(label_for_email "$by_email")" ;;
   esac
-  valid_label "$label" || die "invalid name ${label@Q}: use [A-Za-z0-9_-], max 64 chars"
+  valid_label "$label" || die "invalid name $(q "$label"): $LABEL_RULE"
 
   # ── CLAUDE_CONFIG_DIR: A WARNING, NOT A REFUSAL ────────────────────────────
   #
@@ -1725,7 +1779,7 @@ cmd_set_live_login() {
   # Say it plainly and carry on.
   if [ "${CLAUDE_CONFIG_DIR+set}" = set ]; then
     say ""
-    say "  ! note: CLAUDE_CONFIG_DIR is set in this shell (${CLAUDE_CONFIG_DIR@Q})."
+    say "  ! note: CLAUDE_CONFIG_DIR is set in this shell ($(q "$CLAUDE_CONFIG_DIR"))."
     say "    It is IGNORED. Setting the live login means signing in to the store"
     say "    claude reads when that variable is UNSET, and the login below is run"
     say "    with it explicitly unset — so this shell's value cannot reach it."
@@ -1734,18 +1788,18 @@ cmd_set_live_login() {
 
   local json; json="$(health_json)"
   [ -n "$json" ] || die "could not read the account inventory"
-  local -A F=(); read_facts "$json" "$label"
+  read_facts "$json" "$label"
 
-  [ "${F[target_found]}" = "yes" ] || die "there is no account ${label@Q}.
+  [ "${F_target_found}" = "yes" ] || die "there is no account $(q "$label").
   \`claude-accounts list\` shows the ones you have."
-  [ "${F[target_is_default]}" = "no" ] || die \
-    "${label@Q} IS the machine login — there is nothing to switch it to.
+  [ "${F_target_is_default}" = "no" ] || die \
+    "$(q "$label") IS the machine login — there is nothing to switch it to.
   Give it a name of its own first: claude-accounts login <name>"
 
   # Already there? Compare the ACCOUNT, not the label: two slots can hold one
   # account, and a browser trip that changes nothing is not free.
-  if [ -n "${F[target_acct]}" ] && [ "${F[target_acct]}" = "${F[live_acct]}" ] \
-     && [ "${F[target_email]}" = "${F[live_email]}" ]; then
+  if [ -n "${F_target_acct}" ] && [ "${F_target_acct}" = "${F_live_acct}" ] \
+     && [ "${F_target_email}" = "${F_live_email}" ]; then
     say ""
     say "  Your machine login is already signed in as that account."
     # A STABLE MARKER, read by the board (threads_tui/local.py,
@@ -1753,9 +1807,9 @@ cmd_set_live_login() {
     # dry-run stop line, and the board read that as "never checked anything"
     # and refused. Printed on dry and real runs alike; change it in both places.
     say "  already-live: nothing to sign in, no browser needed."
-    if [ "${F[target_is_live]}" != "yes" ] && [ "$dry" -eq 0 ]; then
+    if [ "${F_target_is_live}" != "yes" ] && [ "$dry" -eq 0 ]; then
       write_live_login_pointer "$label"
-      say "  (noted ${label@Q} as the name for it.)"
+      say "  (noted $(q "$label") as the name for it.)"
     fi
     say ""
     return 0
@@ -1778,26 +1832,26 @@ cmd_set_live_login() {
   # So: refuse only when the identity is unknown — then there is nothing to
   # verify the browser's result against.
   local target_own_ok=1
-  if [ "${F[target_state]}" != "live" ] || [ "${F[target_mode]}" != "own-login" ]; then
+  if [ "${F_target_state}" != "live" ] || [ "${F_target_mode}" != "own-login" ]; then
     target_own_ok=0
-    if [ -z "${F[target_acct]}" ] || [ -z "${F[target_email]}" ]; then
-      die "REFUSING: ${label@Q} has no working login of its own (state ${F[target_state]:-unknown}),
+    if [ -z "${F_target_acct}" ] || [ -z "${F_target_email}" ]; then
+      die "REFUSING: $(q "$label") has no working login of its own (state ${F_target_state:-unknown}),
   and no recorded identity — so there is nothing to check the browser's result
   against. Sign it in first:
       claude-accounts login $label
   and then come back."
     fi
     say ""
-    say "  note: ${label@Q}'s own slot has no working login (state ${F[target_state]:-unknown})."
+    say "  note: $(q "$label")'s own slot has no working login (state ${F_target_state:-unknown})."
     say "    Its identity is recorded, so the machine login can still be signed in"
     say "    as it and checked. The slot's OWN login stays as it is — work placed on"
-    say "    ${label@Q} needs:  claude-accounts login $label"
+    say "    $(q "$label") needs:  claude-accounts login $label"
   fi
 
   # The outgoing side. If the account currently in the machine store has no slot
   # of its own, that store is its ONLY credential, and overwriting it means a
   # browser sign-in to get that account back.
-  if [ "${F[live_is_named]}" != "yes" ] && [ "$force" -eq 0 ]; then
+  if [ "${F_live_is_named}" != "yes" ] && [ "$force" -eq 0 ]; then
     die "REFUSING: your machine login is signed in as an account that has no slot of
   its own, so that store is the only copy of its credential. Overwriting it
   would mean signing that account in again from a browser to get it back.
@@ -1830,8 +1884,8 @@ cmd_set_live_login() {
   say ""
   say "  ════ about to change your MACHINE login ════"
   say ""
-  say "    to      : ${label@Q}${email:+   (as $email)}"
-  say "    from    : ${F[live_label]:-your current machine login}"
+  say "    to      : $(q "$label")${email:+   (as $email)}"
+  say "    from    : ${F_live_label:-your current machine login}"
   say ""
   say "    This is the login plain \`claude\` uses in any terminal, and what"
   say "    anything that does not set CLAUDE_CONFIG_DIR will run as."
@@ -1842,13 +1896,13 @@ cmd_set_live_login() {
   say "    and nothing is revoked."
   say ""
   if [ "$target_own_ok" -eq 1 ]; then
-    say "    ${label@Q} keeps its own separate login (${F[target_days]:-?} days left)."
+    say "    $(q "$label") keeps its own separate login (${F_target_days:-?} days left)."
   else
-    say "    ${label@Q}'s own slot is NOT signed in (state ${F[target_state]:-unknown}) and"
+    say "    $(q "$label")'s own slot is NOT signed in (state ${F_target_state:-unknown}) and"
     say "    this does not change that: claude-accounts login $label"
   fi
-  if [ "${F[live_is_named]}" = "yes" ]; then
-    say "    ${F[live_label]@Q} keeps its own separate login too — it stays usable."
+  if [ "${F_live_is_named}" = "yes" ]; then
+    say "    $(q "$F_live_label") keeps its own separate login too — it stays usable."
   else
     say "    --force: the account now in the machine store has no slot; its"
     say "    credential is being replaced and only the backup below has it."
@@ -1858,7 +1912,7 @@ cmd_set_live_login() {
   say "      $backup_dir/"
   say "      + the machine keychain item, copied to a dormant service name"
   say "    Undo with:  $backup_dir/restore"
-  say "    or simply:  claude-accounts set-live-login ${F[live_label]:-<the old one>}"
+  say "    or simply:  claude-accounts set-live-login ${F_live_label:-<the old one>}"
   say ""
 
   if [ "$dry" -eq 1 ]; then
@@ -1942,7 +1996,7 @@ outgoing identity : ${live_ident_before:-<none>}
 outgoing secret   : ${live_secret_before:-<none>}   (sha8 only)
 backup keychain   : $backup_service
 undo              : ./restore
-better undo       : claude-accounts set-live-login ${F[live_label]:-<the old account>}
+better undo       : claude-accounts set-live-login ${F_live_label:-<the old account>}
 META
   chmod 600 "$backup_dir/what-this-is.txt"
   say "  backed up. $backup_dir/"
@@ -1969,7 +2023,7 @@ META
     browser_cmd="/usr/bin/true"; browser_note="nothing opens; paste the code#state back"
   elif [ -n "$chrome" ]; then
     browser_cmd="$SCRIPT_DIR/claude-login-browser"
-    export CLAUDE_LOGIN_CHROME_PROFILE="$chrome"; browser_note="Chrome profile ${chrome@Q}"
+    export CLAUDE_LOGIN_CHROME_PROFILE="$chrome"; browser_note="Chrome profile $(q "$chrome")"
   else
     browser_cmd="$SCRIPT_DIR/claude-login-browser"
     export CLAUDE_LOGIN_PRIVATE=1
@@ -2004,7 +2058,7 @@ META
   if [ "$rc" -ne 0 ]; then
     say "  claude auth login exited $rc."
     if [ "$after_ident" = "$live_ident_before" ]; then
-      say "  Your machine login is UNCHANGED — still ${F[live_label]:-what it was}."
+      say "  Your machine login is UNCHANGED — still ${F_live_label:-what it was}."
       say "  Re-run when you are ready. Nothing needs undoing."
     else
       say "  BUT the machine identity moved. Undo with:  $backup_dir/restore" >&2
@@ -2020,25 +2074,25 @@ META
   # `restore` is RUN (not pointed at), and this exits non-zero.
   local verdict=0; identity_verdict "$KEYCHAIN_SERVICE_BASE" "$want" || verdict=$?
   if [ "$verdict" -eq 0 ] && [ -z "$want" ] \
-     && [ "$(printf %s "$GUARD_RAW" | shasum -a 256 | cut -c1-8)" != "${F[target_email]}" ]; then
+     && [ "$(printf %s "$GUARD_RAW" | shasum -a 256 | cut -c1-8)" != "${F_target_email}" ]; then
     verdict=3
   fi
-  [ -n "$want" ] || want="<the identity recorded for ${label@Q}>"
+  [ -n "$want" ] || want="<the identity recorded for $(q "$label")>"
   if [ "$verdict" -eq 0 ]; then
     write_live_login_pointer "$label"
-    say "  ✓ your machine login is now ${label@Q}"
+    say "  ✓ your machine login is now $(q "$label")"
     say "    identity  : $after_ident"
-    if [ -n "$after_secret" ] && [ "$after_secret" = "${F[target_secret]}" ]; then
+    if [ -n "$after_secret" ] && [ "$after_secret" = "${F_target_secret}" ]; then
       say ""
-      say "  !! WARNING: the machine store and ${label@Q}'s own store now hold the SAME" >&2
+      say "  !! WARNING: the machine store and $(q "$label")'s own store now hold the SAME" >&2
       say "     secret. That is one session in two places and one of them will die on" >&2
       say "     the next refresh. This should be impossible from a fresh login." >&2
       say "     Do not use both until you have re-signed one of them in." >&2
     else
-      say "    a fresh, independent grant — it shares no token with ${label@Q}'s own slot"
+      say "    a fresh, independent grant — it shares no token with $(q "$label")'s own slot"
     fi
     say ""
-    say "  To switch back:  claude-accounts set-live-login ${F[live_label]:-<the other one>}"
+    say "  To switch back:  claude-accounts set-live-login ${F_live_label:-<the other one>}"
     say "  The pre-switch machine login is backed up at $backup_dir/"
     say ""
     # The last act of a login that passed the identity guard (R12.10's hook).
@@ -2047,7 +2101,7 @@ META
   fi
 
   warn ""
-  warn "claude-accounts: REFUSED — the new machine login is not ${label@Q}:"
+  warn "claude-accounts: REFUSED — the new machine login is not $(q "$label"):"
   warn "  wanted $want, got $GUARD_GOT"
   # MOVED means the IDENTITY moved, not the file. Running claude sessions
   # rewrite ~/.claude.json constantly (settings, caches); a whole-file compare
@@ -2073,7 +2127,7 @@ META
     fi
   fi
   if [ "$reverted" -eq 1 ]; then
-    warn "  Reverted: your machine login is back to ${F[live_label]:-what it was} (from $backup_dir/)."
+    warn "  Reverted: your machine login is back to ${F_live_label:-what it was} (from $backup_dir/)."
   else
     warn "  The revert was INCOMPLETE. The backup is at $backup_dir/."
   fi
@@ -2101,8 +2155,8 @@ cmd_rename() {
   [ -n "$old" ] && [ -n "$new" ] || die "usage: claude-accounts rename <old> <new>"
   shift 2 2>/dev/null || true
   [ $# -eq 0 ] || die "rename takes exactly two names"
-  valid_label "$old" || die "invalid name ${old@Q}: use [A-Za-z0-9_-], max 64 chars"
-  valid_label "$new" || die "invalid name ${new@Q}: use [A-Za-z0-9_-], max 64 chars"
+  valid_label "$old" || die "invalid name $(q "$old"): $LABEL_RULE"
+  valid_label "$new" || die "invalid name $(q "$new"): $LABEL_RULE"
   local bin; bin="$(threads_cli)"
   [ -n "$bin" ] || die "the threads binary is not built. Run:
   $(build_hint)"
@@ -2131,21 +2185,21 @@ cmd_delete() {
     esac
   done
   [ -n "$label" ] || die "which account? e.g. claude-accounts delete work-2"
-  valid_label "$label" || die "invalid name ${label@Q}: use [A-Za-z0-9_-], max 64 chars"
+  valid_label "$label" || die "invalid name $(q "$label"): $LABEL_RULE"
 
   local json; json="$(health_json)"
   [ -n "$json" ] || die "could not read the account inventory"
-  local -A F=(); read_facts "$json" "$label"
-  [ "${F[target_found]}" = "yes" ] || die "there is no account ${label@Q}."
-  [ "${F[target_is_default]}" = "no" ] || die \
-    "${label@Q} is your machine login, not a slot — there is nothing here that can
+  read_facts "$json" "$label"
+  [ "${F_target_found}" = "yes" ] || die "there is no account $(q "$label")."
+  [ "${F_target_is_default}" = "no" ] || die \
+    "$(q "$label") is your machine login, not a slot — there is nothing here that can
   delete it, and nothing that should. Point it somewhere else instead:
       claude-accounts set-live-login <another account>"
 
   # Refuse BEFORE describing the destruction. A refusal that arrives underneath
   # a list of everything about to be destroyed reads like a warning, not a stop.
-  if [ "${F[target_is_live]}" = "yes" ] && [ "$force" -eq 0 ]; then
-    die "REFUSING: ${label@Q} is the account your machine login is signed in as.
+  if [ "${F_target_is_live}" = "yes" ] && [ "$force" -eq 0 ]; then
+    die "REFUSING: $(q "$label") is the account your machine login is signed in as.
   Deleting its slot leaves that account with only the machine store — and no
   config dir for the daemon to spawn it with. Point the machine login at
   another account first:
@@ -2154,7 +2208,7 @@ cmd_delete() {
   fi
 
   say ""
-  say "  ════ about to DELETE the account ${label@Q} ════"
+  say "  ════ about to DELETE the account $(q "$label") ════"
   say ""
   say "    · its slot directory and everything in it"
   say "    · its keychain item (this machine's copy of its login)"
@@ -2163,7 +2217,7 @@ cmd_delete() {
   say "    Nothing is revoked. This account is NOT logged out — you can sign it"
   say "    in again any time with:  claude-accounts login $label"
   say "    Your machine login's own credential is not touched."
-  if [ "${F[target_is_live]}" = "yes" ]; then
+  if [ "${F_target_is_live}" = "yes" ]; then
     say ""
     say "    --force: this is your LIVE account. Your machine login keeps working"
     say "    (its own credential is separate and untouched), but nothing will be"
@@ -2380,7 +2434,11 @@ cmd_rotate() {
   # The trap fires after this function's locals are gone, so it reads the
   # global. Losing the lock dir on a crash is the failure we can afford; a
   # trap that dies on an unbound variable is not.
-  trap 'rmdir "${ROTATE_LOCK:-}" 2>/dev/null || true' EXIT
+  #
+  # The exit status is carried through the trap explicitly: macOS's bash 3.2
+  # otherwise exits 0 from a `set -u` abort when an EXIT trap is set, and a
+  # rotation pass that died must never read as one that succeeded.
+  trap '_ca_rc=$?; rmdir "${ROTATE_LOCK:-}" 2>/dev/null || true; exit "$_ca_rc"' EXIT
 
   local stamp; stamp="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
   local live_secret_before live_mdat_before live_ident_before
@@ -2438,8 +2496,8 @@ PY
       *)
         # An action the Rust side grew that this script does not know. Do
         # nothing — an unrecognised instruction is never a licence to probe.
-        results+=("$label${SEP}unknown${SEP}${days:-?}${SEP}unrecognised rotation action ${action@Q}; did nothing")
-        logline "?      $label — unrecognised action ${action@Q}"
+        results+=("$label${SEP}unknown${SEP}${days:-?}${SEP}unrecognised rotation action $(q "$action"); did nothing")
+        logline "?      $label — unrecognised action $(q "$action")"
         continue ;;
     esac
 
@@ -2544,7 +2602,7 @@ PY
   if [ "${#manual_slots[@]}" -gt 0 ]; then
     say ""
     say "  NEEDS YOU — these cannot be fixed automatically. Sign each one in:"
-    for label in "${manual_slots[@]}"; do
+    for label in ${manual_slots[@]+"${manual_slots[@]}"}; do
       say "      claude-accounts login $label"
     done
   fi
@@ -2633,8 +2691,9 @@ cmd_menu() {
   render_list "$json" --numbered
   say ""
 
-  local -a labels
-  mapfile -t labels < <(list_labels "$json")
+  local -a labels=()
+  local _l
+  while IFS= read -r _l; do labels+=("$_l"); done < <(list_labels "$json")
 
   say "  Pick an account by number to sign it in again,"
   say "  or:  n = add an account          s = set which one is your live login"
@@ -2651,7 +2710,7 @@ cmd_menu() {
     local want="$1" i=1 l
     case "$want" in
       ''|*[!0-9]*)
-        for l in "${labels[@]}"; do [ "$l" = "$want" ] && { printf '%s' "$l"; return 0; }; done
+        for l in ${labels[@]+"${labels[@]}"}; do [ "$l" = "$want" ] && { printf '%s' "$l"; return 0; }; done
         return 1 ;;
       *)
         [ "$want" -ge 1 ] && [ "$want" -le "${#labels[@]}" ] || return 1
@@ -2663,7 +2722,7 @@ cmd_menu() {
     q|Q|"") say ""; return 0 ;;
     r|R) say ""; cmd_rotate; return $? ;;
     n|N)
-      printf '  a name for the new account (letters, digits, - and _): '
+      printf '  a name for the new account (letters, digits, - and _), or its email address: '
       local label; read -r label || return 0
       [ -n "$label" ] || { say "  nothing entered."; return 0; }
       menu_login "$label" ""
@@ -2672,14 +2731,14 @@ cmd_menu() {
       printf '  which account should your machine login be? (name or number): '
       local want; read -r want || return 0
       local label; label="$(pick_label "${want:-}")" \
-        || { say "  there is no account ${want@Q}."; return 1; }
+        || { say "  there is no account $(q "$want")."; return 1; }
       cmd_set_live_login "$label"
       ;;
     m|M)
       printf '  rename which account? (name or number): '
       local want; read -r want || return 0
       local label; label="$(pick_label "${want:-}")" \
-        || { say "  there is no account ${want@Q}."; return 1; }
+        || { say "  there is no account $(q "$want")."; return 1; }
       printf '  its new name: '
       local new; read -r new || return 0
       [ -n "$new" ] || { say "  nothing entered."; return 0; }
@@ -2689,10 +2748,10 @@ cmd_menu() {
       printf '  delete which account? (name or number): '
       local want; read -r want || return 0
       local label; label="$(pick_label "${want:-}")" \
-        || { say "  there is no account ${want@Q}."; return 1; }
+        || { say "  there is no account $(q "$want")."; return 1; }
       cmd_delete "$label"
       ;;
-    ''|*[!0-9]*) say "  I did not understand ${choice@Q}."; return 1 ;;
+    ''|*[!0-9]*) say "  I did not understand $(q "$choice")."; return 1 ;;
     *)
       local idx=$((choice))
       if [ "$idx" -lt 1 ] || [ "$idx" -gt "${#labels[@]}" ]; then
@@ -2702,10 +2761,10 @@ cmd_menu() {
       # An unfolded machine-default row means the live login has no slot of its
       # own. Signing THAT in through here would re-register the operator's live
       # credential, which is the one thing this tool never does.
-      local -A F=(); read_facts "$json" "$label"
-      if [ "${F[target_is_default]}" = "yes" ]; then
+      read_facts "$json" "$label"
+      if [ "${F_target_is_default}" = "yes" ]; then
         say ""
-        say "  ${label@Q} is your machine login itself — the store \`claude\` reads when"
+        say "  $(q "$label") is your machine login itself — the store \`claude\` reads when"
         say "  nothing sets CLAUDE_CONFIG_DIR. This tool never re-registers it."
         say "  To give that account a slot of its own, pick 'n' and name it."
         say "  To point the machine login at a different account, pick 's'."
@@ -2719,14 +2778,16 @@ cmd_menu() {
 
 menu_login() {
   local label="$1" email="$2"
+  # An address typed as the name IS the address to sign in as.
+  [ -n "$email" ] || ! is_address_label "$label" || email="$label"
   say ""
   if [ -n "$email" ]; then
-    say "  slot ${label@Q} signs in as: $email"
+    say "  slot $(q "$label") signs in as: $email"
     printf '  press enter to keep that, or type a different address: '
     local typed; read -r typed || true
     [ -z "$typed" ] || email="$typed"
   else
-    say "  Which Claude account is slot ${label@Q} for?"
+    say "  Which Claude account is slot $(q "$label") for?"
     say "  Typing the email address pre-fills the consent page, so there is no"
     say "  doubt which account you are registering. Leave it blank to choose on"
     say "  the page instead."
@@ -2773,6 +2834,8 @@ cmd_help() {
     claude-accounts list                     your accounts and their login health
     claude-accounts status [--json]          same, machine-readable
     claude-accounts login <name> [options]   sign an account in (creates it if new)
+                                             <name> may be the account's email
+                                             address: then that is its name too
     claude-accounts set-live-login <name>    make it the login plain `claude` uses
     claude-accounts rename <old> <new>       rename an account
     claude-accounts delete <name> [--force]  remove an account from this machine
@@ -2863,7 +2926,7 @@ main() {
     rotate)        shift; cmd_rotate "$@" ;;
     daily-setup)   shift; cmd_daily_setup ;;
     help|-h|--help) cmd_help ;;
-    *) warn "claude-accounts: unknown command ${1@Q}"; cmd_help >&2; exit 2 ;;
+    *) warn "claude-accounts: unknown command $(q "$1")"; cmd_help >&2; exit 2 ;;
   esac
 }
 

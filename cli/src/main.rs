@@ -402,7 +402,7 @@ fn run() -> Result<i32> {
             Ok(0)
         }
         Some("--version") | Some("-V") | Some("-v") => {
-            println!("cauldron {}{}", SELF_COMMIT, dirt_suffix(env!("CAULDRON_SELF_DIRTY")));
+            println!("{}", version_line(env!("CARGO_PKG_VERSION"), SELF_COMMIT, env!("CAULDRON_SELF_DIRTY")));
             Ok(0)
         }
         Some(a) if a.starts_with('-') => tui_face(&argv),
@@ -592,6 +592,18 @@ pub(crate) const SELF_COMMIT: &str = env!("CAULDRON_SELF_COMMIT");
 /// ` (dirty)` for `1`, and ` (dirt unknown)` for ANYTHING else — never the
 /// empty suffix, because an empty suffix reads as clean and the build script
 /// could not establish that (R1.S3b: the dirt flag is fail-closed).
+/// The line `cauldron --version` prints (#32): the release version and the
+/// commit it was built from, `cauldron 0.1.18 (012345678901)`, then the dirt
+/// suffix. The commit is shortened to the 12 characters every build label
+/// (`<commit>-<profile>+<env>`) and `status` use, so the two can be read side
+/// by side. A from-source build between releases carries the version of the
+/// last release its tree names. Machines read `--build-stamp`, which keeps
+/// the full commit.
+pub(crate) fn version_line(version: &str, commit: &str, dirty: &str) -> String {
+    let short = commit.get(..12).unwrap_or(commit);
+    format!("cauldron {version} ({short}){}", dirt_suffix(dirty))
+}
+
 pub(crate) fn dirt_suffix(dirty: &str) -> &'static str {
     match dirty {
         "0" => "",
@@ -5822,6 +5834,9 @@ mod self_stamp_refusal {
 
     #[test]
     fn the_version_suffix_never_renders_unknown_dirt_as_clean() {
+        assert_eq!(version_line("0.1.18", "0123456789012345678901234567890123456789", "0"), "cauldron 0.1.18 (012345678901)");
+        assert_eq!(version_line("0.1.18", "0123456789012345678901234567890123456789", "1"), "cauldron 0.1.18 (012345678901) (dirty)");
+        assert_eq!(version_line("0.1.18", "unknown", "unknown"), "cauldron 0.1.18 (unknown) (dirt unknown)");
         assert_eq!(dirt_suffix("0"), "");
         assert_eq!(dirt_suffix("1"), " (dirty)");
         assert_eq!(dirt_suffix("unknown"), " (dirt unknown)");

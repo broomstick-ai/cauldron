@@ -277,13 +277,54 @@ pub struct Copied {
     pub path: CopyPath,
 }
 
+/// **WHERE A COPY GOES WHEN OSC 52 DOES NOT LAND** (#34): OSC 52
+/// is write-only — the terminal never says whether it took the text — so a
+/// notice can say only what was SENT, and how to copy otherwise. Read from
+/// `TERM_PROGRAM` (`term_program`), which macOS terminals set:
+/// * Terminal.app (`Apple_Terminal`) does not take OSC 52 copies at all; its
+///   own selection is reached by turning mouse reporting off (View > Allow
+///   Mouse Reporting, Cmd-R) or holding Fn while dragging.
+/// * iTerm2 (`iTerm.app`) takes them only when "Applications in terminal may
+///   access clipboard" is on (off by default); its own selection is Option
+///   held while dragging.
+/// * any other: most take OSC 52, and Shift held while dragging reaches the
+///   terminal's own selection (xterm, kitty, WezTerm, Alacritty, Ghostty).
+pub fn copy_fallback(term_program: Option<&str>) -> &'static str {
+    match term_program {
+        Some("Apple_Terminal") => {
+            "Terminal.app does not accept OSC 52, so this did not reach the clipboard: turn off View > Allow Mouse Reporting (Cmd-R) or hold Fn while dragging, then Cmd-C"
+        }
+        Some("iTerm.app") => {
+            "iTerm2 accepts it only with Settings > General > Selection > \"Applications in terminal may access clipboard\" on; else hold Option while dragging, then Cmd-C"
+        }
+        _ => "if it does not paste, hold Shift while dragging to use the terminal's own selection",
+    }
+}
+
+/// [`copy_fallback`] for this process's terminal.
+pub fn copy_fallback_here() -> &'static str {
+    copy_fallback(std::env::var("TERM_PROGRAM").ok().as_deref())
+}
+
 impl Copied {
+    /// What was done, never what was hoped: OSC 52 has no acknowledgement.
     pub fn notice(&self) -> String {
+        self.notice_for(std::env::var("TERM_PROGRAM").ok().as_deref())
+    }
+
+    /// [`Self::notice`] for a given `TERM_PROGRAM`.
+    pub fn notice_for(&self, term_program: Option<&str>) -> String {
         match self.path {
-            CopyPath::Direct => format!("{} chars copied (OSC 52)", self.chars),
-            CopyPath::Passthrough => {
-                format!("{} chars copied (OSC 52 via tmux passthrough)", self.chars)
-            }
+            CopyPath::Direct => format!(
+                "{} chars sent to the terminal's clipboard (OSC 52); {}",
+                self.chars,
+                copy_fallback(term_program)
+            ),
+            CopyPath::Passthrough => format!(
+                "{} chars sent to the terminal's clipboard (OSC 52 via tmux passthrough); {}",
+                self.chars,
+                copy_fallback(term_program)
+            ),
             CopyPath::RawInTmux => format!(
                 "{} chars sent RAW — tmux allow-passthrough is off; the copy probably did not land.",
                 self.chars
@@ -436,5 +477,26 @@ mod tests {
         let b = clipboard_bytes("x", true);
         assert!(b.starts_with("\x1bPtmux;\x1b\x1b]52;c;"));
         assert!(b.ends_with("\x1b\\"));
+    }
+}
+
+#[cfg(test)]
+mod copy_notice_tests {
+    use super::*;
+
+    /// #34: the notice says it was SENT, never that it landed,
+    /// and how to copy otherwise in the terminal it runs in.
+    #[test]
+    fn the_notice_says_sent_and_how_to_copy_otherwise() {
+        let c = Copied { chars: 12, path: CopyPath::Direct };
+        for tp in [None, Some("Apple_Terminal"), Some("iTerm.app"), Some("WezTerm")] {
+            let n = c.notice_for(tp);
+            assert!(n.starts_with("12 chars sent to the terminal's clipboard (OSC 52)"), "{n}");
+            assert!(!n.contains("copied"), "never claims it landed: {n}");
+        }
+        assert!(c.notice_for(Some("Apple_Terminal")).contains("does not accept OSC 52"));
+        assert!(c.notice_for(Some("Apple_Terminal")).contains("hold Fn"));
+        assert!(c.notice_for(Some("iTerm.app")).contains("hold Option"));
+        assert!(c.notice_for(Some("WezTerm")).contains("hold Shift"));
     }
 }

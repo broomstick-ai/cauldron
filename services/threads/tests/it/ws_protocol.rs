@@ -1320,6 +1320,8 @@ async fn the_cli_share_write_refuses_when_the_daemon_is_down() {
 
     let out = std::process::Command::new(env!("CARGO_BIN_EXE_threads"))
         .env_remove("THREADS_CHASSIS_PORT")
+            // F9: nor the hosting daemon's health address (its [::1]:3653).
+            .env_remove("THREADS_HEALTH_ADDR")
         .args([
             "--config",
             cfg.to_str().unwrap(),

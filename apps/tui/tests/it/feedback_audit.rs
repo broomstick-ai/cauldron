@@ -80,6 +80,8 @@ fn click_on(a: &mut App, hit: Hit) {
     render_to_text(a, 140, 60).unwrap();
     let (r, _) = *a.hits.iter().find(|(_, h)| *h == hit).unwrap_or_else(|| panic!("{hit:?} not on screen"));
     a.handle(Event::Mouse(MouseEvent { kind: MouseEventKind::Down(MouseButton::Left), column: r.x, row: r.y, modifiers: KeyModifiers::NONE }));
+    // #34: a press acts as a click on its release, as a terminal always sends.
+    a.handle(Event::Mouse(MouseEvent { kind: MouseEventKind::Up(MouseButton::Left), column: r.x, row: r.y, modifiers: KeyModifiers::NONE }));
 }
 
 fn cauldron_settings(a: &mut App, path: &str) {
@@ -397,6 +399,8 @@ fn the_new_cluster_fields_have_a_caret_and_nothing_typed_is_thrown_away() {
     a.open_new_cluster(None);
     typed(&mut a, "Beta");
     a.handle(Event::Mouse(MouseEvent { kind: MouseEventKind::Down(MouseButton::Left), column: 0, row: 0, modifiers: KeyModifiers::NONE }));
+    // #34: a press acts as a click on its release, as a terminal always sends.
+    a.handle(Event::Mouse(MouseEvent { kind: MouseEventKind::Up(MouseButton::Left), column: 0, row: 0, modifiers: KeyModifiers::NONE }));
     assert!(a.modal.is_none());
     a.open_new_cluster(None);
     assert_eq!(modal_fields(&a).0, "Beta");

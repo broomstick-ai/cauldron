@@ -38,8 +38,8 @@ impl Action {
 
     /// What the confirm line asks.
     pub fn question(&self) -> String {
-        // Drawn: the account's shown name, never a raw email (V1-CLEAN1).
-        self.question_as(&super::model::shown_name(self.label()))
+        // Drawn: the account's name, in full (#35).
+        self.question_as(self.label())
     }
 
     /// [`Action::question`] naming the account as `shown` — the caller's

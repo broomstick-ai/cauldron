@@ -128,6 +128,8 @@ async fn dump_draws_the_fixture_pool() {
 /// made-up `example.com` one.
 #[tokio::test(flavor = "multi_thread")]
 async fn a_refusal_quoting_the_key_comes_back_masked_through_perform() {
+    // #35: the account's own key is its name and is kept in
+    // full in the note; the masker is for OTHER addresses in prose.
     const ADDR: &str = "quill@example.com";
     let fx = pool_fixture::serve().await;
     let (tx, _rx) = mpsc::channel(256);
@@ -138,8 +140,8 @@ async fn a_refusal_quoting_the_key_comes_back_masked_through_perform() {
     let sent: Vec<String> = fx.requests.lock().unwrap().iter().map(|(m, _)| m.clone()).collect();
     assert!(sent.contains(&format!("accounts/{ADDR}/pool_share_set")), "sentinel: the raw key went to the daemon: {sent:?}");
     assert!(note.contains("refused") && note.contains("pool_share_set"), "sentinel: the note is the daemon's refusal: {note}");
-    assert!(!note.contains(ADDR) && !note.contains("quill"), "the key is drawn whole: {note}");
-    assert!(note.contains(&tui::pool::model::shown_name(ADDR)), "the key is drawn by the one masker: {note}");
+    assert!(note.contains(&format!("accounts/{ADDR}/pool_share_set")), "the key is drawn whole, as the account's name: {note}");
+    assert!(!note.contains(&tui::pool::model::shown_name(ADDR)), "and not masked: {note}");
 }
 
 /// Whether the `claude-accounts` helper may run at all, whatever named it:

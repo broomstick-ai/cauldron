@@ -235,6 +235,8 @@ fn a_row_says_its_default_and_reverts_only_while_it_differs() {
     render_to_text(&mut a, 120, 80).unwrap();
     let (r, _) = *a.hits.iter().find(|(_, h)| *h == Hit::Revert(i as u16)).expect("the ↺ is a click target");
     a.handle(Event::Mouse(MouseEvent { kind: MouseEventKind::Down(MouseButton::Left), column: r.x, row: r.y, modifiers: KeyModifiers::NONE }));
+    // #34: a press acts as a click on its release, as a terminal always sends.
+    a.handle(Event::Mouse(MouseEvent { kind: MouseEventKind::Up(MouseButton::Left), column: r.x, row: r.y, modifiers: KeyModifiers::NONE }));
     assert_row(&mut a, "threads cap", "threads cap 10 GB default 10 GB");
     assert!(!row(&mut a, "threads cap").contains('↺'));
     // A setting that inherits says what inheriting gives.
@@ -256,6 +258,8 @@ fn a_click_on_an_option_picks_it() {
         render_to_text(a, 120, 80).unwrap();
         let (r, _) = *a.hits.iter().find(|(_, h)| *h == Hit::Opt { row: i as u16, cell: 0, opt: o }).expect("the option is a click target");
         a.handle(Event::Mouse(MouseEvent { kind: MouseEventKind::Down(MouseButton::Left), column: r.x + 1, row: r.y, modifiers: KeyModifiers::NONE }));
+        // #34: a press acts as a click on its release, as a terminal always sends.
+        a.handle(Event::Mouse(MouseEvent { kind: MouseEventKind::Up(MouseButton::Left), column: r.x + 1, row: r.y, modifiers: KeyModifiers::NONE }));
     };
     opt(&mut a, 2);
     assert!(global_file(&root, "settings.toml").contains("[pools.claude_code.opportunistic]\nenabled = false"), "{}", global_file(&root, "settings.toml"));
@@ -321,13 +325,24 @@ fn a_source_is_its_accounts_table_its_settings_flat_and_its_models() {
     down_to(&mut a, "+ add account");
     a.handle(key(KeyCode::Enter));
     assert!(matches!(a.modal, Some(Modal::AddAccount { .. })), "{:?}", a.modal);
-    assert!(screen(&mut a).contains("Add an account to Claude Code"));
+    // #35: it asks for the account's email address, its one name.
+    assert!(screen(&mut a).contains("Add an account: its email address"), "{}", screen(&mut a));
     typed(&mut a, "cc9");
+    a.handle(key(KeyCode::Enter));
+    // A name that is not an address is refused in the modal; nothing is sent.
+    assert!(matches!(&a.modal, Some(Modal::AddAccount { error: Some(_), .. })), "{:?}", a.modal);
+    assert!(screen(&mut a).contains("type the account's email address"), "{}", screen(&mut a));
+    for _ in 0..3 {
+        a.handle(key(KeyCode::Backspace));
+    }
+    // An address is accepted (case does not matter) and the login is begun
+    // under it, lowercased.
+    typed(&mut a, "CC9@Example.com");
     a.handle(key(KeyCode::Enter));
     assert!(matches!(&a.modal, Some(Modal::Login { stage: tui::cauldron::accounts::LoginStage::Done { ok: false, .. }, .. })), "{:?}", a.modal);
     assert!(screen(&mut a).contains("not started"), "{}", screen(&mut a));
     a.handle(key(KeyCode::Esc));
-    assert!(!a.accounts("claude_code").iter().any(|x| x.id == "cc9"), "an account listed that the daemon never listed");
+    assert!(!a.accounts("claude_code").iter().any(|x| x.label == "cc9@example.com"), "an account listed that the daemon never listed");
     assert!(!global_file(&root, "accounts.json").contains("cc9"), "a login writes no local account");
 
     // Change the source's value again: every account follows.
@@ -387,6 +402,8 @@ fn a_row_opens_its_modal_at_one_click_and_its_settings_work_there() {
     render_to_text(&mut a, 120, 80).unwrap();
     let (r, _) = *a.hits.iter().find(|(_, h)| *h == Hit::Row(i)).expect("acct2's row on screen");
     a.handle(Event::Mouse(MouseEvent { kind: MouseEventKind::Down(MouseButton::Left), column: r.x + 2, row: r.y, modifiers: KeyModifiers::NONE }));
+    // #34: a press acts as a click on its release, as a terminal always sends.
+    a.handle(Event::Mouse(MouseEvent { kind: MouseEventKind::Up(MouseButton::Left), column: r.x + 2, row: r.y, modifiers: KeyModifiers::NONE }));
     assert!(matches!(&a.modal, Some(Modal::Settings { page, .. }) if *page == acct("acct2")), "{:?}", a.modal);
     let s = screen(&mut a);
     assert!(s.contains("┏ Claude Code · acct2 "), "{s}");
@@ -430,6 +447,8 @@ fn a_row_opens_its_modal_at_one_click_and_its_settings_work_there() {
     render_to_text(&mut a, 120, 80).unwrap();
     let (r, _) = *a.hits.iter().find(|(_, h)| *h == Hit::MOpt { row: 0, cell: 0, opt: 2 }).expect("account enabled's `off`");
     a.handle(Event::Mouse(MouseEvent { kind: MouseEventKind::Down(MouseButton::Left), column: r.x + 1, row: r.y, modifiers: KeyModifiers::NONE }));
+    // #34: a press acts as a click on its release, as a terminal always sends.
+    a.handle(Event::Mouse(MouseEvent { kind: MouseEventKind::Up(MouseButton::Left), column: r.x + 1, row: r.y, modifiers: KeyModifiers::NONE }));
     // A save edits the file as it is (0220 E3), so a new key goes after the
     // table's others.
     let g = global_file(&root, "settings.toml");
@@ -459,6 +478,8 @@ fn a_rows_switch_works_on_the_row() {
     for (cell, opt) in [(0u8, 2u8), (1, 2)] {
         let (r, _) = *a.hits.iter().find(|(_, h)| *h == Hit::Opt { row: i as u16, cell, opt }).expect("a switch's option on the row");
         a.handle(Event::Mouse(MouseEvent { kind: MouseEventKind::Down(MouseButton::Left), column: r.x + 1, row: r.y, modifiers: KeyModifiers::NONE }));
+        // #34: a press acts as a click on its release, as a terminal always sends.
+        a.handle(Event::Mouse(MouseEvent { kind: MouseEventKind::Up(MouseButton::Left), column: r.x + 1, row: r.y, modifiers: KeyModifiers::NONE }));
         render_to_text(&mut a, 120, 80).unwrap();
     }
     assert!(a.modal.is_none(), "a switch on a row is not the row: {:?}", a.modal);
@@ -696,6 +717,8 @@ fn settings_bands_navigate_by_the_one_philosophy() {
     let (r, _) = *a.hits.iter().find(|(_, h)| *h == Hit::Row(i)).expect("Codex's row on screen");
     let click = |a: &mut App| {
         a.handle(Event::Mouse(MouseEvent { kind: MouseEventKind::Down(MouseButton::Left), column: r.x + 3, row: r.y, modifiers: KeyModifiers::NONE }));
+        // #34: a press acts as a click on its release, as a terminal always sends.
+        a.handle(Event::Mouse(MouseEvent { kind: MouseEventKind::Up(MouseButton::Left), column: r.x + 3, row: r.y, modifiers: KeyModifiers::NONE }));
     };
     click(&mut a);
     assert_eq!(a.rows[SETTINGS_ROW], i);
@@ -1143,6 +1166,8 @@ fn c9_an_endpoints_row_switches_and_its_modal_holds_every_row() {
     let Some(Modal::Settings { sel, .. }) = a.modal.clone() else { unreachable!() };
     let r = a.hits.iter().find(|(_, h)| *h == Hit::MOpt { row: sel as u16, cell: 0, opt: 1 }).map(|(r, _)| *r).expect("the strip's `weekly` hotspot");
     a.handle(Event::Mouse(MouseEvent { kind: MouseEventKind::Down(MouseButton::Left), column: r.x, row: r.y, modifiers: KeyModifiers::NONE }));
+    // #34: a press acts as a click on its release, as a terminal always sends.
+    a.handle(Event::Mouse(MouseEvent { kind: MouseEventKind::Up(MouseButton::Left), column: r.x, row: r.y, modifiers: KeyModifiers::NONE }));
     assert_eq!(a.sget(&ep(false, "ep-1", "budget_period")).val, Val::Str("monthly".into()), "not picked");
     assert!(a.ep_dollars(false, "ep-1", &Val::Int(100)).ends_with("/ month"));
     assert_eq!(global_text(&a), g0, "a greyed endpoint's modal writes nothing");
@@ -1222,6 +1247,8 @@ fn c9_an_endpoints_row_switches_and_its_modal_holds_every_row_ungreyed() {
     let Some(Modal::Settings { sel, .. }) = a.modal.clone() else { unreachable!() };
     let r = a.hits.iter().find(|(_, h)| *h == Hit::MOpt { row: sel as u16, cell: 0, opt: 1 }).map(|(r, _)| *r).expect("the strip's `weekly` hotspot");
     a.handle(Event::Mouse(MouseEvent { kind: MouseEventKind::Down(MouseButton::Left), column: r.x, row: r.y, modifiers: KeyModifiers::NONE }));
+    // #34: a press acts as a click on its release, as a terminal always sends.
+    a.handle(Event::Mouse(MouseEvent { kind: MouseEventKind::Up(MouseButton::Left), column: r.x, row: r.y, modifiers: KeyModifiers::NONE }));
     assert_eq!(a.sget(&ep(false, "ep-1", "budget_period")).val, Val::Str("weekly".into()));
     assert!(a.ep_dollars(false, "ep-1", &Val::Int(100)).ends_with("/ week"));
 }

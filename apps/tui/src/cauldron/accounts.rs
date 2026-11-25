@@ -82,7 +82,7 @@ pub enum LoginStage {
 /// carries the code.
 pub fn stage_lines(stage: &LoginStage) -> Vec<(String, bool)> {
     match stage {
-        LoginStage::Starting => vec![("asking the threads daemon to start the login…".into(), false)],
+        LoginStage::Starting => vec![("asking the threads daemon to start the login (its login script can take up to a minute to print the address)…".into(), false)],
         LoginStage::AwaitCode { url, .. } => vec![
             ("1. open this address and sign in:".into(), false),
             (url.clone(), false),
@@ -244,17 +244,26 @@ impl App {
     /// the daemon and the modal waits for its URL.
     pub fn start_login(&mut self, account: &str) {
         let account = account.trim().to_string();
-        if account.is_empty() {
-            if let Some(Modal::AddAccount { error, .. }) = &mut self.modal {
-                *error = Some("type the account's name".into());
+        // #35: an address is case-insensitive and names ONE slot.
+        let account = if account.contains('@') { account.to_lowercase() } else { account };
+        if let Some(Modal::AddAccount { error, .. }) = &mut self.modal {
+            // A NEW account is named by its email address, the one name it
+            // has (the daemon accepts the same rule; an existing account's
+            // older name still logs in through its own row).
+            if !is_address_label(&account) {
+                *error = Some(if account.is_empty() {
+                    "type the account's email address".into()
+                } else {
+                    "type the account's email address: it is the account's name (no separate label)".into()
+                });
+                return;
             }
-            return;
         }
         let tag = LOGIN_TAG.fetch_add(1, Ordering::SeqCst);
         let title = format!("Log in {}", self.shown_key(&account));
-        match self.live.account(AccountVerb::LoginBegin { account }, tag) {
+        match self.live.account(AccountVerb::LoginBegin { account: account.clone() }, tag) {
             Ok(()) => self.modal = Some(Modal::Login { title, stage: LoginStage::Starting, code: LoginCode::default(), tag }),
-            Err(why) => self.modal = Some(Modal::Login { title, stage: LoginStage::Done { ok: false, said: format!("not started: {}", masked_text(&why)) }, code: LoginCode::default(), tag }),
+            Err(why) => self.modal = Some(Modal::Login { title, stage: LoginStage::Done { ok: false, said: format!("not started: {}", crate::pool::model::masked_in(&why, &account)) }, code: LoginCode::default(), tag }),
         }
     }
 
@@ -338,7 +347,11 @@ impl App {
             }
             return;
         }
-        let Some(Modal::Login { stage, .. }) = &mut self.modal else { return };
+        let Some(Modal::Login { stage, title, .. }) = &mut self.modal else { return };
+        // The account's own name, kept in full in the daemon's words (#35
+        // round 2): only ANOTHER address in them is masked.
+        let own = title.strip_prefix("Log in ").unwrap_or("").to_string();
+        let masked_text = |t: &str| crate::pool::model::masked_in(t, &own);
         *stage = match (r.verb, r.result) {
             ("begin", Ok(p)) => match (p.get("session_id").and_then(Value::as_str), p.get("url").and_then(Value::as_str)) {
                 (Some(s), Some(u)) => LoginStage::AwaitCode { session_id: s.to_string(), url: u.to_string() },
@@ -349,11 +362,44 @@ impl App {
                 LoginStage::Done { ok: true, said: "signed in. The account is listed here when the threads daemon lists it.".into() }
             }
             ("complete", Ok(p)) => {
-                let why = p.get("refused").and_then(Value::as_str).map(masked_text).unwrap_or_else(|| "the login script refused, or the exchange failed".into());
+                let why = p.get("refused").and_then(Value::as_str).map(|t| masked_text(t)).unwrap_or_else(|| "the login script refused, or the exchange failed".into());
                 LoginStage::Done { ok: false, said: format!("not signed in: {why}") }
             }
             ("complete", Err(why)) => LoginStage::Done { ok: false, said: format!("not signed in: {}", masked_text(&why)) },
             (_, _) => return,
         };
+    }
+}
+
+/// **An account name that is an email address** (#35), by the rule the
+/// threads daemon and the helper scripts share (`accounts::is_address_label`):
+/// lowercase `local@domain.tld`, `[a-z0-9._%+-]` before the `@`, `[a-z0-9-]`
+/// labels after it, at most 254 characters, no `..`, the local part neither
+/// starting nor ending with `.`.
+pub fn is_address_label(name: &str) -> bool {
+    if name.is_empty() || name.len() > 254 || name.contains("..") {
+        return false;
+    }
+    let Some((local, domain)) = name.split_once('@') else { return false };
+    let local_ok = !local.is_empty()
+        && !local.starts_with('.')
+        && !local.ends_with('.')
+        && local.bytes().all(|b| matches!(b, b'a'..=b'z' | b'0'..=b'9' | b'.' | b'_' | b'%' | b'+' | b'-'));
+    let labels: Vec<&str> = domain.split('.').collect();
+    local_ok && labels.len() >= 2 && labels.iter().all(|l| !l.is_empty() && l.bytes().all(|b| matches!(b, b'a'..=b'z' | b'0'..=b'9' | b'-')))
+}
+
+#[cfg(test)]
+mod address_label_tests {
+    use super::is_address_label;
+
+    #[test]
+    fn the_same_rule_as_the_daemon() {
+        for good in ["ann@example.com", "a.b+tag@mail.example.co", "x_y-z%1@a-b.example"] {
+            assert!(is_address_label(good), "{good}");
+        }
+        for bad in ["", "work", "Ann@example.com", "ann@example", "@example.com", ".ann@example.com", "ann.@example.com", "a..b@example.com", "ann@exa_mple.com", "a@b@example.com", "ann@example.com/x"] {
+            assert!(!is_address_label(bad), "{bad}");
+        }
     }
 }

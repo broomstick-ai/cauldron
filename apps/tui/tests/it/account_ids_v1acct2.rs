@@ -148,7 +148,9 @@ fn n2_an_old_slug_two_accounts_shared_goes_to_both_in_either_roster_order() {
         assert_eq!(s.live_login(), Some(format!("claude_code/{}", account_id(DASH))), "{order:?}: the pointer goes to the first label in byte order");
         let notes = s.adoption_notes.join("; ");
         assert!(notes.contains("2 accounts"), "{order:?}: the shared id is said: {notes:?}");
-        assert!(!notes.contains(DOT) && !notes.contains(DASH) && !notes.contains("c.l") && !notes.contains("c-l@"), "{order:?}: a note names an address: {notes}");
+        // #35: a note about his own accounts names them as the
+        // face does, by their addresses in full.
+        assert!(notes.contains(DOT) && notes.contains(DASH), "{order:?}: the note names both accounts: {notes}");
         let g = read(&global.join("settings.toml"));
         assert!(!g.contains(&old), "{order:?}: the shared old id is left:\n{g}");
         results.push((per, s.live_login()));
@@ -226,7 +228,7 @@ fn n3_a_face_that_may_not_write_creates_no_key() {
     assert!(!global.join(install_key::FILE).exists(), "a read-only face wrote the install key");
 }
 
-// ── N4: the log filter caps the wire ──────────────────────────────────────
+// ── the log filter caps the wire ──────────────────────────────────────
 
 #[derive(Clone, Default)]
 struct Buf(Arc<Mutex<Vec<u8>>>);

@@ -79,6 +79,9 @@ pub const RUNS_A_CRATE_BINARY_AS_A_SUBPROCESS: &[&str] = &[
     "drain_pin.rs",
     "health_liveness.rs",
     "health_off_runtime.rs",
+    // `threads --keychain-guard` (read-only): proves a spawned daemon runs no
+    // real `security` (round 2).
+    "keychain_tripwire.rs",
     "lifecycle_announcement.rs",
     "migrate_behind_port.rs",
     "preflight_first_exec.rs",

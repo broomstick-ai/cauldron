@@ -54,6 +54,7 @@ mod rows_registry_and_rename;
 mod seam_conformance;
 mod seam_reference;
 mod seed_live;
+mod select_copy_34;
 mod settings;
 mod structure_186;
 mod threads_186;

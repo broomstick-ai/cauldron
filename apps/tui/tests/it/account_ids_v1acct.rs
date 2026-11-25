@@ -71,9 +71,9 @@ fn read(path: &Path) -> String {
 
 // ── A1: one masker ────────────────────────────────────────────────────────
 
-/// **A1**: the one masker masks once (a drawn name passed again is itself),
-/// prose goes through it, and twins — and only twins — carry a tag taken
-/// from their id's digest and nothing more of the address.
+/// **A1, as of #35**: the masker masks once and still makes
+/// the id (which carries a digest, never the address) and masks prose; an
+/// account's NAME is drawn in full, so twins are told apart by themselves.
 #[test]
 fn a1_one_masker_once_and_twins_told_apart_by_their_ids_digest() {
     assert_eq!(shown_name(CAROL), "c•••@e•••");
@@ -83,15 +83,15 @@ fn a1_one_masker_once_and_twins_told_apart_by_their_ids_digest() {
     }
     let keys = [CAROL, CORA, DANA];
     let (a, b, d) = (shown_among(CAROL, keys), shown_among(CORA, keys), shown_among(DANA, keys));
-    assert_ne!(a, b, "twins drawn the same: {a}");
-    assert_eq!(a, format!("c•••@e••• ·{}", &digest_hex(CAROL)[..3]), "the tag is the head of the id's digest");
-    assert!(account_id(CAROL).ends_with(&digest_hex(CAROL)), "sentinel: the id carries the same digest: {}", account_id(CAROL));
-    assert_eq!(d, shown_name(DANA), "a name with no twin carries no tag");
-    assert_eq!(shown_among(CAROL, [CAROL, DANA]), shown_name(CAROL), "no twin on THIS roster, no tag");
+    // N3: the name is the address, in full; twins differ by themselves.
+    assert_eq!((a.as_str(), b.as_str(), d.as_str()), (CAROL, CORA, DANA), "an account's name is its key, in full");
     assert_eq!(shown_among("work-slot", ["work-slot", "work-slot2"]), "work-slot", "a name that is not an address is drawn as it is");
-    for s in [&a, &b, &d] {
+    // The id still carries a digest and none of the address.
+    assert!(account_id(CAROL).ends_with(&digest_hex(CAROL)), "the id carries the digest: {}", account_id(CAROL));
+    assert_ne!(account_id(CAROL), account_id(CORA), "twins have two ids");
+    for k in [CAROL, CORA, DANA] {
         for part in ["carol", "cora", "dana", "example"] {
-            assert!(!s.contains(part), "{s} carries `{part}`");
+            assert!(!account_id(k).contains(part), "{} carries `{part}`", account_id(k));
         }
     }
     let said = masked_text("refused: accounts/carol@example.com/disable (cora@example.com).");
@@ -304,23 +304,20 @@ fn a3_enabled_false_under_the_old_slug_id_applies_after_the_roster_lands() {
     let g = read(&gpath);
     assert!(g.contains(&account_id(CAROL)) && !g.contains(&old_slug(CAROL)), "the file is rewritten with the digest id:\n{g}");
 
-    // Twins on screen: masked, and told apart — on Tokens and on Config.
+    // Twins on screen: each by its address, in full — on Tokens and on Config.
     let (tc, to) = (shown_among(CAROL, [CAROL, CORA]), shown_among(CORA, [CAROL, CORA]));
     assert!(s.contains(&tc) && s.contains(&to), "both twins, told apart, on Tokens:\n{s}");
     a.set_ctab(CTab::Accounts);
     a.snav.set_open(tui::cauldron::menu::SPage::Pool(CLAUDE_CODE.into()), true);
     let rows: Vec<String> = a.accounts(CLAUDE_CODE).into_iter().map(|x| x.label).collect();
     assert_eq!(rows, vec![tc.clone(), to.clone()], "Config › Accounts rows");
-    assert_eq!(a.account_name(CLAUDE_CODE, &account_id(CORA)), to, "a page title is masked once and keeps its tag");
+    assert_eq!(a.account_name(CLAUDE_CODE, &account_id(CORA)), to, "a page title is the address");
+    assert_eq!((tc.as_str(), to.as_str()), (CAROL, CORA), "both drawn in full");
     a.start_act(tui::cauldron::manage::Act::InPool { key: CORA.into(), on: false });
     let Some(Modal::Confirm { title, body, .. }) = a.modal.clone() else { panic!("no confirm: {:?}", a.modal) };
     assert!(title.contains(&to) && body[0].contains(&to), "the in-pool confirm names which twin: {title} / {body:?}");
     frames.push(screen(&mut a));
-    for f in &frames {
-        for addr in [CAROL, CORA] {
-            assert!(!f.contains(addr) && !f.contains(&addr[..addr.find('@').unwrap()]), "an address drawn:\n{f}");
-        }
-    }
+    assert!(frames.last().is_some_and(|f| f.contains(CAROL) && f.contains(CORA)), "the accounts are named in full");
 }
 
 // ── A4: the login code ────────────────────────────────────────────────────

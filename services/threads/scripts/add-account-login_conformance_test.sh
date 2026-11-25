@@ -24,21 +24,17 @@
 # byte-for-byte as it was.
 set -uo pipefail
 
-# ── INTERPRETER GUARD: this test needs bash ≥ 4.4 ────────────────────────────
-# Same reason as the scripts it proves: `${x@Q}` is 4.4+, and `/usr/bin/env
-# bash` finds macOS's 3.2 whenever /bin precedes homebrew on PATH. A test that
-# dies with "bad substitution" reads as a failure of the thing under test.
-if [ "${BASH_VERSINFO[0]:-0}" -lt 4 ] \
-   || { [ "${BASH_VERSINFO[0]}" -eq 4 ] && [ "${BASH_VERSINFO[1]:-0}" -lt 4 ]; }; then
-  for _newer_bash in /opt/homebrew/bin/bash /usr/local/bin/bash /bin/bash; do
-    [ -x "$_newer_bash" ] || continue
-    case "$("$_newer_bash" -c 'echo "${BASH_VERSINFO[0]}.${BASH_VERSINFO[1]}"' 2>/dev/null)" in
-      4.4|4.[5-9]|[5-9].*|[1-9][0-9].*) exec "$_newer_bash" "${BASH_SOURCE[0]}" "$@" ;;
-    esac
-  done
-  echo "add-account-login_conformance_test: needs bash 4.4 or newer (brew install bash)." >&2
-  exit 1
+# ── THE REAL KEYCHAIN: OPT-IN ONLY ───────────────────────────────────────────
+# This suite is not hermetic: it READS your live login`s keychain item (`Claude Code-credentials`, metadata) and other `Claude Code-credentials-<8 hex>` items in your login keychain, and its section 3 runs `cargo run -p threads ... accounts adopt`, which reaches the keychain through /usr/bin/security. It refuses to run unless
+# CAULDRON_TEST_ALLOW_REAL_KEYCHAIN=1 is set, so nobody runs it by accident
+# (an outside contributor, a full-suite loop, an agent).
+if [ "${CAULDRON_TEST_ALLOW_REAL_KEYCHAIN:-}" != 1 ]; then
+  echo "add-account-login_conformance_test.sh: NOT RUN: it READS your live login's keychain item ('Claude Code-credentials', metadata) and other 'Claude Code-credentials-<8 hex>' items in your login keychain, and its section 3 runs 'cargo run -p threads ... accounts adopt', which reaches the keychain through /usr/bin/security. Set CAULDRON_TEST_ALLOW_REAL_KEYCHAIN=1 to run it on purpose." >&2
+  exit 3
 fi
+
+# Runs on any bash from 3.2 up, like the script it proves (issue #33): no
+# `${x@Q}` here, the quoting below is plain '…'.
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 THREADS_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
@@ -74,7 +70,7 @@ PASS=0
 FAIL=0
 ok()   { PASS=$((PASS+1)); printf '  ok   %s\n' "$*"; }
 bad()  { FAIL=$((FAIL+1)); printf '  FAIL %s\n' "$*" >&2; }
-check() { if [ "$2" = "$3" ]; then ok "$1"; else bad "$1: got ${2@Q} want ${3@Q}"; fi; }
+check() { if [ "$2" = "$3" ]; then ok "$1"; else bad "$1: got '$2' want '$3'"; fi; }
 
 TMP="$(mktemp -d)"
 cleanup() { rm -rf "$TMP"; }
@@ -206,12 +202,44 @@ refuses "refuses when CLAUDE_CODE_OAUTH_TOKEN is set" "#37512" \
 OAUTH_MSG="$(env CLAUDE_CODE_OAUTH_TOKEN=dummy "$ADD_ACCOUNT" --login "$LABEL" --dry-run 2>&1 || true)"
 for want in "CLAUDE_CODE_OAUTH_TOKEN" "unset CLAUDE_CODE_OAUTH_TOKEN" "DESTROYS"; do
   case "$OAUTH_MSG" in
-    *"$want"*) ok "the token refusal says ${want@Q}" ;;
-    *) bad "the token refusal never said ${want@Q}" ;;
+    *"$want"*) ok "the token refusal says '$want'" ;;
+    *) bad "the token refusal never said '$want'" ;;
   esac
 done
 refuses "refuses a label with a path traversal" "invalid label" \
   "$ADD_ACCOUNT" --login "../evil" --dry-run
+
+# ── THE LABEL RULE (issue #35): a label is a classic name OR the account's
+# email address. Same rule as the daemon and claude-accounts; driven through
+# the sourced function and through the script's own refusal.
+if ! declare -F valid_label >/dev/null; then
+  bad "could not source valid_label (did it move below the banner?)"
+else
+  for l in work-2 a_b A-Z0 "$(printf 'x%.0s' $(seq 1 64))" \
+           a@x.test a.b@x.test a+tag@x.test a_b%c-d@sub.x-y.test 1@2.3 \
+           "$(printf 'a%.0s' $(seq 1 240))@x.test"; do
+    if valid_label "$l"; then ok "label accepted: ${l:0:40}"; else bad "label refused: $l"; fi
+  done
+  for l in "" ../evil "a b" "a/b" "$(printf 'x%.0s' $(seq 1 65))" \
+           A@x.test a@X.test a..b@x.test .a@x.test a.@x.test a@x a@.x.test a@x..test \
+           a@x.test. a@x_y.test a@@x.test @x.test "a@x.test
+evil" "$(printf 'a%.0s' $(seq 1 250))@x.test"; do
+    if valid_label "$l"; then bad "label accepted but must be refused: ${l:0:60}"; else ok "label refused: ${l:0:40}"; fi
+  done
+fi
+refuses "refuses an address label that is not lower case" "invalid label" \
+  "$ADD_ACCOUNT" --login "Me@Example.com" --dry-run
+refuses "refuses an address label with .. in it" "invalid label" \
+  "$ADD_ACCOUNT" --login "me..you@example.com" --dry-run
+ADDR_OUT="$("$ADD_ACCOUNT" --login "conformance.addr@example.com" --dry-run 2>&1)"; ADDR_RC=$?
+if [ "$ADDR_RC" -eq 0 ]; then ok "an address label is accepted (--dry-run)"
+else bad "an address label was refused (rc=$ADDR_RC): ${ADDR_OUT:0:220}"; fi
+case "$ADDR_OUT" in
+  *"login as         : conformance.addr@example.com"*) ok "an address label is also the address it signs in as" ;;
+  *) bad "an address label did not pre-fill the login: ${ADDR_OUT:0:300}" ;;
+esac
+if [ ! -d "$THREADS_DIR/accounts/conformance.addr@example.com" ]; then ok "the address --dry-run created no slot dir"
+else bad "the address --dry-run created a slot dir"; fi
 refuses "refuses an unknown option" "unknown option" \
   "$ADD_ACCOUNT" --login "$LABEL" --wat
 refuses "refuses two labels" "usage" \
@@ -349,8 +377,8 @@ DRY_RC=$?
 if [ "$DRY_RC" -eq 0 ]; then ok "--dry-run exits 0"; else bad "--dry-run rc=$DRY_RC: ${DRY_OUT:0:300}"; fi
 for want in "slot dir" "keychain service" "You will NOT be logged out" "stopping before invoking claude"; do
   case "$DRY_OUT" in
-    *"$want"*) ok "--dry-run says ${want@Q}" ;;
-    *) bad "--dry-run never said ${want@Q}" ;;
+    *"$want"*) ok "--dry-run says '$want'" ;;
+    *) bad "--dry-run never said '$want'" ;;
   esac
 done
 # It must announce the DERIVED service, and must never claim the default one.

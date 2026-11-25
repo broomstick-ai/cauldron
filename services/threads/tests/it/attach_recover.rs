@@ -149,6 +149,8 @@ fn spawn_daemon(scratch: &Path, data_dir: &Path, port: u16) -> Daemon {
         .arg("--config")
         .arg(&cfg)
         .env_remove("THREADS_CHASSIS_PORT")
+            // F9: nor the hosting daemon's health address (its [::1]:3653).
+            .env_remove("THREADS_HEALTH_ADDR")
         .env("THREADS_UPDATE_WATCH", "off")
         .env("THREADS_RESUME_TICK_MS", "60000")
         // The reaper is OFF: only recovery may settle an attached row here.

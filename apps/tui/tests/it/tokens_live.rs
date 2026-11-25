@@ -586,10 +586,13 @@ fn key(code: ratatui::crossterm::event::KeyCode) -> ratatui::crossterm::event::E
     ratatui::crossterm::event::Event::Key(ratatui::crossterm::event::KeyEvent::new(code, ratatui::crossterm::event::KeyModifiers::NONE))
 }
 
-/// **F1 (V1.5-I), WIDENED BY V1-CLEAN2 (V1-CLEAN1-I B1)**: after R12.2 the
-/// `accounts` row key IS the account's email. EVERY surface that draws an
-/// account is driven with made-up email-keyed accounts, and no screen shows
-/// any part of either side of an address beyond its first letter:
+/// **#35, REPLACING F1 (V1.5-I, V1-CLEAN2)**: an account named by
+/// its address has that address as its ONE name, so every surface that names
+/// the account draws the address IN FULL (until 0.1.18 each drew a mask,
+/// `z•••@j•••`). What stays masked is what the mask was for: an account's id
+/// (a settings key and file name) never carries the address, and prose the
+/// face did not write keeps any OTHER address in it masked. Driven with
+/// made-up email-keyed accounts, on every surface F1 covered:
 ///
 /// - Status › Tokens, every card row and `config ▸` selected in turn;
 /// - ENTER on each card's `config ▸` — Config › Accounts with the account's
@@ -600,11 +603,12 @@ fn key(code: ratatui::crossterm::event::KeyCode) -> ratatui::crossterm::event::E
 /// - the pool board (`tui pool` and its `--dump`, one renderer): card titles,
 ///   `machine login is …`, the WIPED warning, the disable confirm and the
 ///   share prompt;
-/// - a note quoting the key back (a daemon's refusal, a tool's stderr).
+/// - a note quoting the key back (a daemon's refusal, a tool's stderr) —
+///   the key in full, another address in it masked.
 ///
 /// Opposition in the same frames: `alpha`, not an address, is drawn as it is.
 #[test]
-fn f1_every_surface_that_draws_an_account_masks_an_address() {
+fn f1_every_surface_names_an_account_by_its_address_in_full_and_no_id_carries_it() {
     use ratatui::crossterm::event::KeyCode;
     use tui::cauldron::app::{Focus, Modal};
     use tui::cauldron::menu::SPage;
@@ -624,7 +628,7 @@ fn f1_every_surface_that_draws_an_account_masks_an_address() {
     // Status › Tokens: every card and every `config ▸`, selected in turn.
     shot(&mut screens, &mut a, "Status › Tokens".into());
     let band = claude_band(&screens[0].1).join("\n");
-    assert!(band.contains(&format!("• {}", masked(ADDR))) && band.contains(&format!("• {}", masked(ADDR_B))), "the masked titles:\n{band}");
+    assert!(band.contains(&format!("• {ADDR}")) && band.contains(&format!("• {ADDR_B}")), "the titles are the addresses, in full:\n{band}");
     assert!(band.contains("• alpha "), "a name that is not an address is drawn as it is:\n{band}");
     let v = tui::cauldron::status::view(&a, 120);
     let rows: Vec<(usize, String)> = v.items.iter().enumerate().filter(|(_, it)| it.key.starts_with("acct:") || it.key.starts_with("cfg:")).map(|(i, it)| (i, it.key.clone())).collect();
@@ -646,7 +650,7 @@ fn f1_every_surface_that_draws_an_account_masks_an_address() {
         let s = screen(&mut a);
         for addr in [ADDR, ADDR_B] {
             if account_id_of(addr) == id {
-                let title = format!("Claude Code · {}", masked(addr));
+                let title = format!("Claude Code · {addr}");
                 assert!(s.contains(&title), "Enter on {k}: the page is titled `{title}`:\n{s}");
                 entered += 1;
             }
@@ -660,11 +664,11 @@ fn f1_every_surface_that_draws_an_account_masks_an_address() {
     // Config › Accounts: `+ add account` on Claude Code. V1.6 (merged by
     // V1-ACCT): a Claude Code account is added by LOGGING IT IN through the
     // daemon, never recorded here — so the address is drawn in the login
-    // modal's title, masked.
+    // modal's title, in full (lowercased: #35).
     a.set_ctab(CTab::Accounts);
     a.modal = Some(Modal::AddAccount { pool: "claude_code".into(), name: ADDR_C.into(), error: None });
     a.handle(key(KeyCode::Enter));
-    assert!(matches!(&a.modal, Some(Modal::Login { title, .. }) if *title == format!("Log in {}", masked(ADDR_C))), "Claude Code's add is a masked login: {:?}", a.modal);
+    assert!(matches!(&a.modal, Some(Modal::Login { title, .. }) if *title == format!("Log in {}", ADDR_C.to_lowercase())), "Claude Code's add logs in under the address, lowercased: {:?}", a.modal);
     shot(&mut screens, &mut a, "Config › Accounts, Claude Code's login modal".into());
     a.modal = None;
     // No other source takes an account added here in this product (Codex is
@@ -675,7 +679,7 @@ fn f1_every_surface_that_draws_an_account_masks_an_address() {
     assert!(a.accounts("claude_code").iter().any(|x| x.id == id_a), "sentinel: the daemon's account is listed");
     a.open_account_settings("claude_code", &id_a);
     let s = screen(&mut a);
-    assert!(s.contains(&format!("Claude Code · {}", masked(ADDR))), "the account's page title:\n{s}");
+    assert!(s.contains(&format!("Claude Code · {ADDR}")), "the account's page title:\n{s}");
     screens.push(("Config › Accounts, a daemon account's modal".into(), s));
     a.modal = None;
     a.focus = Focus::Content;
@@ -699,23 +703,30 @@ fn f1_every_surface_that_draws_an_account_masks_an_address() {
     pb.link = tui::pool::app::LinkState::Live;
     let board = |pb: &tui::pool::app::App| tui::pool::render_to_text(pb, 120, 30).unwrap().join("\n");
     let s = board(&pb);
-    assert!(s.contains(&format!("machine login is {}", masked(ADDR))) && s.contains(&format!("✕ {} login was WIPED", masked(ADDR_B))), "sentinel: the board names both:\n{s}");
+    assert!(s.contains(&format!("machine login is {ADDR}")) && s.contains(&format!("✕ {ADDR_B} login was WIPED")), "the board names both in full:\n{s}");
     screens.push(("pool board".into(), s));
     for p in [tui::pool::app::Prompt::Confirm(tui::pool::action::Action::Disable(ADDR.into())), tui::pool::app::Prompt::Share { label: ADDR_B.into(), buf: "40".into() }] {
         pb.prompt = p;
         screens.push(("pool board prompt".into(), board(&pb)));
     }
     pb.prompt = tui::pool::app::Prompt::None;
-    pb.set_note(tui::pool::model::masked_in(&format!("accounts/{ADDR}/disable refused: no account {ADDR}"), ADDR), tui::pool::model::Tone::Bad);
-    screens.push(("pool board note".into(), board(&pb)));
+    // Prose the face did not write, about ADDR, naming ANOTHER address too
+    // (a crossed login's other identity): ADDR in full, the other masked.
+    const OTHER: &str = "wqrtzy@vbnmx.example.com";
+    pb.set_note(tui::pool::model::masked_in(&format!("{ADDR}: signs in as {OTHER}"), ADDR), tui::pool::model::Tone::Bad);
+    let note = board(&pb);
+    assert!(note.contains(&format!("{ADDR}: signs in as")), "the account's own name is kept in full:\n{note}");
+    // (`leaks` would flag `example.com`, which the account's own address,
+    // drawn in full, holds too: the other address's own parts are checked.)
+    assert!(note.contains(&masked(OTHER)) && !note.contains("wqrtzy") && !note.contains("vbnmx"), "another address in the prose is masked:\n{note}");
+    screens.push(("pool board note".into(), note));
 
-    for (what, s) in &screens {
-        for addr in [ADDR, ADDR_B, ADDR_C] {
-            let l = leaks(s, addr);
-            assert!(l.is_empty(), "{what}: {l:?} of `{}` is on screen:\n{s}", masked(addr));
-        }
-        assert!(s.matches('@').count() == s.matches("•••@").count(), "{what}: an `@` not in a masked name:\n{s}");
+    // What the mask is FOR: no account's id carries any of its address.
+    for addr in [ADDR, ADDR_B, ADDR_C] {
+        let id = account_id_of(addr);
+        assert!(leaks(&id, addr).is_empty(), "the id `{id}` carries `{addr}`");
     }
+    assert!(screens.iter().all(|(_, s)| !s.contains(OTHER)), "the other address is never drawn whole");
 }
 
 /// The id the face gives account `key` (what `config ▸` opens).

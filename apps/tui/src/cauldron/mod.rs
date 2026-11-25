@@ -119,6 +119,8 @@ pub mod threads;
 pub mod tickets;
 // V1.8: where a human action's value goes (env file, keychain, node).
 pub mod route;
+// #34: drag-to-select and copy over the drawn frame, on every surface.
+pub mod select;
 pub mod view;
 
 use ratatui::backend::TestBackend;

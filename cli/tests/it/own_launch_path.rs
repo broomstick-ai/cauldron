@@ -512,6 +512,15 @@ fn an_in_place_rewrite_restoring_the_mtime_restarts_the_holder_but_a_chmod_past_
 /// ad-hoc case.
 #[test]
 fn a_copy_promoted_from_a_binary_signed_with_a_real_identity_keeps_that_identity() {
+    // Round 2: this reads the login keychain (`security find-identity`), so
+    // it runs only on an explicit opt-in.
+    if std::env::var_os("CAULDRON_TEST_ALLOW_REAL_KEYCHAIN").map_or(true, |v| v != "1") {
+        eprintln!(
+            "NOT RUN: this would read the login keychain (/usr/bin/security find-identity -v -p codesigning) \
+             to find a codesigning identity. Set CAULDRON_TEST_ALLOW_REAL_KEYCHAIN=1 to allow it."
+        );
+        return;
+    }
     let o = Command::new("/usr/bin/security").args(["find-identity", "-v", "-p", "codesigning"]).output().unwrap();
     let listing = String::from_utf8_lossy(&o.stdout).to_string();
     let hash_of = |l: &str| l.split_whitespace().nth(1).filter(|h| h.len() == 40).map(str::to_string);

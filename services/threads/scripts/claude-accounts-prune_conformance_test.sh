@@ -27,6 +27,15 @@
 # real slot, and the trap removes them on every exit path.
 set -uo pipefail
 
+# ── THE REAL KEYCHAIN: OPT-IN ONLY ───────────────────────────────────────────
+# This suite is not hermetic: it CREATES, READS and DELETES items named `Claude Code-credentials-<8 hex>` in your login keychain (through /usr/bin/security) and runs `security dump-keychain`. It refuses to run unless
+# CAULDRON_TEST_ALLOW_REAL_KEYCHAIN=1 is set, so nobody runs it by accident
+# (an outside contributor, a full-suite loop, an agent).
+if [ "${CAULDRON_TEST_ALLOW_REAL_KEYCHAIN:-}" != 1 ]; then
+  echo "claude-accounts-prune_conformance_test.sh: NOT RUN: it CREATES, READS and DELETES items named 'Claude Code-credentials-<8 hex>' in your login keychain (through /usr/bin/security) and runs 'security dump-keychain'. Set CAULDRON_TEST_ALLOW_REAL_KEYCHAIN=1 to run it on purpose." >&2
+  exit 3
+fi
+
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 CA="$SCRIPT_DIR/claude-accounts"
 BASE="Claude Code-credentials"
@@ -132,13 +141,20 @@ for st in "${B_REST[@]}"; do
   printf 'restore me\n' > "$ACC/backups/live-login/$st/restore"
 done
 
+# An orphan whose label is an EMAIL ADDRESS, named only by the registry. The
+# registry writes an address key QUOTED (`[accounts."gone@x.test"]`: its dots
+# would otherwise nest), so this is the case that proves the quotes are read
+# through — otherwise the label looks unreferenced and its item is retired.
+SVC_QUOTED="$(svc_for "$ACC/gone@x.test")"
+printf '\n[accounts."gone@x.test"]\nconfig_dir = "%s"\n' "$ACC/gone@x.test" >> "$STATE/accounts.toml"
+
 # Create the real keychain items, each with a distinguishable secret.
-declare -A SECRET=()
-put() { CREATED+=("$1"); SECRET["$1"]="$2"; kc_put "$1" "$2"; }
+put() { CREATED+=("$1"); kc_put "$1" "$2"; }
 put "$SVC_LIVE"     "secret-live"
 put "$SVC_GHOST"    "secret-ghost"
 put "$SVC_HAUNTED"  "secret-haunted"
 put "$SVC_BUDGETED" "secret-budgeted"
+put "$SVC_QUOTED"   "secret-quoted"
 for st in "${B_UNREST[@]}" "${B_REST[@]}"; do put "$BASE.backup.$st" "secret-backup-$st"; done
 
 # The enumeration fixture. It deliberately INCLUDES the machine-default name, so
@@ -146,7 +162,7 @@ for st in "${B_UNREST[@]}" "${B_REST[@]}"; do put "$BASE.backup.$st" "secret-bac
 # no such item is created or touched by this test.
 {
   printf '%s\n' "$BASE"
-  printf '%s\n' "$SVC_LIVE" "$SVC_GHOST" "$SVC_HAUNTED" "$SVC_BUDGETED"
+  printf '%s\n' "$SVC_LIVE" "$SVC_GHOST" "$SVC_HAUNTED" "$SVC_BUDGETED" "$SVC_QUOTED"
   for st in "${B_UNREST[@]}" "${B_REST[@]}"; do printf '%s\n' "$BASE.backup.$st"; done
 } > "$FIXTURE"
 
@@ -187,6 +203,17 @@ if kc_exists "$SVC_BUDGETED"; then
   ok "an orphan named only inside budgets.accounts_json SURVIVED"
 else
   bad "an orphan named only inside budgets.accounts_json SURVIVED"
+fi
+if kc_exists "$SVC_QUOTED"; then
+  ok "an orphan named only by a QUOTED registry key (an address label) SURVIVED"
+else
+  bad "an orphan named only by a QUOTED registry key (an address label) SURVIVED" \
+      "it was retired — the quoted key was not read as a referenced label"
+fi
+if printf '%s' "$OUT" | grep -qF "the label gone@x.test is still referenced"; then
+  ok "and it named the address label, without quotes"
+else
+  bad "and it named the address label, without quotes" "$(printf '%s' "$OUT" | grep -F gone | head -3)"
 fi
 if kc_exists "$SVC_LIVE"; then
   ok "the live slot's item SURVIVED"

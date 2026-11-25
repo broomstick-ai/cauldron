@@ -78,6 +78,33 @@ pub fn locate_in(root: Option<&Path>, data_dir: &Path, name: &str) -> PathBuf {
     }
 }
 
+/// The helpers the daemon runs, in the order `/health` lists them.
+pub const NAMES: &[&str] = &["add-account", "claude-accounts", "claude-login-browser"];
+
+/// **Where this daemon finds each helper, and whether it would run it**
+/// (#32): `/health` carries this under `helpers`, so an upgrade can be checked
+/// without starting a login. `cauldron_home` is the root adopted at boot
+/// (`null` when not hosted); each script names the path [`locate`] resolves
+/// and `trusted`, with the refusal [`check`] would give when it is not.
+/// Read-only: a few `stat`s, no script is run.
+pub fn report(data_dir: &Path) -> serde_json::Value {
+    report_in(cauldron_home().as_deref(), data_dir, current_uid())
+}
+
+/// [`report`] with the root and the uid handed in.
+pub fn report_in(root: Option<&Path>, data_dir: &Path, uid: u32) -> serde_json::Value {
+    let mut scripts = serde_json::Map::new();
+    for name in NAMES {
+        let path = locate_in(root, data_dir, name);
+        let entry = match check_as(&path, name, uid) {
+            Ok(()) => serde_json::json!({ "path": path, "trusted": true }),
+            Err(why) => serde_json::json!({ "path": path, "trusted": false, "refused": why }),
+        };
+        scripts.insert((*name).to_string(), entry);
+    }
+    serde_json::json!({ "cauldron_home": root, "scripts": scripts })
+}
+
 /// **May `script` be run?** `Ok` when it is trusted (module docs); otherwise
 /// the refusal, saying what to do. `what` names it in the message ("the
 /// account login script").
@@ -212,6 +239,28 @@ mod tests {
     /// A tempdir is 0700 and its parents are the system's: trusted.
     fn tmp() -> tempfile::TempDir {
         tempfile::tempdir().unwrap()
+    }
+
+    #[test]
+    fn health_reports_each_helper_with_its_path_and_whether_it_is_trusted() {
+        let t = tmp();
+        let (root, data) = (t.path().join("root"), t.path().join("data"));
+        std::fs::create_dir_all(&data).unwrap();
+        script(&installed(&root, "add-account"));
+        let r = report_in(Some(&root), &data, current_uid());
+        assert_eq!(r["cauldron_home"], serde_json::json!(root));
+        let a = &r["scripts"]["add-account"];
+        assert_eq!(a["path"], serde_json::json!(installed(&root, "add-account")));
+        assert_eq!(a["trusted"], true, "{r}");
+        assert!(a.get("refused").is_none(), "{r}");
+        let c = &r["scripts"]["claude-accounts"];
+        assert_eq!(c["trusted"], false, "{r}");
+        assert!(c["refused"].as_str().unwrap().contains("is not at"), "{r}");
+        assert_eq!(r["scripts"].as_object().unwrap().len(), NAMES.len());
+        // Unhosted: no root, the data dir's scripts/ is what is named.
+        let u = report_in(None, &data, current_uid());
+        assert!(u["cauldron_home"].is_null());
+        assert_eq!(u["scripts"]["add-account"]["path"], serde_json::json!(data.join("scripts/add-account")));
     }
 
     #[test]

@@ -373,13 +373,21 @@ pub async fn event(
 // person opens), as `create` mints a `thread_id`. The pasted code goes out in
 // the params of `complete` and nowhere else: never logged here, never kept.
 
+/// How long `begin` may take. The daemon waits up to 60s for the login
+/// script to print its URL (`login::URL_TIMEOUT`), after snapshotting the
+/// slot; the face waits longer, so the daemon's own answer arrives (#30).
+pub const LOGIN_BEGIN_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(120);
+/// How long `complete` may take: the daemon gives the exchange and its
+/// distinct-account checks up to 180s (`login::COMPLETE_TIMEOUT`).
+pub const LOGIN_COMPLETE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(240);
+
 /// `accounts/login/begin`: start the daemon's piped login for `account` (a
 /// new slot's name, or an existing account's). The ack's payload carries
 /// `session_id` and `url`.
 pub async fn login_begin(s: &Seam, account: &str) -> Result<Ack, Refusal> {
     let payload = s
         .link
-        .request(methods::LOGIN_BEGIN.at(), json!({ "account": account }))
+        .request_within(methods::LOGIN_BEGIN.at(), json!({ "account": account }), LOGIN_BEGIN_TIMEOUT)
         .await?;
     Ok(Ack::of("login_begin", Some(account.to_string()), payload, s))
 }
@@ -388,7 +396,7 @@ pub async fn login_begin(s: &Seam, account: &str) -> Result<Ack, Refusal> {
 pub async fn login_complete(s: &Seam, session_id: &str, code: &str) -> Result<Ack, Refusal> {
     let payload = s
         .link
-        .request(methods::LOGIN_COMPLETE.at(session_id), json!({ "code": code }))
+        .request_within(methods::LOGIN_COMPLETE.at(session_id), json!({ "code": code }), LOGIN_COMPLETE_TIMEOUT)
         .await?;
     Ok(Ack::of("login_complete", None, payload, s))
 }

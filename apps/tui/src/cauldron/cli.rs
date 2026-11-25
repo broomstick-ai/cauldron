@@ -83,7 +83,11 @@ tui --cauldron — the Cauldron face (Threads is live; the rest is fake data); `
                  | trigger:<ripple>/<n> (n from 1) | run:<id>
   --keys         press these keys, in order, after everything above and before --tag:
                  space-separated, each one of up down left right enter esc tab home end
-                 opt-up opt-down space, or a single character (`--keys 'right down right'`)
+                 opt-up opt-down space, or a single character (`--keys 'right down right'`);
+                 the mouse, at a cell of the frame (column,row from 0, on a frame of --size
+                 drawn just before it): click:X,Y press:X,Y drag:X,Y release:X,Y — a press,
+                 drags and a release select that text and copy it (a --dump writes no
+                 clipboard: it says what would be copied on stderr)
   --size         frame size for --dump (default 110x48)
   --scroll       page scroll offset for --dump
 
@@ -254,7 +258,7 @@ fn parse(argv: Vec<String>) -> anyhow::Result<Args> {
             }
             "--keys" => {
                 for k in val("--keys")?.split_whitespace() {
-                    a.keys.push(key_event(k)?);
+                    a.keys.extend(key_events(k)?);
                 }
             }
             "--scroll" => a.scroll = val("--scroll")?.parse().context("--scroll")?,
@@ -313,6 +317,36 @@ fn bus_page(v: &str) -> Option<super::bus::BusPage> {
         }
         _ => return None,
     })
+}
+
+/// One `--keys` token as the events a terminal would deliver: a key, or
+/// the mouse at a cell (#34) — `click:X,Y` is a left press and its release
+/// there; `press:`, `drag:` and `release:` are one left-button event each.
+fn key_events(k: &str) -> anyhow::Result<Vec<event::Event>> {
+    use event::{KeyModifiers as M, MouseButton as B, MouseEvent, MouseEventKind as K};
+    let Some((what, at)) = k.split_once(':') else { return Ok(vec![key_event(k)?]) };
+    let kinds = match what {
+        "click" => vec![K::Down(B::Left), K::Up(B::Left)],
+        "press" => vec![K::Down(B::Left)],
+        "drag" => vec![K::Drag(B::Left)],
+        "release" => vec![K::Up(B::Left)],
+        _ => return Ok(vec![key_event(k)?]),
+    };
+    let (x, y) = at.split_once(',').with_context(|| format!("--keys: `{k}` is {what}:COLUMN,ROW"))?;
+    let (column, row) = (x.parse().with_context(|| format!("--keys: `{k}` column"))?, y.parse().with_context(|| format!("--keys: `{k}` row"))?);
+    Ok(kinds.into_iter().map(|kind| event::Event::Mouse(MouseEvent { kind, column, row, modifiers: M::NONE })).collect())
+}
+
+/// Hand `--keys`' events to the face. A mouse event is resolved against the
+/// frame he would be looking at, so a frame of `--size` is drawn before each.
+fn press_keys(app: &mut App, args: &Args) -> anyhow::Result<()> {
+    for k in &args.keys {
+        if matches!(k, event::Event::Mouse(_)) {
+            render_to_text(app, args.size.0, args.size.1)?;
+        }
+        app.handle(k.clone());
+    }
+    Ok(())
 }
 
 /// One `--keys` token as the key event a terminal would deliver.
@@ -413,9 +447,7 @@ pub fn main(argv: Vec<String>) -> anyhow::Result<()> {
         }
         let seeds = super::store::no_seeds(&base);
         let mut app = App::open_first_run(base, seeds, !args.dump)?;
-        for k in &args.keys {
-            app.handle(k.clone());
-        }
+        press_keys(&mut app, &args)?;
         match args.modal.as_deref() {
             None => {}
             Some("new") => app.modal = Some(Modal::NewCauldron { name: args.new_name.clone().unwrap_or_default(), error: None }),
@@ -538,9 +570,7 @@ pub fn main(argv: Vec<String>) -> anyhow::Result<()> {
             super::threads::settle(&mut app);
         }
     }
-    for k in &args.keys {
-        app.handle(k.clone());
-    }
+    press_keys(&mut app, &args)?;
     // REL-6d: keys that switched cauldron (`App::switch_env` tore the old
     // connection down) or went to a tab that reads the daemon start the
     // shown environment's connection through the launch's door — what the
@@ -725,6 +755,13 @@ fn show(mut app: App, args: &Args) -> anyhow::Result<()> {
         }
         for row in render_to_text(&mut app, args.size.0, args.size.1)? {
             println!("{row}");
+        }
+        // A dump performs no copy (#34): it says what the live face would
+        // have put on the clipboard.
+        for job in &app.outbox {
+            if let Outbox::Copy(text) = job {
+                eprintln!("--dump: not copied (a dump writes no clipboard): {}", serde_json::to_string(text)?);
+            }
         }
         return Ok(());
     }
@@ -950,6 +987,27 @@ mod tests {
     }
 
     /// **V1.2d: the name the router reads is the name this parser opens.**
+    /// #34: the mouse tokens are the events a terminal sends; a key token
+    /// is unchanged, and a malformed cell is refused.
+    #[test]
+    fn mouse_tokens_are_left_button_events_at_a_cell() {
+        use ratatui::crossterm::event::{Event, MouseButton as B, MouseEventKind as K};
+        let kinds = |k: &str| -> Vec<(K, u16, u16)> {
+            super::key_events(k).expect(k).into_iter().map(|e| match e {
+                Event::Mouse(m) => (m.kind, m.column, m.row),
+                other => panic!("{other:?}"),
+            }).collect()
+        };
+        assert_eq!(kinds("click:3,4"), vec![(K::Down(B::Left), 3, 4), (K::Up(B::Left), 3, 4)]);
+        assert_eq!(kinds("press:0,0"), vec![(K::Down(B::Left), 0, 0)]);
+        assert_eq!(kinds("drag:10,2"), vec![(K::Drag(B::Left), 10, 2)]);
+        assert_eq!(kinds("release:9,1"), vec![(K::Up(B::Left), 9, 1)]);
+        assert!(matches!(super::key_events("enter").unwrap()[..], [Event::Key(_)]));
+        assert!(matches!(super::key_events(":").unwrap()[..], [Event::Key(_)]));
+        assert!(super::key_events("click:3").is_err() && super::key_events("drag:a,1").is_err());
+        assert!(parse(v(&["--keys", "press:1,1 drag:5,1 release:5,1"])).is_ok());
+    }
+
     #[test]
     fn named_in_agrees_with_this_parser_on_the_cauldron_named() {
         for argv in [

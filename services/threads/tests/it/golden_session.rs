@@ -302,7 +302,13 @@ async fn the_session_through_the_one_door_is_pinned() {
 /// against `right: "{\"boot_id\":…,\"status\":\"ok\",\"version\":…}"`.
 #[tokio::test]
 async fn health_is_pinned_as_bytes_and_carries_exactly_the_six_keys() {
-    let (m, addr, _tmp) = start().await;
+    let (m, addr, tmp) = start().await;
+    // #32: `helpers`, where this daemon finds each account helper and whether
+    // it would run it. Its paths are the fixture's own, so the expected value
+    // is the report itself; what is pinned here is that it is there, and
+    // where it sits among the keys.
+    let helpers = serde_json::to_string(&threads::helpers::report(m.data_dir())).unwrap();
+    let _ = &tmp;
 
     // No http client in this crate's deps; one request by hand is cheaper.
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -329,9 +335,11 @@ async fn health_is_pinned_as_bytes_and_carries_exactly_the_six_keys() {
             // because this fixture never begins one (only `run_daemon` does).
             // R9.C7h: and `recovery.migrated_ms` — time the store spent
             // migrating behind the port before recovery began (0 here).
-            r#"{{"boot_id":"{}","daemon":"threads","graceful_shutdown":true,"proto":1,"status":"ok","version":"{}","recovery":{{"children_pending":0,"children_resumed":0,"children_total":0,"elapsed_ms":0,"migrated_ms":0,"phase":"done","state":"done"}},"restart_gate":{{"draining":false,"draining_since":null,"idle":true,"quiet":true,"requests":0,"spawning":0,"turn_threads":[],"turns":0}}}}"#,
+            // #32: and `helpers`, before `recovery` (the extras are sorted).
+            r#"{{"boot_id":"{}","daemon":"threads","graceful_shutdown":true,"proto":1,"status":"ok","version":"{}","helpers":{},"recovery":{{"children_pending":0,"children_resumed":0,"children_total":0,"elapsed_ms":0,"migrated_ms":0,"phase":"done","state":"done"}},"restart_gate":{{"draining":false,"draining_since":null,"idle":true,"quiet":true,"requests":0,"spawning":0,"turn_threads":[],"turns":0}}}}"#,
             m.boot_id,
-            env!("CARGO_PKG_VERSION")
+            env!("CARGO_PKG_VERSION"),
+            helpers
         ),
         "the body `promote` reads, as bytes"
     );

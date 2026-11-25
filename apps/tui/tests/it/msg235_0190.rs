@@ -51,6 +51,8 @@ fn click(a: &mut App, hit: Hit) {
     screen(a);
     let r = a.hits.iter().find(|(_, h)| *h == hit).map(|(r, _)| *r).unwrap_or_else(|| panic!("no {hit:?} on screen"));
     a.handle(Event::Mouse(MouseEvent { kind: MouseEventKind::Down(MouseButton::Left), column: r.x, row: r.y, modifiers: KeyModifiers::NONE }));
+    // #34: a press acts as a click on its release, as a terminal always sends.
+    a.handle(Event::Mouse(MouseEvent { kind: MouseEventKind::Up(MouseButton::Left), column: r.x, row: r.y, modifiers: KeyModifiers::NONE }));
 }
 
 fn double_click(a: &mut App, hit: Hit) {

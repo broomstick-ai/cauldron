@@ -98,6 +98,8 @@ fn spawn_daemon(scratch: &Path, data_dir: &Path, port: u16, extra: &[(&str, &str
         .arg("--config")
         .arg(&cfg)
         .env_remove("THREADS_CHASSIS_PORT")
+            // F9: nor the hosting daemon's health address (its [::1]:3653).
+            .env_remove("THREADS_HEALTH_ADDR")
         .env_remove("THREADS_MIGRATION_FAULT")
         .env_remove("THREADS_RECOVERY_FAULT")
         .env_remove("THREADS_RECOVERY_STUCK_MS")

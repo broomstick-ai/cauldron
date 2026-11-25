@@ -81,6 +81,8 @@ fn unbox(l: &str) -> &str {
 
 fn press_at(a: &mut App, x: u16, y: u16) {
     a.handle(Event::Mouse(MouseEvent { kind: MouseEventKind::Down(MouseButton::Left), column: x, row: y, modifiers: KeyModifiers::NONE }));
+    // #34: a press acts as a click on its release, as a terminal always sends.
+    a.handle(Event::Mouse(MouseEvent { kind: MouseEventKind::Up(MouseButton::Left), column: x, row: y, modifiers: KeyModifiers::NONE }));
 }
 
 fn press(a: &mut App, hit: Hit) {

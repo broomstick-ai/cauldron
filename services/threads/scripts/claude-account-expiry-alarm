@@ -250,7 +250,10 @@ PY
   local label state exp_ms exp_human exp_iso days
   while IFS=$'\x1f' read -r label state exp_ms exp_human exp_iso days; do
     [ -n "${label:-}" ] || continue
-    local id="claude-login-$label"
+    # The ticket id keeps the classic name grammar even when the slot's label
+    # is its email address (`@` and `.` become `-`), so it stays one plain
+    # file name and one plain id; the title and body still name the label.
+    local id; id="claude-login-$(printf '%s' "$label" | LC_ALL=C tr -c 'A-Za-z0-9_-' '-')"
     local tf; tf="$(ticket_file "$id")"
     local prev_exp prev_status
     prev_exp="$(recorded_expiry "$id")"

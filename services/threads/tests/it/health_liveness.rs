@@ -95,6 +95,8 @@ impl Daemon {
             .arg("--config")
             .arg(&cfg)
             .env_remove("THREADS_CHASSIS_PORT")
+            // F9: nor the hosting daemon's health address (its [::1]:3653).
+            .env_remove("THREADS_HEALTH_ADDR")
             .env("THREADS_HEALTH_STALE_SECS", BOUND_SECS.to_string())
             .env("THREADS_UPDATE_WATCH", "off")
             .env("CAULDRON_HOME", scratch.join("cauldron-home"))

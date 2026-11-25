@@ -184,7 +184,10 @@ impl Producer for ThreadsProducer {
     /// restart. `/health` is served by the chassis and never enters `handle`,
     /// so reading it takes no `RequestPermit` and cannot make itself busy.
     fn health_extras(&self) -> std::collections::BTreeMap<String, Value> {
-        self.manager.update.health_extras()
+        let mut m = self.manager.update.health_extras();
+        // #32: where the account helpers are, and whether each would run.
+        m.insert("helpers".into(), crate::helpers::report(self.manager.data_dir()));
+        m
     }
 
     fn handle<'a>(&'a self, method: &'a str, params: Value) -> BoxFut<'a, Result<Value, Refusal>> {

@@ -113,7 +113,11 @@ fn version_names_the_same_commit_for_a_human() {
         .split_whitespace()
         .find_map(|p| p.strip_prefix("commit="))
         .expect("commit= in the stamp");
-    assert!(out.starts_with(&format!("cauldron {commit}")), "`{out}` must start with `cauldron {commit}`");
+    // #32: the release version, then the commit as every build label
+    // shortens it (12 characters), so a human need not map one to the other.
+    let short = &commit[..commit.len().min(12)];
+    let head = format!("cauldron {} ({short})", env!("CARGO_PKG_VERSION"));
+    assert!(out.starts_with(&head), "`{out}` must start with `{head}`");
     for flag in ["-v", "-V"] {
         let (rc_f, out_f, _) = cauldron(&[flag]);
         assert_eq!((rc_f, out_f.as_str()), (0, out.as_str()), "{flag} is the same answer as --version");
@@ -126,9 +130,9 @@ fn version_names_the_same_commit_for_a_human() {
         .find_map(|p| p.strip_prefix("dirty="))
         .expect("dirty= in the stamp");
     let want = match dirty {
-        "0" => format!("cauldron {commit}"),
-        "1" => format!("cauldron {commit} (dirty)"),
-        _ => format!("cauldron {commit} (dirt unknown)"),
+        "0" => head,
+        "1" => format!("{head} (dirty)"),
+        _ => format!("{head} (dirt unknown)"),
     };
     assert_eq!(out.trim_end(), want, "--version disagrees with the stamp's dirty={dirty}");
 }

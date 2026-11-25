@@ -25,7 +25,7 @@
 #                      is guarded in Rust (`accounts::flag_recheck_tests`).
 #   N4-N6 (R12.10)     the under-test gate: a pass-through wrapper or a copy of
 #                      a `security` that does not answer the fakes' sentinel is
-#                      refused (N4); HOME spelled in another case is still the
+#                      refused; HOME spelled in another case is still the
 #                      real home (N5); seams set WITHOUT the test marker are
 #                      refused before add-account runs (N6).
 #
@@ -42,9 +42,9 @@ set -uo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 CA="${CA_UNDER_TEST:-$SCRIPT_DIR/claude-accounts}"
-BASH5=""
-for b in /opt/homebrew/bin/bash /usr/local/bin/bash; do [ -x "$b" ] && BASH5="$b" && break; done
-[ -n "$BASH5" ] || { echo "needs bash >= 4.4 (brew install bash)" >&2; exit 2; }
+# The scripts run on any bash from 3.2 up (issue #33), so they are run by their
+# own `#!/usr/bin/env bash`: whichever bash is first on PATH is the one under
+# test. Put a directory whose `bash` is /bin/bash first to prove macOS's 3.2.
 
 PASS=0; FAIL=0
 ok()  { PASS=$((PASS+1)); printf '  ok   %s\n' "$*"; }
@@ -65,7 +65,7 @@ BIN="$TMP/bin"; mkdir -p "$BIN"
 cat > "$BIN/security" <<'PY'
 #!/usr/bin/env python3
 import json, os, shlex, sys
-# R12.10 (N4): the sentinel only a test fake answers; claude-accounts refuses a
+# R12.10: the sentinel only a test fake answers; claude-accounts refuses a
 # guarded write under test unless the `security` on PATH answers it.
 if sys.argv[1:] == ["--claude-accounts-fake"]: sys.exit(0)
 store_path = os.environ.get("FAKE_KC")
@@ -266,7 +266,7 @@ ca() {
     CLAUDE_ACCOUNTS_LOG="$w/rotation.log" FAKE_LOGIN_AS="${AS:-}" FAKE_FILE_AS="${FILE_AS:-}" \
     CLAUDE_ACCOUNTS_THREADS_BIN="$TMP/fake-threads" FAKE_THREADS_CALLS="$w/threads-calls" \
     FAKE_RECHECK_RC="${RECHECK_RC:-0}" FAKE_RECHECK_USAGE="${RECHECK_USAGE:-0}" \
-    "$BASH5" "$CA" "$@" < /dev/null
+    "$CA" "$@" < /dev/null
 }
 # Every file under a slot, with its sha256 — compared before/after.
 slot_dump() { [ -d "$1" ] || { echo "<no slot dir>"; return; }
@@ -276,7 +276,7 @@ echo "claude-accounts identity guard conformance  ($CA)"
 
 # ═══ G5a CROSSED LOGIN, fresh slot ══════════════════════════════════════════
 echo "── G5a: login a@x.test lands b@x.test (fresh slot)"
-W="$(world 1)"; SLOT="$W/accounts/a-x-test"; SVC="$(svc_for "$SLOT")"
+W="$(world 1)"; SLOT="$W/accounts/a@x.test"; SVC="$(svc_for "$SLOT")"
 kc_before="$(kc_dump "$W/kc.json")"; slot_before="$(slot_dump "$SLOT")"; h0="$(hits)"
 out="$(AS=b@x.test ca "$W" "$URL_UP" login a@x.test 2>&1)"; rc=$?
 check "G5a exits non-zero (rc=$rc)" '[ "$rc" -ne 0 ]'
@@ -291,14 +291,14 @@ check "G5a no verified-hook line on a refusal" '! printf "%s" "$out" | grep -q "
 
 # ═══ G5a CROSSED RE-LOGIN: the previous good grant comes back ═══════════════
 echo "── G5a: re-login of a slot that already holds a@'s grant, lands b@"
-W="$(world 2)"; SLOT="$W/accounts/a-x-test"; SVC="$(svc_for "$SLOT")"
+W="$(world 2)"; SLOT="$W/accounts/a@x.test"; SVC="$(svc_for "$SLOT")"
 out="$(AS=a@x.test ca "$W" "$URL_UP" login a@x.test 2>&1)"; rc=$?
 check "G5a setup: a@ signs in cleanly first (rc=$rc)" '[ "$rc" -eq 0 ]'
 kc_before="$(kc_dump "$W/kc.json")"; slot_before="$(slot_dump "$SLOT")"
 tok_before="$(kc_secret_of "$W/kc.json" "$SVC")"
 check "G5a setup: the slot item exists and is a@'s" 'printf "%s" "$tok_before" | grep -q "tok|a@x.test|"'
 sleep 0.01
-out="$(AS=b@x.test ca "$W" "$URL_UP" login a-x-test 2>&1)"; rc=$?
+out="$(AS=b@x.test ca "$W" "$URL_UP" login a@x.test 2>&1)"; rc=$?
 check "G5a re-login exits non-zero (rc=$rc)" '[ "$rc" -ne 0 ]'
 check "G5a re-login says: wanted a@x.test, got b@x.test" 'printf "%s" "$out" | grep -qF "wanted a@x.test, got b@x.test"'
 check "G5a re-login: keychain restored byte for byte (a@'s grant back)" '[ "$(kc_dump "$W/kc.json")" = "$kc_before" ]'
@@ -308,7 +308,7 @@ check "G5a re-login: no prelogin scratch item left" '! kc_names "$W/kc.json" | g
 
 # ═══ G5a' STALE FILE: the file says a@, the token is b@'s ════════════════════
 echo "── G5a': the login writes a .claude.json naming a@ but stores b@'s token"
-W="$(world 3)"; SLOT="$W/accounts/a-x-test"
+W="$(world 3)"; SLOT="$W/accounts/a@x.test"
 kc_before="$(kc_dump "$W/kc.json")"
 out="$(AS=b@x.test FILE_AS=a@x.test ca "$W" "$URL_UP" login a@x.test 2>&1)"; rc=$?
 check "G5a' refused although the file says a@ (rc=$rc)" '[ "$rc" -ne 0 ] && printf "%s" "$out" | grep -qF "wanted a@x.test, got b@x.test"'
@@ -316,7 +316,7 @@ check "G5a' keychain restored" '[ "$(kc_dump "$W/kc.json")" = "$kc_before" ]'
 
 # ═══ G5c MATCHING LOGIN passes; normalisation (G1d) ═════════════════════════
 echo "── G5c: login a@x.test lands a@x.test"
-W="$(world 4)"; SLOT="$W/accounts/a-x-test"; SVC="$(svc_for "$SLOT")"
+W="$(world 4)"; SLOT="$W/accounts/a@x.test"; SVC="$(svc_for "$SLOT")"
 out="$(AS=a@x.test ca "$W" "$URL_UP" login a@x.test 2>&1)"; rc=$?
 check "G5c exits 0 (rc=$rc)" '[ "$rc" -eq 0 ]'
 check "G5c the slot keeps a@'s grant" 'kc_secret_of "$W/kc.json" "$SVC" | grep -q "tok|a@x.test|"'
@@ -332,7 +332,7 @@ check "G5c (G1d) a+1@x.test asked, a@x.test served -> refused (rc=$rc)" '[ "$rc"
 
 # ═══ G5d UNREACHABLE profile source ═════════════════════════════════════════
 echo "── G5d: a matching login, but the profile source is unreachable"
-W="$(world 7)"; SLOT="$W/accounts/a-x-test"
+W="$(world 7)"; SLOT="$W/accounts/a@x.test"
 kc_before="$(kc_dump "$W/kc.json")"
 out="$(AS=a@x.test ca "$W" "$URL_DOWN" login a@x.test 2>&1)"; rc=$?
 check "G5d refused with exit 4 (rc=$rc)" '[ "$rc" -eq 4 ]'
@@ -435,7 +435,7 @@ ca_home() {
     CLAUDE_ACCOUNTS_ADD_ACCOUNT="$TMP/fake-add-account" CLAUDE_ACCOUNTS_PROFILE_URL="$url" \
     CLAUDE_ACCOUNTS_LOG="$w/rotation.log" FAKE_LOGIN_AS="${AS:-}" FAKE_IGNORE_HOME="${IGNORE:-}" \
     CLAUDE_ACCOUNTS_THREADS_BIN="$TMP/fake-threads" FAKE_THREADS_CALLS="$w/threads-calls" \
-    "$BASH5" "$CA" "$@" < /dev/null
+    "$CA" "$@" < /dev/null
 }
 # H2 is only safe against a claude-accounts that HONOURS CLAUDE_ACCOUNTS_HOME:
 # one that ignores it would use the pool beside the script, outside this temp
@@ -456,17 +456,17 @@ W="$(world 17)"; mkdir -p "$W/pool/accounts" "$W/script-home/accounts"
 out="$(IGNORE=1 AS=b@x.test ca_home "$W" "$URL_UP" login a@x.test 2>&1)"; rc=$?
 check "H2b exits non-zero (rc=$rc)" '[ "$rc" -ne 0 ]'
 check "H2b says the login landed where it was not checked" 'printf "%s" "$out" | grep -qF "landed where it was not checked"'
-check "H2b wrote no login hint into the checked pool" '[ ! -f "$W/pool/accounts/a-x-test/login-hint" ]'
+check "H2b wrote no login hint into the checked pool" '[ ! -f "$W/pool/accounts/a@x.test/login-hint" ]'
 echo "── H2c (opposition): CLAUDE_ACCOUNTS_HOME set, a matching login passes"
 W="$(world 18)"; mkdir -p "$W/pool/accounts" "$W/script-home/accounts"
 out="$(AS=a@x.test ca_home "$W" "$URL_UP" login a@x.test 2>&1)"; rc=$?
 check "H2c exits 0 (rc=$rc)" '[ "$rc" -eq 0 ]'
-check "H2c the grant is in the CHECKED slot" 'kc_secret_of "$W/kc.json" "$(svc_for "$W/pool/accounts/a-x-test")" | grep -q "tok|a@x.test|"'
+check "H2c the grant is in the CHECKED slot" 'kc_secret_of "$W/kc.json" "$(svc_for "$W/pool/accounts/a@x.test")" | grep -q "tok|a@x.test|"'
 echo "── H2d: the REAL add-account signs in under CLAUDE_ACCOUNTS_HOME (--dry-run, writes no credential)"
 AA="${AA_UNDER_TEST:-$SCRIPT_DIR/add-account}"
 W="$(world 19)"; mkdir -p "$W/pool/accounts"
 out="$(env -u CLAUDE_CODE_OAUTH_TOKEN -u CLAUDE_CONFIG_DIR PATH="$BIN:$PATH" HOME="$W/home" FAKE_KC="$W/kc.json" \
-  CLAUDE_ACCOUNTS_HOME="$W/pool" "$BASH5" "$AA" --login a-x-test --dry-run --no-browser 2>&1)"; rc=$?
+  CLAUDE_ACCOUNTS_HOME="$W/pool" "$AA" --login a-x-test --dry-run --no-browser 2>&1)"; rc=$?
 check "H2d add-account's slot dir is the home's (rc=$rc)" 'printf "%s" "$out" | grep -qF "slot dir         : $W/pool/accounts/a-x-test"'
 
 # ═══ R10 (R12.10): a verified login asks the daemon to re-check, once ═══════
@@ -476,8 +476,8 @@ W="$(world 20)"
 out="$(AS=a@x.test ca "$W" "$URL_UP" login a@x.test 2>&1)"; rc=$?
 check "R10a login exits 0 (rc=$rc)" '[ "$rc" -eq 0 ]'
 check "R10a exactly one re-check ($(rechecks "$W"))" '[ "$(rechecks "$W")" = 1 ]'
-check "R10a it names the slot and the pool's home" 'grep -qxF "$W/state|accounts recheck a-x-test" "$W/threads-calls"'
-check "R10a the daemon's answer is shown" 'printf "%s" "$out" | grep -qF "a-x-test: identity verified (fake daemon)"'
+check "R10a it names the slot and the pool's home" 'grep -qxF "$W/state|accounts recheck a@x.test" "$W/threads-calls"'
+check "R10a the daemon's answer is shown" 'printf "%s" "$out" | grep -qF "a@x.test: identity verified (fake daemon)"'
 echo "── R10b (opposition): a CROSSED login never asks"
 W="$(world 21)"
 out="$(AS=b@x.test ca "$W" "$URL_UP" login a@x.test 2>&1)"; rc=$?
@@ -516,11 +516,11 @@ printf '#!/bin/bash\nexec "%s" "$@"\n' "$NOSENT" > "$TMP/wrapbin/security"; chmo
 cp -p "$NOSENT" "$TMP/copybin/security"
 check "N4 sentinel: the stand-in does not answer the verb, the fake does" '! "$NOSENT" --claude-accounts-fake && "$BIN/security" --claude-accounts-fake'
 for shape in wrapbin copybin; do
-  echo "── N4: under test, \`security\` is a $shape of a binary that is not a fake"
+  echo "── under test, \`security\` is a $shape of a binary that is not a fake"
   W="$(world "n4-$shape")"; kc_raw_before="$(shasum -a 256 < "$W/kc.json")"
   out="$(PATH_FIRST="$TMP/$shape" AS=a@x.test ca "$W" "$URL_UP" login a@x.test 2>&1)"; rc=$?
   check "N4 $shape refused (rc=$rc)" '[ "$rc" -ne 0 ] && printf "%s" "$out" | grep -qF "is not a test fake"'
-  check "N4 $shape store byte-identical, add-account never ran" '[ "$(shasum -a 256 < "$W/kc.json")" = "$kc_raw_before" ] && [ ! -d "$W/accounts/a-x-test" ]'
+  check "N4 $shape store byte-identical, add-account never ran" '[ "$(shasum -a 256 < "$W/kc.json")" = "$kc_raw_before" ] && [ ! -d "$W/accounts/a@x.test" ]'
 done
 echo "── N5: HOME is the real home spelled in another case"
 W="$(world n5)"; setup_live "$W"; kc_raw_before="$(shasum -a 256 < "$W/kc.json")"
@@ -539,7 +539,7 @@ kc_raw_before="$(shasum -a 256 < "$W/kc.json")"
 out="$(env -u CLAUDE_CODE_OAUTH_TOKEN -u CLAUDE_SECURESTORAGE_CONFIG_DIR -u CLAUDE_CONFIG_DIR -u CLAUDE_ACCOUNTS_TEST \
   PATH="$BIN:$PATH" HOME="$W/home" FAKE_KC="$W/kc.json" CLAUDE_ACCOUNTS_HOME="$W/pool" \
   CLAUDE_ACCOUNTS_THREADS_BIN="$TMP/fake-threads" FAKE_THREADS_CALLS="$W/threads-calls" \
-  "$BASH5" "$R/claude-accounts" login a@x.test < /dev/null 2>&1)"; rc=$?
+  "$R/claude-accounts" login a@x.test < /dev/null 2>&1)"; rc=$?
 check "N6 refused (rc=$rc): a seam without the marker" '[ "$rc" -ne 0 ] && printf "%s" "$out" | grep -qF "is set but CLAUDE_ACCOUNTS_TEST=1 is not"'
 check "N6 add-account never ran, store byte-identical" '[ ! -f "$W/add-account-ran" ] && [ "$(shasum -a 256 < "$W/kc.json")" = "$kc_raw_before" ]'
 echo "── N6 (opposition): no seam set and no marker ⇒ not refused by the gate"
@@ -551,8 +551,68 @@ cp -p "$CA" "$R/claude-accounts"
 printf '#!/bin/bash\necho ran >> "%s/add-account-ran"\nexit 0\n' "$W" > "$R/add-account"; chmod +x "$R/add-account"
 out="$(env -u CLAUDE_CODE_OAUTH_TOKEN -u CLAUDE_SECURESTORAGE_CONFIG_DIR -u CLAUDE_CONFIG_DIR -u CLAUDE_ACCOUNTS_TEST \
   -u FAKE_KC PATH="$TMP/stub44:$BIN:$PATH" HOME="$W/home" CLAUDE_ACCOUNTS_HOME="$W/pool" \
-  "$BASH5" "$R/claude-accounts" login a@x.test < /dev/null 2>&1)"; rc=$?
+  "$R/claude-accounts" login a@x.test < /dev/null 2>&1)"; rc=$?
 check "N6o the gate let it through: add-account ran (rc=$rc)" '[ -f "$W/add-account-ran" ] && ! printf "%s" "$out" | grep -qF "is set but CLAUDE_ACCOUNTS_TEST=1 is not"'
+
+# ═══ L (issue #35): an account's label may be its email address ════════════
+# `login <address>` names, in order: the slot whose login hint is the address;
+# else the legacy derived folder (`a.b@c.d` → `a-b-c-d`) when it exists, so an
+# existing install keeps its slot; else the address itself.
+echo "── L1a: a legacy derived folder exists ⇒ the address signs THAT slot in"
+W="$(world l1a)"; mkdir -p "$W/accounts/a-x-test"
+out="$(AS=a@x.test ca "$W" "$URL_UP" login a@x.test 2>&1)"; rc=$?
+check "L1a exits 0 (rc=$rc)" '[ "$rc" -eq 0 ]'
+check "L1a the grant is in the legacy slot a-x-test" 'kc_secret_of "$W/kc.json" "$(svc_for "$W/accounts/a-x-test")" | grep -q "tok|a@x.test|"'
+check "L1a no second slot named by the address" '[ ! -e "$W/accounts/a@x.test" ]'
+check "L1a the legacy slot got the login hint" '[ "$(cat "$W/accounts/a-x-test/login-hint" 2>/dev/null)" = "a@x.test" ]'
+echo "── L1b: no hint, no legacy folder ⇒ the label IS the address"
+W="$(world l1b)"
+out="$(AS=a.b@x.test ca "$W" "$URL_UP" login a.b@x.test 2>&1)"; rc=$?
+check "L1b exits 0 (rc=$rc)" '[ "$rc" -eq 0 ]'
+check "L1b the grant is in the slot named a.b@x.test" 'kc_secret_of "$W/kc.json" "$(svc_for "$W/accounts/a.b@x.test")" | grep -q "tok|a.b@x.test|"'
+check "L1b no legacy folder was made" '[ ! -e "$W/accounts/a-b-x-test" ]'
+check "L1b the re-check names the address label" 'grep -qxF "$W/state|accounts recheck a.b@x.test" "$W/threads-calls"'
+echo "── L1c: an address typed in upper case is the lower-case label"
+W="$(world l1c)"
+out="$(AS=a@x.test ca "$W" "$URL_UP" login "A@X.Test" 2>&1)"; rc=$?
+# Listed, not tested with -e: the volume is case-insensitive, so `-e A@X.Test`
+# would find a@x.test. The name on disk is what matters.
+check "L1c exits 0 (rc=$rc) into accounts/a@x.test" '[ "$rc" -eq 0 ] && [ "$(ls "$W/accounts" | grep -v "^backups$")" = "a@x.test" ]'
+echo "── L1d: a hint still wins over both"
+W="$(world l1d)"; mkdir -p "$W/accounts/work" "$W/accounts/a-x-test"; printf 'a@x.test\n' > "$W/accounts/work/login-hint"
+out="$(AS=a@x.test ca "$W" "$URL_UP" login a@x.test 2>&1)"; rc=$?
+check "L1d exits 0 (rc=$rc) and signs in the hinted slot" '[ "$rc" -eq 0 ] && kc_secret_of "$W/kc.json" "$(svc_for "$W/accounts/work")" | grep -q "tok|a@x.test|"'
+echo "── L2: an address that is not a valid label is refused before anything runs"
+for bad_addr in "a..b@x.test" ".a@x.test" "a.@x.test" "a@x_y.test" "a@x" "a@@x.test"; do
+  W="$(world "l2-$(printf %s "$bad_addr" | tr -c 'a-z0-9' '-')")"
+  kc_raw_before="$(shasum -a 256 < "$W/kc.json")"
+  out="$(AS=a@x.test ca "$W" "$URL_UP" login "$bad_addr" 2>&1)"; rc=$?
+  check "L2 login $bad_addr refused (rc=$rc)" '[ "$rc" -ne 0 ] && printf "%s" "$out" | grep -qE "invalid label|not an email address"'
+  check "L2 login $bad_addr wrote nothing" '[ -z "$(ls -A "$W/accounts")" ] && [ "$(shasum -a 256 < "$W/kc.json")" = "$kc_raw_before" ]'
+done
+echo "── L3: the real add-account takes an address label and signs in AS it (--dry-run)"
+W="$(world l3)"; mkdir -p "$W/pool/accounts"
+out="$(env -u CLAUDE_CODE_OAUTH_TOKEN -u CLAUDE_CONFIG_DIR PATH="$BIN:$PATH" HOME="$W/home" FAKE_KC="$W/kc.json" \
+  CLAUDE_ACCOUNTS_HOME="$W/pool" "$AA" --login a.b+c@x.test --dry-run --no-browser 2>&1)"; rc=$?
+check "L3 add-account accepts an address label (rc=$rc)" '[ "$rc" -eq 0 ] && printf "%s" "$out" | grep -qF "slot dir         : $W/pool/accounts/a.b+c@x.test"'
+check "L3 the address pre-fills the login (login as)" 'printf "%s" "$out" | grep -qF "login as         : a.b+c@x.test"'
+out="$(env -u CLAUDE_CODE_OAUTH_TOKEN -u CLAUDE_CONFIG_DIR PATH="$BIN:$PATH" HOME="$W/home" FAKE_KC="$W/kc.json" \
+  CLAUDE_ACCOUNTS_HOME="$W/pool" "$AA" --login a.b+c@x.test --email other@x.test --dry-run --no-browser 2>&1)"; rc=$?
+# #35: an address-named account logs in AS its address; a
+# different --email is refused, and nothing is created for it.
+check "L3 a different --email under an address name is refused (rc=$rc)" '[ "$rc" -ne 0 ] && printf "%s" "$out" | grep -qF "is named by its address, so it logs in as" && [ ! -e "$W/pool/accounts/a.b+c@x.test/manifest.toml" ]'
+out="$(env -u CLAUDE_CODE_OAUTH_TOKEN -u CLAUDE_CONFIG_DIR PATH="$BIN:$PATH" HOME="$W/home" FAKE_KC="$W/kc.json" \
+  CLAUDE_ACCOUNTS_HOME="$W/pool" "$AA" --login a.b+c@x.test --email A.B+C@x.test --dry-run --no-browser 2>&1)"; rc=$?
+check "L3 the same address as --email (any case) is accepted (rc=$rc)" '[ "$rc" -eq 0 ] && printf "%s" "$out" | grep -qF "login as         : A.B+C@x.test"'
+for bad_addr in "A@x.test" "a..b@x.test" "a.@x.test" "a@x" "a@x_y.test" "a b@x.test"; do
+  out="$(env -u CLAUDE_CODE_OAUTH_TOKEN -u CLAUDE_CONFIG_DIR PATH="$BIN:$PATH" HOME="$W/home" FAKE_KC="$W/kc.json" \
+    CLAUDE_ACCOUNTS_HOME="$W/pool" "$AA" --login "$bad_addr" --dry-run --no-browser 2>&1)"; rc=$?
+  check "L3 add-account refuses $bad_addr (rc=$rc)" '[ "$rc" -ne 0 ] && printf "%s" "$out" | grep -qF "invalid label"'
+done
+long_local="$(printf 'a%.0s' $(seq 1 250))"
+out="$(env -u CLAUDE_CODE_OAUTH_TOKEN -u CLAUDE_CONFIG_DIR PATH="$BIN:$PATH" HOME="$W/home" FAKE_KC="$W/kc.json" \
+  CLAUDE_ACCOUNTS_HOME="$W/pool" "$AA" --login "${long_local}@x.test" --dry-run --no-browser 2>&1)"; rc=$?
+check "L3 add-account refuses an address longer than 254 (rc=$rc)" '[ "$rc" -ne 0 ] && printf "%s" "$out" | grep -qF "invalid label"'
 
 echo "──────────────────────────────────────────────"
 echo "claude-accounts identity guard conformance: $PASS passed, $FAIL failed"

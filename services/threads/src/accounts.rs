@@ -1718,6 +1718,72 @@ pub struct SnapshotOutcome {
 /// account anywhere that validates — which is every path that matters.
 pub const RESERVED_SLOT_DIRS: &[&str] = &["backups"];
 
+/// **An account named by its email address** (#35): one name per account,
+/// the address that already identifies it. The same rule as the helper
+/// scripts' (`add-account`, `claude-accounts`): all lowercase,
+/// `local@domain.tld` with `[a-z0-9._%+-]` before the `@` and
+/// `[a-z0-9-]` labels joined by `.` after it, at most 254 characters, the
+/// local part neither starting nor ending with `.`, and no `..`. So it is
+/// one directory under `accounts/` (no `/`, never `.` or `..`) and a single
+/// path segment in `accounts/{account}/…`. A name of `[A-Za-z0-9_-]` (every
+/// account made before this) stays valid.
+pub fn is_address_label(name: &str) -> bool {
+    if name.is_empty() || name.len() > 254 || name.contains("..") {
+        return false;
+    }
+    let Some((local, domain)) = name.split_once('@') else { return false };
+    let local_ok = !local.is_empty()
+        && !local.starts_with('.')
+        && !local.ends_with('.')
+        && local.bytes().all(|b| matches!(b, b'a'..=b'z' | b'0'..=b'9' | b'.' | b'_' | b'%' | b'+' | b'-'));
+    let labels: Vec<&str> = domain.split('.').collect();
+    let domain_ok = labels.len() >= 2
+        && labels
+            .iter()
+            .all(|l| !l.is_empty() && l.bytes().all(|b| matches!(b, b'a'..=b'z' | b'0'..=b'9' | b'-')));
+    local_ok && domain_ok
+}
+
+/// **AN ADDRESS NAME MUST BE THE SLOT'S OWN LOGIN** (#35): why
+/// slot `slot` (named `old`) may not be named `new`, or `None`. A name that
+/// is not an address is not checked here. An address is the account's one
+/// name only if it is the address its login authenticates as, so it is
+/// compared with what the slot RECORDS about its login — its `login-hint`
+/// (the address `add-account` wrote after the login, the one the R12.1
+/// identity check is made against) and the `oauthAccount.emailAddress` that
+/// `claude` wrote into its `.claude.json` at the login — and refused when
+/// either names another address, or when neither names one (the slot's
+/// identity is unknown, and nothing can be checked), with the way out.
+pub fn address_name_refusal(slot: &Path, old: &str, new: &str) -> Option<String> {
+    if !is_address_label(new) {
+        return None;
+    }
+    let hint = recorded_login_address(Some(&slot.to_string_lossy())).and_then(|h| AccountId::parse(&h).ok());
+    let json = std::fs::read_to_string(slot.join(".claude.json"))
+        .ok()
+        .and_then(|t| serde_json::from_str::<serde_json::Value>(&t).ok())
+        .and_then(|v| v["oauthAccount"]["emailAddress"].as_str().map(str::to_string))
+        .and_then(|e| AccountId::parse(&e).ok());
+    let known: Vec<String> = [hint, json].into_iter().flatten().map(|a| a.as_str().to_string()).collect();
+    if known.is_empty() {
+        return Some(format!(
+            "{old:?} cannot be named {new:?}: the slot records no address for its login (no \
+             login-hint, no account in its .claude.json), so whether {new:?} is the account it \
+             signs in as cannot be checked. Log it in under its current name first (the login \
+             records its address), then rename it to that address; or add the account afresh \
+             under its address"
+        ));
+    }
+    if let Some(other) = known.iter().find(|a| a.as_str() != new) {
+        return Some(format!(
+            "{old:?} cannot be named {new:?}: its login is {other:?}. An account named by an \
+             address is named by the address its login authenticates as; rename it to \
+             {other:?}, or log it in as {new:?} first"
+        ));
+    }
+    None
+}
+
 /// Is this directory name reserved for something that is not an account?
 pub fn is_reserved_slot_dir(name: &str) -> bool {
     RESERVED_SLOT_DIRS.contains(&name)
@@ -1729,9 +1795,10 @@ pub fn validate_account_name(name: &str) -> Result<()> {
         && name
             .chars()
             .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_');
-    if !ok {
+    if !ok && !is_address_label(name) {
         return Err(Error::Config(format!(
-            "invalid account name {name:?}: use [A-Za-z0-9_-], max 64 chars"
+            "invalid account name {name:?}: use the account's email address (lowercase), or a \
+             name of [A-Za-z0-9_-], max 64 chars"
         )));
     }
     if is_reserved_slot_dir(name) {
@@ -1769,7 +1836,7 @@ fn clone_keychain_entry(
     account: &str,
 ) -> std::result::Result<(), String> {
     use std::io::Write;
-    use std::process::{Command, Stdio};
+    use std::process::Stdio;
 
     if keychain_override_installed() {
         return Ok(()); // R9.F2h: the fixture holds no real item.
@@ -1779,7 +1846,7 @@ fn clone_keychain_entry(
     // Read the current secret. May pop a GUI keychain prompt on some setups;
     // Claude Code writes items via /usr/bin/security, which normally grants
     // /usr/bin/security silent read access.
-    let out = Command::new("/usr/bin/security")
+    let out = security_command()
         .args([
             "find-generic-password",
             "-a",
@@ -1812,7 +1879,7 @@ fn clone_keychain_entry(
     let cmd = format!(
         "add-generic-password -U -a \"{account}\" -s \"{dest_service}\" -X {hex}\n"
     );
-    let mut child = Command::new("/usr/bin/security")
+    let mut child = security_command()
         .arg("-i")
         .stdin(Stdio::piped())
         .stdout(Stdio::null())
@@ -1834,7 +1901,7 @@ fn clone_keychain_entry(
     }
 
     // Verify (metadata only — no secret retrieval).
-    let verify = Command::new("/usr/bin/security")
+    let verify = security_command()
         .args(["find-generic-password", "-a", account, "-s", dest_service])
         .stdout(Stdio::null())
         .stderr(Stdio::null())
@@ -4029,6 +4096,9 @@ pub fn rename_account(
             new_dir.display()
         )));
     }
+    if let Some(why) = address_name_refusal(&old_dir, old, new) {
+        return Err(Error::Config(why));
+    }
 
     let old_str = old_dir.to_string_lossy().to_string();
     let new_str = new_dir.to_string_lossy().to_string();
@@ -4306,8 +4376,8 @@ fn keychain_override_installed() -> bool {
 #[cfg(target_os = "macos")]
 fn real_keychain_entry_exists(service: &str, account: &str) -> bool {
     real_keychain_tripwire(service);
-    use std::process::{Command, Stdio};
-    Command::new("/usr/bin/security")
+    use std::process::Stdio;
+    security_command()
         .args(["find-generic-password", "-a", account, "-s", service])
         .stdout(Stdio::null())
         .stderr(Stdio::null())
@@ -4329,7 +4399,7 @@ fn real_keychain_entry_exists(_service: &str, _account: &str) -> bool {
 /// live login and nothing in this crate has a reason to delete it.
 #[cfg(target_os = "macos")]
 pub fn delete_keychain_entry(service: &str, account: &str) -> std::result::Result<(), String> {
-    use std::process::{Command, Stdio};
+    use std::process::Stdio;
     if service == KEYCHAIN_SERVICE_BASE {
         return Err(format!(
             "refusing to delete {KEYCHAIN_SERVICE_BASE:?} — that is the machine login"
@@ -4339,7 +4409,7 @@ pub fn delete_keychain_entry(service: &str, account: &str) -> std::result::Resul
         return Ok(()); // R9.F2h: the fixture holds no real item.
     }
     real_keychain_tripwire(service);
-    let status = Command::new("/usr/bin/security")
+    let status = security_command()
         .args(["delete-generic-password", "-a", account, "-s", service])
         .stdout(Stdio::null())
         .stderr(Stdio::null())
@@ -4367,8 +4437,8 @@ pub fn delete_keychain_entry(service: &str, _account: &str) -> std::result::Resu
 #[cfg(target_os = "macos")]
 pub fn read_credential_facts(service: &str, account: &str) -> CredentialFacts {
     real_keychain_tripwire(service);
-    use std::process::{Command, Stdio};
-    let out = Command::new("/usr/bin/security")
+    use std::process::Stdio;
+    let out = security_command()
         .args(["find-generic-password", "-a", account, "-s", service, "-w"])
         .stderr(Stdio::null())
         .output();
@@ -4405,6 +4475,63 @@ pub fn real_keychain_tripwire_armed() -> bool {
             .map(|p| is_cargo_test_harness_exe(&p))
             .unwrap_or(false)
     })
+}
+
+/// **EVERY `security` THE THREADS CODE RUNS** (round 2): `/usr/bin/security`,
+/// except in a process a cargo test harness started — the harness itself, or
+/// a throwaway daemon a test spawned, or one started under a wrapper the
+/// test ran ([`under_test_harness`]) — where it is `/usr/bin/false`, so the
+/// call fails as an absent item or a refused write does and the owner's
+/// real keychain is never reached by a test. (The CON-28 tripwire aborts a
+/// harness process first where it is consulted; a spawned daemon is not a
+/// harness executable, so before this it reached the keychain through
+/// absolute `/usr/bin/security` paths no PATH fake could intercept.)
+pub fn security_command() -> std::process::Command {
+    if under_test_harness() {
+        return std::process::Command::new("/usr/bin/false");
+    }
+    std::process::Command::new("/usr/bin/security")
+}
+
+/// Whether this process, or one of its nearest ancestors (up to six), is a
+/// cargo test harness executable ([`is_cargo_test_harness_exe`]). Read once.
+pub fn under_test_harness() -> bool {
+    static UNDER: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *UNDER.get_or_init(|| real_keychain_tripwire_armed() || ancestors_hold_a_test_harness())
+}
+
+#[cfg(target_os = "macos")]
+fn ancestors_hold_a_test_harness() -> bool {
+    // SAFETY: getppid has no preconditions.
+    let mut pid = unsafe { libc::getppid() };
+    for _ in 0..6 {
+        if pid <= 1 {
+            return false;
+        }
+        let mut buf = vec![0u8; 4096];
+        // SAFETY: the buffer is valid for its length; a failure returns <= 0.
+        let n = unsafe { libc::proc_pidpath(pid, buf.as_mut_ptr().cast(), buf.len() as u32) };
+        if n > 0 {
+            let path = std::path::PathBuf::from(String::from_utf8_lossy(&buf[..n as usize]).into_owned());
+            if is_cargo_test_harness_exe(&path) {
+                return true;
+            }
+        }
+        let mut info: libc::proc_bsdinfo = unsafe { std::mem::zeroed() };
+        let size = std::mem::size_of::<libc::proc_bsdinfo>() as libc::c_int;
+        // SAFETY: `info` is a properly sized, writable proc_bsdinfo.
+        let got = unsafe { libc::proc_pidinfo(pid, libc::PROC_PIDTBSDINFO, 0, (&mut info as *mut libc::proc_bsdinfo).cast(), size) };
+        if got != size {
+            return false;
+        }
+        pid = info.pbi_ppid as libc::pid_t;
+    }
+    false
+}
+
+#[cfg(not(target_os = "macos"))]
+fn ancestors_hold_a_test_harness() -> bool {
+    false
 }
 
 /// The path predicate under [`real_keychain_tripwire_armed`].
@@ -4771,8 +4898,8 @@ impl KeychainMetadata for SecurityKeychainMetadata {
         real_keychain_tripwire(service);
         #[cfg(target_os = "macos")]
         {
-            use std::process::{Command, Stdio};
-            let out = Command::new("/usr/bin/security")
+            use std::process::Stdio;
+            let out = security_command()
                 .args(["find-generic-password", "-a", account, "-s", service])
                 .stdin(Stdio::null())
                 .stderr(Stdio::null())
@@ -5183,8 +5310,8 @@ fn read_keychain_access_token(config_dir: Option<&str>) -> std::result::Result<A
     real_keychain_tripwire(&service);
     #[cfg(target_os = "macos")]
     {
-        use std::process::{Command, Stdio};
-        let out = Command::new("/usr/bin/security")
+        use std::process::Stdio;
+        let out = security_command()
             .args(["find-generic-password", "-a", &keychain_account(), "-s", &service, "-w"])
             .stdin(Stdio::null())
             .stderr(Stdio::null())
@@ -5893,6 +6020,9 @@ mod tests {
             assert!(!super::is_cargo_test_harness_exe(Path::new(p)), "{p}");
         }
         assert!(super::real_keychain_tripwire_armed(), "this unit-test binary is a harness");
+        // Round 2: so is every `security` it would run.
+        assert!(super::under_test_harness());
+        assert_eq!(super::security_command().get_program(), "/usr/bin/false");
     }
 
     use super::*;
@@ -6338,6 +6468,18 @@ mod tests {
         assert!(validate_account_name("").is_err());
         assert!(validate_account_name("../evil").is_err());
         assert!(validate_account_name("a/b").is_err());
+        // #35: an account may be named by its address, and only a clean one.
+        for good in ["ann@example.com", "a.b+tag@mail.example.co", "x_y-z%1@a-b.example"] {
+            assert!(validate_account_name(good).is_ok(), "{good}");
+        }
+        for bad in [
+            "Ann@example.com", "ann@example", "@example.com", "ann@", ".ann@example.com",
+            "ann.@example.com", "a..b@example.com", "ann@example..com", "ann@exa_mple.com",
+            "a@b@example.com", "ann@example.com/x", "../ann@example.com", "ann @example.com",
+        ] {
+            assert!(validate_account_name(bad).is_err(), "{bad}");
+        }
+        assert!(validate_account_name(&format!("{}@example.com", "a".repeat(250))).is_err(), "over 254");
     }
 
     fn fake_source(root: &std::path::Path, explicit_dir: bool) -> CaptureSource {
@@ -7722,6 +7864,12 @@ mod tests {
         reg.save(&data.join("accounts.toml")).unwrap();
         write_live_login_pointer(data, "work").unwrap();
 
+        // #35: this slot records no address, so an address
+        // name cannot be checked and is refused — nothing is moved.
+        let e = rename_account(data, "work", "ann@example.com", KeychainMode::Skip).unwrap_err().to_string();
+        assert!(e.contains("records no address") && e.contains("Log it in under its current name first"), "{e}");
+        assert!(old_dir.is_dir() && !data.join("accounts").join("ann@example.com").exists());
+
         let o = rename_account(data, "work", "work-2", KeychainMode::Skip).unwrap();
         let new_str = o.new_dir.to_string_lossy().to_string();
 
@@ -8054,5 +8202,45 @@ mod tests {
         let never = |_: &str, _: &str| -> bool { panic!("the real query ran under an override") };
         assert!(!keychain_entry_exists_with(Some(&absent), "svc-f2h", "acct", never));
         assert!(keychain_entry_exists_with(Some(&present), "svc-f2h", "acct", never));
+    }
+}
+
+#[cfg(test)]
+mod address_name_tests {
+    use super::*;
+
+    fn slot(hint: Option<&str>, json_email: Option<&str>) -> tempfile::TempDir {
+        let t = tempfile::tempdir().unwrap();
+        if let Some(h) = hint {
+            std::fs::write(t.path().join("login-hint"), format!("{h}\n")).unwrap();
+        }
+        if let Some(e) = json_email {
+            std::fs::write(t.path().join(".claude.json"), serde_json::json!({"oauthAccount": {"emailAddress": e}}).to_string()).unwrap();
+        }
+        t
+    }
+
+    /// #35, as reported: a slot whose login is
+    /// ann@example.com may not be named bob@example.com.
+    #[test]
+    fn an_address_name_must_be_the_slots_own_login() {
+        let s = slot(None, Some("ann@example.com"));
+        let e = address_name_refusal(s.path(), "ann2", "bob@example.com").expect("refused");
+        assert!(e.contains(r#"its login is "ann@example.com""#), "{e}");
+        assert_eq!(address_name_refusal(s.path(), "ann2", "ann@example.com"), None, "its own address is allowed");
+        // The recorded hint counts too, and case does not matter.
+        let s = slot(Some("Ann@Example.com"), None);
+        assert_eq!(address_name_refusal(s.path(), "ann2", "ann@example.com"), None);
+        assert!(address_name_refusal(s.path(), "ann2", "bob@example.com").is_some());
+        // Hint and .claude.json disagree: neither address passes alone.
+        let s = slot(Some("ann@example.com"), Some("bob@example.com"));
+        assert!(address_name_refusal(s.path(), "x", "ann@example.com").is_some());
+        assert!(address_name_refusal(s.path(), "x", "bob@example.com").is_some());
+        // Unknown identity: refused, with the way out.
+        let s = slot(None, None);
+        let e = address_name_refusal(s.path(), "work", "ann@example.com").expect("refused");
+        assert!(e.contains("records no address") && e.contains("Log it in under its current name first"), "{e}");
+        // A name that is not an address is not checked.
+        assert_eq!(address_name_refusal(s.path(), "work", "work-2"), None);
     }
 }

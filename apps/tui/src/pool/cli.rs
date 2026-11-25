@@ -170,9 +170,8 @@ async fn interactive(url: &str) -> anyhow::Result<()> {
                     app.set_note(format!("sending — {}", a.question_as(&app.shown(a.label()))), Tone::Muted);
                     term.draw(|f| view::draw(f, &app))?;
                     match perform(&h, &a).await {
-                        // `perform` names the account by the one masker; a twin
-                        // is told apart here, where the board is (V1-ACCT).
-                        Outcome::Done(n, t) => app.set_note(n.replace(&crate::pool::model::shown_name(a.label()), &app.shown(a.label())), t),
+                        // `perform` names the account by its name, in full (#35).
+                        Outcome::Done(n, t) => app.set_note(n, t),
                         Outcome::NeedsTerminal(argv) if crate::pool::action::local_refusal(std::path::Path::new(&argv[0])).is_some() => {
                             let why = crate::pool::action::local_refusal(std::path::Path::new(&argv[0])).unwrap_or_default();
                             app.set_note(why, Tone::Bad);
