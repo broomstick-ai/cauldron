@@ -35,6 +35,7 @@ mod log_rotation;
 mod mcp_grants;
 mod mcp_reads;
 mod mcp_service;
+mod merge;
 mod own_launch_path;
 mod plugin_launcher;
 mod plugin_marketplace;

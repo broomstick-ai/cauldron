@@ -676,6 +676,11 @@ fn a16_a_busy_refusal_leaves_the_dump_to_the_next_scan() {
 /// end.
 #[test]
 fn a17_a_flood_of_500_dumps_respects_the_caps_and_holds_nothing_after() {
+    // The daily cap is a window per UTC day (`journal::today`): a run that
+    // crosses midnight rightly processes the next day's share too, so the
+    // counts below hold only for a run inside one UTC day.
+    let utc_day = || std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs() / 86_400;
+    let day = utc_day();
     let s = Scratch::new("a17");
     let door = Door::start(&s);
     on(&s, 0, false);
@@ -687,6 +692,10 @@ fn a17_a_flood_of_500_dumps_respects_the_caps_and_holds_nothing_after() {
         let lines = auto_lines(&s);
         ids.iter().all(|id| lines.iter().any(|l| l["dump"] == id.as_str() && l["event"] == "outcome"))
     });
+    if utc_day() != day {
+        eprintln!("a17: the UTC day changed during the run, so the daily window reset and the counts are two days' worth; nothing is asserted");
+        return;
+    }
     let processed = ids.iter().filter(|id| s.dump_state(id)["state"] == "processed").count();
     assert_eq!(processed, 30, "the daily cap of 30 dumps");
     assert_eq!(calls(&script).len(), 30, "one call each, none for a deferred dump");

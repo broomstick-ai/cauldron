@@ -89,6 +89,7 @@ mod mcp;
 // The way from the command line to the `mcp` service (bridge, forwarded
 // import, status).
 mod mcp_door;
+mod merge;
 // `cauldron mcp stdio`: the bridge Claude Code launches.
 mod mcp_bridge;
 // The owner acts' one gate (`env::owner_acts`), on the command line.
@@ -152,6 +153,7 @@ const VERBS: &[(&str, &str)] = &[
     ("rename", "rename a cauldron of this environment (its soup, dumps and MCP grant follow)"),
     ("remove", "put a cauldron away in cauldrons/.removed/ (never deleted; a dry run without --yes)"),
     ("soup", "a cauldron's soup, offline: import | recover | regions | get | nodes | search | region | dump | dumps | dump-get | dump-remove | approve (`soup help`)"),
+    ("merge", "copy one cauldron's soup and dumps into another, all or nothing; a plan first; --undo, --status (`merge help`)"),
     ("link", "name this project's cauldron in a .cauldron marker, so `soup` finds it from here (`link help`; an edge between records is `soup link`)"),
     ("mcp", "the MCP door: grant | revoke | grants | status | stdio (`mcp help`)"),
     ("ripples", "a dump into knowledge-graph records: run | status | eval | on | off | review | approve | reject (`ripples help`)"),
@@ -194,9 +196,24 @@ cauldron — the Cauldron entry point
                                      one; approve a ripple's records (at a terminal,
                                      unless the owner opened it: `owner-acts`).
                                      JSON out, non-zero on refusal (`cauldron soup help`)
+    cauldron merge <source> --into <target> --env <e> [--dry-run] [--allow-large]
+                                     copy one cauldron's soup and dumps into another
+                                     as one all-or-nothing act, printing the plan
+                                     first; nothing the target holds is carried
+                                     twice; the source is left untouched, and its
+                                     grant and automatic setting are not carried;
+                                     a source over 20,000 records needs
+                                     --allow-large
+    cauldron merge --undo <MG-n> --into <target> --env <e>
+                                     put the target back exactly as it was before
+                                     that merge, while nothing but the merge has
+                                     written to it; resumable (`cauldron merge help`)
+    cauldron merge --status <MG-n> --into <target> --env <e>
+                                     where that merge (or its undo) stands
     cauldron owner-acts open|terminal|unset|show [--only <acts>] [--cauldron <c>]
                                      who may act for the owner without a terminal
-                                     (grant, approve, ripples on); default `terminal`
+                                     (grant, approve, ripples on, merge with decisions);
+                                     default `terminal`
                                      (`cauldron owner-acts help`)
     cauldron link <cauldron> --env <e> [--dir <path>] | --show
                                      write a .cauldron marker naming this project's
@@ -416,6 +433,7 @@ fn run() -> Result<i32> {
         }
         Some("ctl") => ctl::verb_ctl(&argv[1..]),
         Some("soup") => soup::verb_soup(&argv[1..]),
+        Some("merge") => merge::verb_merge(&argv[1..]),
         Some("link") => link::verb_link(&argv[1..]),
         Some("mcp") => mcp::verb_mcp(&argv[1..]),
         Some("ripples") => ripples::verb_ripples(&argv[1..]),
@@ -465,7 +483,8 @@ const CONTROL_VERBS: &[&str] =
     &["daemon", "install", "uninstall", "promote", "restart", "start", "stop", "down", "pin", "rollback", "env", "test",
       // `create` writes a cauldron; `soup import` writes its
       // soup, and the soup reads share the guard; `mcp` writes the grants.
-      "create", "rename", "remove", "soup", "mcp",
+      // `merge` writes the target cauldron.
+      "create", "rename", "remove", "soup", "merge", "mcp",
       // `owner-acts` writes the root's owner_acts setting.
       "owner-acts"];
 
@@ -1325,6 +1344,9 @@ fn verb_status(args: &[String]) -> Result<i32> {
                 "review": review::waiting_all(&env, None),
                 // Who may act for the owner without a terminal.
                 "owner_acts": {"summary": owner_acts::summary(&env), "cauldrons": owner_acts::per_cauldron(&env)},
+                // A merge or an undo of one that was cut short, per
+                // cauldron, with the command that finishes it.
+                "merges_cut_short": merge::cut_short_all(&env),
             }))?
         );
     } else {
@@ -1382,6 +1404,16 @@ fn verb_status(args: &[String]) -> Result<i32> {
                 "\nowner acts: root {}{}{var} (`cauldron owner-acts show`)",
                 oa["root"].as_str().unwrap_or("?"),
                 if open.is_empty() { String::new() } else { format!("; open without a terminal: {}", open.join(", ")) },
+            );
+        }
+        for m in merge::cut_short_all(&env) {
+            println!(
+                "\ncauldron {}: {} of merge {} was cut short{}; nothing else of this release writes to it until it is finished: {}",
+                m["cauldron"].as_str().unwrap_or("?"),
+                if m["state"] == "undoing" { "an undo" } else { "the landing" },
+                m["merge"].as_str().unwrap_or("?"),
+                if m["state"] == "undoing" { format!(" ({})", m["step"].as_str().unwrap_or("?")) } else { String::new() },
+                m["finish"].as_str().unwrap_or("?")
             );
         }
         for w in review::waiting_all(&env, None) {

@@ -60,6 +60,21 @@ recorded in [CHANGELOG.md](CHANGELOG.md).
   bash and reports where it stalled; an account is named by its email
   address; and text can be selected and copied on every surface of the
   terminal interface.
+- **0.1.19: merging cauldrons** (issue #9): `cauldron merge <source> --into
+  <target>`, a copy of one cauldron's soup and dumps into another, all or
+  nothing, with the plan printed first, ids re-minted, look-alike regions
+  kept and flagged, nothing carried twice (so a source merged again brings
+  only what it gained), each decision carried only as far as the source's
+  own history records it (carrying decisions is the owner act `merge`), a
+  default ceiling of 20,000 records or the time they take (`--allow-large`
+  above it; a source past the soup's per-statement fuel is refused), and a
+  resumable `--undo` that never removes a write the merge did not make,
+  with `soup recover --abandon-undo` when it cannot be finished.
+  Not yet: a merge that changes a record it does not carry (an edge a
+  record already in the target gained since is listed, not added), an
+  undo that keeps later writes, and a merge in more than one write (so a
+  very large or edge-dense source neither holds the target for minutes nor
+  is refused).
 
 ## Next
 
@@ -86,7 +101,6 @@ recorded in [CHANGELOG.md](CHANGELOG.md).
   write to the graph, and a stronger one reasons over issues,
   contradictions and work items to harmonize them. Until then a ripple's
   first call is Opus.
-- **Merging cauldrons** (issue #9).
 - **A summary page in the face** (issue #11).
 - **Comparisons with two other tools**, as input for design: octomind's
   cross-session learning (issue #12) and Prospero's headless harness

@@ -993,6 +993,34 @@ pub enum IdPrefixRule {
 /// carried one; at the landing (post-flip) a mint is serial too, but a
 /// part that relied on this at the landing passed the same judgment at the
 /// door first.
+/// One part's edges and whole-field writes, indexed by node: what the
+/// required-at-mint checks read for each minted node.
+struct PartIndex<'a> {
+    /// (source, kind) -> each add (`true`) or remove (`false`) of an edge of
+    /// that kind leaving that source, toward its far end, in delta order.
+    edges: std::collections::HashMap<(&'a NodeId, &'a str), Vec<(bool, &'a QualifiedNodeId)>>,
+    /// Node -> the top-level fields its CREATE carries or the part SETs whole.
+    fields: std::collections::HashMap<&'a NodeId, BTreeSet<&'a str>>,
+}
+
+impl<'a> PartIndex<'a> {
+    fn of(part: &'a CompiledPart) -> PartIndex<'a> {
+        let mut ix = PartIndex { edges: Default::default(), fields: Default::default() };
+        for d in &part.deltas {
+            match d {
+                Delta::AddEdge { src, kind, dst, .. } => ix.edges.entry((src, kind.as_str())).or_default().push((true, dst)),
+                Delta::RemoveEdge { src, kind, dst } => ix.edges.entry((src, kind.as_str())).or_default().push((false, dst)),
+                Delta::CreateNode { id, fields, .. } => ix.fields.entry(id).or_default().extend(fields.keys().map(String::as_str)),
+                Delta::SetField { node, path, .. } if path.len() == 1 => {
+                    ix.fields.entry(node).or_default().insert(path[0].as_str());
+                }
+                _ => {}
+            }
+        }
+        ix
+    }
+}
+
 fn carried_in_part(tdef: &NodeTypeDef, id: &NodeId) -> bool {
     tdef.id_prefix.is_some() && crate::delta::provisional_prefix(id).is_none()
 }
@@ -1409,6 +1437,12 @@ impl PoolGrammar {
                 .map_err(|f| fail(f))?;
         }
 
+        // The part's edges by (source, kind) and its whole-field writes by
+        // node, indexed once: the checks below ask about every minted node,
+        // and a scan of the whole part per node would grow with the square
+        // of the part.
+        let ix = PartIndex::of(part);
+
         // REQUIRED-AT-MINT EDGES: a part-level fact, judged after
         // every delta has passed on its own — the minted node and the edges
         // leaving it are in THIS part or they are nowhere, because an edge
@@ -1434,7 +1468,7 @@ impl PoolGrammar {
                 // `exec::projected_occupancy` — and the survivors counted.
                 // The minted node has no edges outside this part, so the
                 // set starts empty.
-                let found = Self::surviving_edges(part, id, kname);
+                let found = Self::surviving_edges(&ix, id, kname);
                 if found < *minimum {
                     // THE IMPORT ISSUE: a CARRIED
                     // node whose v5 source never had this edge — it says so
@@ -1454,7 +1488,7 @@ impl PoolGrammar {
                 }
             }
             if !tdef.required_at_mint_any_of.is_empty() {
-                if let Some(f) = Self::one_of_shortfall(part, id, node_type, tdef) {
+                if let Some(f) = Self::one_of_shortfall(&ix, id, node_type, tdef) {
                     // The one-of's import issue: declared under ANY of its
                     // alternatives' edge kinds, and waived only when the
                     // part carries NO edge of ANY alternative's kinds.
@@ -1464,7 +1498,7 @@ impl PoolGrammar {
                         .flat_map(|a| a.edges.keys().map(String::as_str))
                         .collect();
                     let waived = carried_in_part(tdef, id)
-                        && kinds.iter().all(|k| Self::surviving_edges(part, id, k) == 0)
+                        && kinds.iter().all(|k| Self::surviving_edges(&ix, id, k) == 0)
                         && kinds.iter().any(|k| declares_never_had(part, id, k));
                     if !waived {
                         return Err(fail(f));
@@ -1479,17 +1513,13 @@ impl PoolGrammar {
     /// removes applied in delta order over a set keyed on the target (the
     /// closes the add-then-remove hole). The minted node has no
     /// edges outside the part, so the set starts empty.
-    fn surviving_edges(part: &CompiledPart, id: &NodeId, kind: &str) -> u32 {
+    fn surviving_edges(ix: &PartIndex<'_>, id: &NodeId, kind: &str) -> u32 {
         let mut survivors: BTreeSet<&QualifiedNodeId> = BTreeSet::new();
-        for d in &part.deltas {
-            match d {
-                Delta::AddEdge { src, kind: k, dst, .. } if src == id && k == kind => {
-                    survivors.insert(dst);
-                }
-                Delta::RemoveEdge { src, kind: k, dst } if src == id && k == kind => {
-                    survivors.remove(dst);
-                }
-                _ => {}
+        for (add, dst) in ix.edges.get(&(id, kind)).map(Vec::as_slice).unwrap_or(&[]) {
+            if *add {
+                survivors.insert(dst);
+            } else {
+                survivors.remove(dst);
             }
         }
         u32::try_from(survivors.len()).unwrap_or(u32::MAX)
@@ -1499,26 +1529,20 @@ impl PoolGrammar {
     /// minted by `part`: `None` when some alternative holds in full, else the
     /// fault of the closest alternative (rule on [`MintAlternative`]).
     fn one_of_shortfall(
-        part: &CompiledPart,
+        ix: &PartIndex<'_>,
         id: &NodeId,
         node_type: &str,
         tdef: &NodeTypeDef,
     ) -> Option<GrammarFault> {
         // A field is present when the CREATE carries it or the same part
         // SETs it whole; no delta removes a field, so presence only grows.
-        let has_field = |f: &str| {
-            part.deltas.iter().any(|d| match d {
-                Delta::CreateNode { id: n, fields, .. } => n == id && fields.contains_key(f),
-                Delta::SetField { node, path, .. } => node == id && path.len() == 1 && path[0] == f,
-                _ => false,
-            })
-        };
+        let has_field = |f: &str| ix.fields.get(id).is_some_and(|fs| fs.contains(f));
         let mut best: Option<(u64, GrammarFault)> = None;
         for alt in &tdef.required_at_mint_any_of {
             let mut progress: u64 = 0;
             let mut shortfall: Option<GrammarFault> = None;
             for (kname, minimum) in &alt.edges {
-                let found = Self::surviving_edges(part, id, kname);
+                let found = Self::surviving_edges(ix, id, kname);
                 progress += u64::from(found.min(*minimum));
                 if found < *minimum && shortfall.is_none() {
                     shortfall = Some(GrammarFault::required_edge(node_type, kname, *minimum, found));

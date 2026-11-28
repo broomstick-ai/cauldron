@@ -3,7 +3,8 @@
 //! group first, read through connections that cannot write.
 //!
 //! A record is in the queue when its creating transaction's initiator is of
-//! class `ripple` and it carries neither review flag (`meta.approved`,
+//! class `ripple` (or a merge carried it from a cauldron where a ripple wrote
+//! it: `crate::provenance`) and it carries neither review flag (`meta.approved`,
 //! `meta.rejected`; [`crate::reads::approved`], [`crate::reads::rejected`]).
 //! A superseded one stays in the queue, marked `superseded_by`: replacing a
 //! record does not review it, and a queue that hid it would let a later
@@ -160,6 +161,63 @@ pub fn refuse_ripple_provenance(records: &[Value]) -> Result<()> {
     Ok(())
 }
 
+/// **Does `value` carry a merge's provenance?** `meta.merged_from` says a
+/// merge carried a record from another cauldron, and who wrote it there
+/// (`crate::provenance`), so only `cauldron merge` writes it: a key named
+/// `merged_from` (in any casing, or dotted as `meta.merged_from`) anywhere
+/// in what a write carries (a record, a cite, a link) is refused, down to 16
+/// levels of nesting (deeper is not looked into: what a merge reads is the
+/// record's own `meta.merged_from`, at the second level, so a key buried
+/// deeper is never taken for provenance). Answers the key's path as it is
+/// spelled.
+pub fn merge_provenance(value: &Value) -> Option<String> {
+    fn inside(v: &Value, at: &str, depth: usize) -> Option<String> {
+        if depth > 16 {
+            return None;
+        }
+        match v {
+            Value::Object(o) => {
+                for (k, x) in o {
+                    let n = norm(k);
+                    let bare = n.strip_prefix("meta.").unwrap_or(&n);
+                    let here = if at.is_empty() { k.clone() } else { format!("{at}.{k}") };
+                    if bare == "merged_from" {
+                        return Some(here);
+                    }
+                    if let Some(found) = inside(x, &here, depth + 1) {
+                        return Some(found);
+                    }
+                }
+                None
+            }
+            Value::Array(a) => a.iter().enumerate().find_map(|(i, x)| inside(x, &format!("{at}[{i}]"), depth + 1)),
+            _ => None,
+        }
+    }
+    inside(value, "", 0)
+}
+
+/// **Refuse `what` (a cite, a link) when it carries `merged_from`**
+/// ([`merge_provenance`]), naming the key. Nothing is written.
+pub fn refuse_merge_provenance(what: &str, value: &Value) -> Result<()> {
+    if let Some(k) = merge_provenance(value) {
+        return Err(Error::new(
+            Code::Usage,
+            format!(
+                "{what} carries `{k}` (refused: {MERGED_FROM}): where a record came from by a merge is written only by `cauldron \
+                 merge`, which reads it off the cauldron it merges from, never by a write. Leave the key out (it is in the \
+                 write-back strip list, schema/soup/write-back.json). Nothing was written"
+            ),
+        )
+        .with_detail(json!({"refused": MERGED_FROM, "key": k})));
+    }
+    Ok(())
+}
+
+/// The reason a write carrying `merged_from` is refused, as its detail
+/// names it.
+pub const MERGED_FROM: &str = "merged_from";
+
 /// **THE one check every write path makes** before anything is judged or
 /// sent: refuse, naming the record and the key, a batch in which any record
 /// carries a review flag ([`review_flag`]). The record import
@@ -168,6 +226,18 @@ pub fn refuse_ripple_provenance(records: &[Value]) -> Result<()> {
 /// only the owner's decision writes the flags.
 pub fn refuse_review_flags(records: &[Value]) -> Result<()> {
     for (i, r) in records.iter().enumerate() {
+        if let Some(k) = merge_provenance(r) {
+            let label = r.get("id").and_then(Value::as_str).map(str::to_string).unwrap_or_else(|| format!("#{i}"));
+            return Err(Error::new(
+                Code::Usage,
+                format!(
+                    "record `{label}` carries `{k}` (refused: {MERGED_FROM}): where a record came from by a merge is written only \
+                     by `cauldron merge`, which reads it off the cauldron it merges from, never by a record write. Leave the key \
+                     out (it is in the write-back strip list, schema/soup/write-back.json). Nothing was written"
+                ),
+            )
+            .with_detail(json!({"refused": MERGED_FROM, "record": label, "key": k})));
+        }
         if let Some(k) = review_flag(r) {
             let label = r.get("id").and_then(Value::as_str).map(str::to_string).unwrap_or_else(|| format!("#{i}"));
             refuse!(
@@ -281,7 +351,11 @@ pub fn written(t: &Target) -> Result<Vec<Written>> {
     let c = &t.cauldron;
     let pool = PoolName::new(DEFAULT_POOL);
     let txs = ripple_txs(c)?;
-    if txs.is_empty() {
+    // A ripple's record a merge carried here is the ripple's still
+    // (`crate::provenance`): its run and time are the ones it was written
+    // with where it came from, its order the merge's.
+    let merges = crate::provenance::merge_txs(&c.soup())?;
+    if txs.is_empty() && merges.is_empty() {
         return Ok(vec![]);
     }
     let file = Pool::path_in(&c.soup(), &pool);
@@ -292,7 +366,18 @@ pub fn written(t: &Target) -> Result<Vec<Written>> {
     for ty in &types {
         for n in snap.nodes_of(ty, None).map_err(store)? {
             let Some(h) = snap.created_tx(&n.id).map_err(store)? else { continue };
-            let Some(tx) = txs.get(&h.to_hex()) else { continue };
+            let carried;
+            let meta = n.fields.get("meta").map(|f| f.value.clone()).unwrap_or(Value::Null);
+            // A merge's record (its ripple part lands under a ripple
+            // initiator too): the run that wrote it where it came from.
+            let tx = match (merges.get(&h.to_hex()).zip(crate::provenance::merged_ripple(&meta)), txs.get(&h.to_hex())) {
+                (Some((m, (run, _at))), _) => {
+                    carried = RippleTx { run, at: m.at.clone(), order: m.order };
+                    &carried
+                }
+                (None, Some(tx)) => tx,
+                (None, None) => continue,
+            };
             let text = |k: &str| n.fields.get(k).and_then(|f| f.value.as_str()).unwrap_or("").to_string();
             let mut regions = Vec::new();
             let mut edges = Vec::new();
@@ -986,4 +1071,19 @@ mod tests {
         assert_eq!(serde_json::from_str::<Value>(&j).unwrap(), v, "the same JSON");
         assert!(!j.chars().any(|c| c != '\n' && hidden(c)), "{j}");
     }
+    #[test]
+    fn merge_provenance_is_found_wherever_a_write_spells_it() {
+        for (v, at) in [
+            (json!({"meta": {"merged_from": {}}}), "meta.merged_from"),
+            (json!({"MERGED_FROM": 1}), "MERGED_FROM"),
+            (json!({"meta": {"meta.merged_from": {}}}), "meta.meta.merged_from"),
+            (json!({"meta": {"cites": [{"kind": "url", "merged_from": {}}]}}), "meta.cites[0].merged_from"),
+            (json!({"edges": [{"kind": "shows", "cite": {"merged_from": {}}}]}), "edges[0].cite.merged_from"),
+        ] {
+            assert_eq!(merge_provenance(&v).as_deref(), Some(at), "{v}");
+        }
+        assert_eq!(merge_provenance(&json!({"meta": {"imported_from": {"id": "X"}}, "body": "merged_from"})), None);
+        assert!(refuse_merge_provenance("`cite`", &json!({"kind": "url", "Merged_From": {}})).unwrap_err().message.contains("cauldron merge"));
+    }
+
 }

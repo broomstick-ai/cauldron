@@ -634,6 +634,7 @@ fn answer(
                 ));
             }
         }
+        door.refuse_while_merging(&t.cauldron.name, "decision")?;
         let d = Decider::cli(by);
         let who = crate::writer::Who { client: "cli".into(), thread: d.thread.clone(), session: None };
         door.writers.with(

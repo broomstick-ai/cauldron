@@ -177,6 +177,17 @@ pub(crate) fn send(e: &env::Environment, cauldron: &str, mut body: Value, by: en
         env::owner_acts::By::Tty => DECIDE,
         env::owner_acts::By::Agent => ADECIDE,
     };
+    body["cauldron"] = Value::String(cauldron.to_string());
+    send_owner(e, verb, "the verb this cauldron decides records with", body, std::time::Duration::from_secs(5))
+}
+
+/// **One owner verb to the running `mcp` service** (`DECIDE`, `ADECIDE`,
+/// `MERGE`, `AMERGE`), after the caller asked the owner acts' gate:
+/// refused, with nothing sent, when the service is older than this command
+/// line or does not say its version, and when it does not know `verb`.
+/// `what` says what the verb is for, in the refusal. The answer is waited
+/// for up to `wait`.
+pub(crate) fn send_owner(e: &env::Environment, verb: &str, what: &str, body: Value, wait: std::time::Duration) -> Result<Value> {
     let found = match crate::mcp_door::find(e) {
         Ok(f) => f,
         Err(why) => bail!(
@@ -198,10 +209,9 @@ pub(crate) fn send(e: &env::Environment, cauldron: &str, mut body: Value, by: en
     let key_path = soup_door::grants::store_dir(e).join("approve.secret");
     let key = std::fs::read_to_string(&key_path)
         .with_context(|| format!("reading the approval key {} (the `mcp` service mints it when it starts)", key_path.display()))?;
-    body["cauldron"] = Value::String(cauldron.to_string());
-    let answer = crate::mcp_door::seam_ask(&found.seam, &format!("{verb} {} {body}", key.trim()))?;
+    let answer = crate::mcp_door::seam_ask_within(&found.seam, &format!("{verb} {} {body}", key.trim()), wait)?;
     if answer.starts_with("ERR unknown request") {
-        return Err(old_service(e, service.as_deref(), &format!("the running `mcp` service does not know `{verb}`, the verb this cauldron decides records with (it answered `{answer}`)"), true));
+        return Err(old_service(e, service.as_deref(), &format!("the running `mcp` service does not know `{verb}`, {what} (it answered `{answer}`)"), true));
     }
     serde_json::from_str(&answer).with_context(|| format!("the mcp service answered `{answer}`"))
 }

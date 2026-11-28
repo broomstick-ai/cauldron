@@ -6,8 +6,8 @@
 //! get-then-put round trip never needs a hand-made strip list:
 //!
 //! - [`IGNORED`]: keys a READ ADDS that are not stored on the record
-//!   (`superseded_by`, `unreviewed`, a top-level `rejected: true`, a
-//!   cluster's `claims` list). Every record write (`soup_put`, `cauldron
+//!   (`superseded_by`, `unreviewed`, a top-level `rejected: true`, a merged
+//!   record's `merged`, a cluster's `claims` list). Every record write (`soup_put`, `cauldron
 //!   soup import`) drops them before judging and names each one it dropped
 //!   in the answer's `ignored` list. Dropping one changes nothing a write
 //!   could have done: none of them is a stored field.
@@ -16,7 +16,10 @@
 //!   the owner's decision, which since `owner_acts` may be an agent's where
 //!   the owner opened it, through `soup_approve` / `soup_reject`, never a
 //!   record write),
-//!   `meta.ripple` (the door's, on a ripple's records only) and an `id`
+//!   `meta.ripple` (the door's, on a ripple's records only; the one other
+//!   writer is `cauldron merge`, which keeps it on a ripple's record whose
+//!   decision it carries), `meta.merged_from` (a merge's, on the records it
+//!   carries) and an `id`
 //!   the soup already holds (a write only creates). These stay refused,
 //!   by name, so nothing about who reviewed or who wrote a record can be
 //!   written by a session; a client strips them itself, from this list.
@@ -56,6 +59,11 @@ pub const IGNORED: &[Key] = &[
         why: "the top-level `rejected: true` reads add to a record the owner rejected (the flag itself is `meta.rejected`, which is refused); dropped only when it is `true`, as reads write it",
     },
     Key {
+        key: "merged",
+        on: "*",
+        why: "computed by reads from the transaction that created the record: the merge that carried it there and where it came from (`cauldron merge`); the record's own provenance is `meta.merged_from`, which is refused",
+    },
+    Key {
         key: "claims",
         on: "cluster",
         why: "computed by reads from the cluster's `claims` edges, with each region's handle; a claim is written as a `claims` edge or with soup_claim",
@@ -78,6 +86,11 @@ pub const REFUSED: &[Key] = &[
         key: "meta.ripple",
         on: "*",
         why: "ripple provenance, stamped by the door on the records a ripple writes and only there (refused: ripple_provenance)",
+    },
+    Key {
+        key: "meta.merged_from",
+        on: "*",
+        why: "merge provenance (where a record came from, who wrote it there, the decision a merge carried), written only by `cauldron merge` on the records it carries; refused in any casing, dotted or nested, anywhere a record write, a link, a claim, a cite or a ripple's batch carries it (refused: merged_from)",
     },
     Key {
         key: "id",

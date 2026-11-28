@@ -20,6 +20,12 @@
 //!   a terminal where the owner's `owner_acts` choice opens `approve`, and
 //!   recorded as an agent's (`by: "agent"`); a verb of its own so that an
 //!   older service refuses it instead of recording it as a person's;
+//! - `MERGE`: a merge into a cauldron this service holds, from `cauldron
+//!   merge` at a terminal, with the same approval key (`crate::merge`);
+//! - `AMERGE`: the same, from `cauldron merge` without a terminal where the
+//!   owner's persisted owner_acts setting opens `merge`, recorded as an
+//!   agent's (`by: "agent"`); a verb of its own for the same reason as
+//!   `ADECIDE`;
 //! - `APPROVE`: the earlier command line's approval by id (`{cauldron, ids,
 //!   unapprove?}` and nothing else), kept for a command line older than
 //!   `DECIDE`, with the same key.
@@ -72,6 +78,8 @@ impl Service for McpSeam {
         Verb::new("RCHECK", McpSeam::v_rcheck),
         Verb::new("APPROVE", McpSeam::v_approve),
         Verb::new("DECIDE", McpSeam::v_decide),
+        Verb::new("MERGE", McpSeam::v_merge),
+        Verb::new("AMERGE", McpSeam::v_amerge),
         Verb::new("ADECIDE", McpSeam::v_adecide),
         Verb::new("RDUMPS", McpSeam::v_rdumps),
         Verb::new("RNOTE", McpSeam::v_rnote),
@@ -176,6 +184,16 @@ impl McpSeam {
 
     fn v_adecide(&self, c: &mut Conn<'_>, rest: &str) -> Result<()> {
         c.line(&crate::approve::answer_adecide(&self.state, &self.approve, rest))?;
+        Ok(())
+    }
+
+    fn v_merge(&self, c: &mut Conn<'_>, rest: &str) -> Result<()> {
+        c.line(&crate::merge::answer(&self.state, &self.approve, rest))?;
+        Ok(())
+    }
+
+    fn v_amerge(&self, c: &mut Conn<'_>, rest: &str) -> Result<()> {
+        c.line(&crate::merge::answer_agent(&self.state, &self.approve, rest))?;
         Ok(())
     }
 }

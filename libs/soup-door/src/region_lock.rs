@@ -395,15 +395,30 @@ mod tests {
         env::region_locks::save(&t.cauldron, &table).unwrap();
     }
 
+    /// The row held by `run` past its `until` now, as the clock passing it
+    /// would leave it (no sleep: the test does not race the clock).
+    fn expire(t: &crate::Target, run: &str) {
+        let mut table = env::region_locks::load(&t.cauldron).unwrap();
+        let past = env::region_locks::now_ms() - 1;
+        for r in table.rows.iter_mut().filter(|r| r.holder.run == run) {
+            r.until_ms = past;
+            r.until = env::region_locks::stamp(past);
+        }
+        env::region_locks::save(&t.cauldron, &table).unwrap();
+    }
+
     /// The import the CLI makes on its own is held by the same rows as the
     /// door: into the held region refused `region_locked`, naming the holder
     /// and until when, with nothing written; into the other region it lands;
-    /// once the row expires, the held region takes it too.
+    /// once the row expires, the held region takes it too. The row is held
+    /// for ten minutes and then expired by moving its `until` into the past,
+    /// so no step depends on how long the others take (it held for 1.5 s and
+    /// slept 1.6 s, and failed whenever the machine was loaded).
     #[test]
     fn a_direct_import_into_a_held_region_is_refused_and_one_elsewhere_lands() {
         let (_tmp, t) = target("import");
         let before = crate::reads::search(&t, "fresh idea", &Default::default()).unwrap()["results"].as_array().unwrap().len();
-        hold(&t, "run-held", "R-1", 1_500);
+        hold(&t, "run-held", "R-1", 600_000);
         let err = land(&t, &idea("a fresh idea for the schema", "R-1")).unwrap_err();
         assert_eq!(err.code, Code::RegionLocked, "{err:?}");
         assert!(err.message.contains("region `R-1` is locked by a ripple (run run-held, drawing records from dump DM-1)"), "{}", err.message);
@@ -423,7 +438,7 @@ mod tests {
         assert_eq!(e.code, Code::RegionLocked);
         assert!(e.message.contains("`rename` acts on the whole of cauldron `kb`"), "{}", e.message);
         // Expired: nothing holds it.
-        std::thread::sleep(std::time::Duration::from_millis(1_600));
+        expire(&t, "run-held");
         land(&t, &idea("a fresh idea after the lock", "R-1")).expect("an expired row holds nothing");
         refuse_held(&t.cauldron, "rename").expect("nothing held");
         assert!(crate::reads::regions(&t, &Default::default()).unwrap()["regions"][0].get("locked").is_none());

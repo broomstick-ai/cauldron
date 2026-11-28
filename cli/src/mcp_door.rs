@@ -83,9 +83,15 @@ pub fn find(e: &Environment) -> std::result::Result<Found, Absent> {
 
 /// One line to the service's seam, one line back.
 pub fn seam_ask(addr: &str, line: &str) -> Result<String> {
+    seam_ask_within(addr, line, Duration::from_secs(5))
+}
+
+/// [`seam_ask`], waiting up to `wait` for the answer (a merge takes longer
+/// than a decision).
+pub fn seam_ask_within(addr: &str, line: &str, wait: Duration) -> Result<String> {
     let sa: SocketAddr = addr.parse().with_context(|| format!("the seam address `{addr}`"))?;
     let s = env::egress::connect_tcp("mcp seam", &sa, Duration::from_secs(2))?;
-    s.set_read_timeout(Some(Duration::from_secs(5)))?;
+    s.set_read_timeout(Some(wait))?;
     let mut w = s.try_clone()?;
     w.write_all(format!("{line}\n").as_bytes())?;
     w.flush()?;

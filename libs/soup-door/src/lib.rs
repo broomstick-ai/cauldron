@@ -9,7 +9,10 @@
 //! store of which cauldrons the owner opened to the MCP door; [`catalogue`]
 //! is the list of tools that door answers. [`ripple`] holds what a ripple
 //! may write and finds what a ripple run already wrote; [`review`] is the
-//! queue of the records a ripple wrote that nobody has reviewed yet.
+//! queue of the records a ripple wrote that nobody has reviewed yet;
+//! [`merge`] copies one cauldron's soup and dumps into another, and
+//! [`provenance`] says which records a ripple wrote, here or where a merge
+//! carried them from.
 //!
 //! Every answer is a [`serde_json::Value`] (the JSON the CLI prints, byte
 //! for byte) or an [`Error`] with a stable [`Code`] and the message a person
@@ -30,9 +33,12 @@ pub mod import;
 pub mod notes;
 pub mod lock;
 pub mod marker;
+pub mod merge;
+pub mod provenance;
 pub mod reads;
 pub mod recover;
 pub mod region_lock;
+pub mod snapshot;
 pub mod review;
 pub mod ripple;
 pub mod target;

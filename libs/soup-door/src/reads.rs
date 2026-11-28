@@ -26,6 +26,11 @@
 //! exactly as before. `nodes` and `search` take [`ReadOpts::review`]:
 //! `pending` keeps only unreviewed records, `reviewed` only the rest.
 //!
+//! A record a merge carried from another cauldron (`crate::merge`) where a
+//! ripple wrote it and nobody had decided it is unreviewed here too
+//! (`crate::provenance`): a merge never reviews a record. `get` says of
+//! every merged record where it came from (`merged`).
+//!
 //! # Rejected records
 //!
 //! A record a ripple wrote that the owner REJECTED (`meta.rejected` set, by
@@ -251,6 +256,7 @@ pub fn regions(t: &Target, o: &ReadOpts) -> Result<Value> {
     if let Err(err) = &locks {
         doc["region_locks_error"] = json!(format!("{err:#}"));
     }
+    crate::merge::note_pending(&t.cauldron, &mut doc);
     cut.report(&mut doc);
     Ok(doc)
 }
@@ -264,7 +270,7 @@ pub fn get(t: &Target, ids: &[String], o: &ReadOpts) -> Result<Value> {
     let pool = o.pool_name();
     let handle = read_pool(c, &pool)?;
     let snap = handle.snapshot().map_err(store)?;
-    let ripples = ripple_commits(c)?;
+    let writers = crate::provenance::Writers::of(c)?;
     let mut records = Vec::new();
     let mut missing = Vec::new();
     let mut cut = Cut::new(o.max_chars);
@@ -303,11 +309,21 @@ pub fn get(t: &Target, ids: &[String], o: &ReadOpts) -> Result<Value> {
         if !by.is_empty() {
             rec.insert("superseded_by".into(), json!(by));
         }
-        let created = snap.created_tx(&n.id).map_err(store)?;
+        let created = snap.created_tx(&n.id).map_err(store)?.map(|h| h.to_hex());
+        let meta = n.fields.get("meta").map(|f| f.value.clone()).unwrap_or(Value::Null);
         if rejected(&n.fields) {
             rec.insert("rejected".into(), json!(true));
-        } else if created.is_some_and(|h| ripples.contains(&h.to_hex())) && !approved(&n.fields) {
+        } else if writers.ripple_written(created.as_deref(), &meta) && !approved(&n.fields) {
             rec.insert("unreviewed".into(), json!(true));
+        }
+        // A record a merge carried says so, and from where
+        // (`crate::merge`); its `meta.merged_from` has the rest.
+        if let Some(m) = writers.merge_of(created.as_deref(), &meta) {
+            let from = &meta["merged_from"];
+            rec.insert(
+                "merged".into(),
+                json!({"merge": m.merge, "at": m.at, "from": {"cauldron": from["cauldron"], "cauldron_id": from["cauldron_id"], "id": from["id"]}}),
+            );
         }
         records.push(Value::Object(rec));
     }
@@ -322,6 +338,7 @@ pub fn get(t: &Target, ids: &[String], o: &ReadOpts) -> Result<Value> {
     if !missing.is_empty() {
         doc["missing"] = json!(missing);
     }
+    crate::merge::note_pending(&t.cauldron, &mut doc);
     cut.report(&mut doc);
     Ok(doc)
 }
@@ -365,7 +382,7 @@ struct Entry {
 fn catalog(c: &env::Cauldron, pool: &PoolName, snap: &spine::pool::Snapshot<'_>, types: &[String]) -> Result<Vec<Entry>> {
     let order = spine::offline::commit_order(&c.soup())
         .map_err(|err| store(format!("reading cauldron `{}`'s commit order: {err}", c.name)))?;
-    let ripples = ripple_commits(c)?;
+    let writers = crate::provenance::Writers::of(c)?;
     let mut out = Vec::new();
     for t in types {
         for n in snap.nodes_of(t, None).map_err(store)? {
@@ -379,7 +396,8 @@ fn catalog(c: &env::Cauldron, pool: &PoolName, snap: &spine::pool::Snapshot<'_>,
             let created = snap.created_tx(&n.id).map_err(store)?;
             let superseded_by = superseded_by(snap, pool, &n.id)?;
             let rejected = rejected(&n.fields);
-            let unreviewed = !rejected && created.as_ref().is_some_and(|h| ripples.contains(&h.to_hex())) && !approved(&n.fields);
+            let meta = n.fields.get("meta").map(|f| f.value.clone()).unwrap_or(Value::Null);
+            let unreviewed = !rejected && writers.ripple_written(created.as_ref().map(|h| h.to_hex()).as_deref(), &meta) && !approved(&n.fields);
             out.push(Entry {
                 id: n.id.0.clone(),
                 node_type: n.node_type.clone(),
@@ -568,6 +586,7 @@ pub fn nodes(t: &Target, o: &ReadOpts) -> Result<Value> {
     if more > 0 {
         doc["more"] = json!(more);
     }
+    crate::merge::note_pending(&t.cauldron, &mut doc);
     cut.report(&mut doc);
     Ok(doc)
 }
@@ -748,6 +767,7 @@ pub fn search(t: &Target, query: &str, o: &ReadOpts) -> Result<Value> {
     if more > 0 {
         doc["more"] = json!(more);
     }
+    crate::merge::note_pending(&t.cauldron, &mut doc);
     cut.report(&mut doc);
     Ok(doc)
 }
@@ -861,6 +881,7 @@ pub fn region(t: &Target, id: &str, o: &ReadOpts) -> Result<Value> {
     if more > 0 {
         doc["more"] = json!(more);
     }
+    crate::merge::note_pending(&t.cauldron, &mut doc);
     cut.report(&mut doc);
     Ok(doc)
 }

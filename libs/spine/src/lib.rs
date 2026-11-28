@@ -117,6 +117,10 @@ pub struct Cauldron {
     /// The guard asked about every commit's regions
     /// ([`regions::RegionGuard`]), when the writer installed one.
     region_guard: Option<std::sync::Arc<dyn regions::RegionGuard>>,
+    /// THE HOLD this handle owns ([`Cauldron::hold`]), if any, and whether
+    /// its next commit lifts it.
+    hold: Option<String>,
+    lift_hold: bool,
 }
 
 impl Cauldron {
@@ -201,6 +205,8 @@ impl Cauldron {
             recovered_at_open: RecoveryReport::default(),
             tranches_at_open: TranchePassReport::default(),
             region_guard: None,
+            hold: None,
+            lift_hold: false,
         })
     }
 
@@ -499,6 +505,8 @@ impl Cauldron {
             recovered_at_open: RecoveryReport::default(),
             tranches_at_open: TranchePassReport::default(),
             region_guard: None,
+            hold: None,
+            lift_hold: false,
         })
     }
 
@@ -698,6 +706,71 @@ impl Cauldron {
         self.spine()?.halted()
     }
 
+    // ---- THE HOLD: one writer's work that spans several commits ----
+
+    /// **Hold the cauldron** for a piece of work that lands as more than one
+    /// commit (a merge: its dumps, then its records): the spine enters its
+    /// durable halted state with `reason` as the halted reason, so every
+    /// other writer is refused, by every version of this crate since the
+    /// halt existed, naming `reason`, in this process and in any other, and
+    /// across a crash. This handle's own writes pass the hold (it owns the
+    /// reason); [`Cauldron::lift_hold_at_next_commit`] makes the commit that
+    /// ends the work lift it in the same transaction as its decided flip,
+    /// and [`Cauldron::release_hold`] lifts it outright. Reads are not held.
+    ///
+    /// Refused (`Usage`) when the spine is already halted for another
+    /// reason; a hold already set with exactly `reason` (a crash left it) is
+    /// adopted.
+    pub fn hold(&mut self, reason: &str) -> Result<()> {
+        if reason.trim().is_empty() {
+            return Err(SpineError::usage("a hold needs a reason that says whose it is and what ends it"));
+        }
+        let mut spine = SpineDb::open(&self.root.join(SPINE_FILE))?;
+        spine.set_busy_timeout(self.config.busy_timeout)?;
+        if !spine.set_hold(reason)? {
+            let other = spine.halted_raw()?.unwrap_or_default();
+            return Err(SpineError::usage(format!("the spine is already halted for another reason ({other}); it is not held over that")));
+        }
+        self.hold = Some(reason.to_string());
+        self.lift_hold = false;
+        Ok(())
+    }
+
+    /// **Adopt a hold a crash left**: when the spine is halted with exactly
+    /// `reason`, this handle owns it from now on (its writes pass it).
+    /// Answers whether it was held so; a spine halted for another reason is
+    /// left as it is and answers `false`.
+    pub fn adopt_hold(&mut self, reason: &str) -> Result<bool> {
+        let spine = self.spine()?;
+        if spine.halted_raw()?.as_deref() == Some(reason) {
+            self.hold = Some(reason.to_string());
+            self.lift_hold = false;
+            return Ok(true);
+        }
+        Ok(false)
+    }
+
+    /// The hold this handle owns, if any.
+    pub fn held(&self) -> Option<&str> {
+        self.hold.as_deref()
+    }
+
+    /// The next commit through this handle lifts its hold, in the same
+    /// transaction as that commit's decided flip.
+    pub fn lift_hold_at_next_commit(&mut self) {
+        self.lift_hold = self.hold.is_some();
+    }
+
+    /// **Lift this handle's hold** now (when it is still set). Answers
+    /// whether it was set.
+    pub fn release_hold(&mut self) -> Result<bool> {
+        let Some(reason) = self.hold.take() else { return Ok(false) };
+        self.lift_hold = false;
+        let mut spine = SpineDb::open(&self.root.join(SPINE_FILE))?;
+        spine.set_busy_timeout(self.config.busy_timeout)?;
+        spine.clear_hold(&reason)
+    }
+
     /// This cauldron's configuration (config, never constants).
     pub fn config(&self) -> &SpineConfig {
         &self.config
@@ -742,7 +815,7 @@ impl Cauldron {
     pub(crate) fn spine(&self) -> Result<SpineDb> {
         let spine = SpineDb::open(&self.root.join(SPINE_FILE))?;
         spine.set_busy_timeout(self.config.busy_timeout)?;
-        Ok(spine)
+        Ok(spine.with_hold(self.hold.clone(), self.lift_hold))
     }
 
     /// A fresh handle on one pool file, refusing by name a pool this cauldron

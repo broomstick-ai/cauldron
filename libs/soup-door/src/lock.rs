@@ -7,6 +7,7 @@ use std::fs::File;
 use env::seams::{self, Table};
 use env::Environment;
 
+use serde_json::json;
 use crate::{refuse, Code, Error, Result};
 
 /// The file a writer of a soup locks EXCLUSIVE for as long as it writes:
@@ -40,24 +41,66 @@ pub fn take_writer_lock(c: &env::Cauldron, verb: &str) -> Result<File> {
         .mode(env::private::FILE_MODE)
         .open(&path)
         .map_err(|err| Error::caused(Code::Store, format!("opening {}", path.display()), &err))?;
+    // The command a refusal names: `cauldron merge` for a merge (and its
+    // undo), `cauldron soup <verb>` for the rest.
+    let command = if verb == crate::merge::VERB { "cauldron merge".to_string() } else { format!("cauldron soup {verb}") };
     match fh.try_lock() {
-        Ok(()) => Ok(fh),
+        Ok(()) => {
+            // A merge that was cut short owns the soup until `cauldron soup
+            // recover` finishes it (`crate::merge`): every other writer is
+            // refused, so the merge lands whole.
+            if verb != "recover" && verb != crate::merge::VERB {
+                crate::merge::refuse_pending(c, &format!("run `cauldron soup {verb}`"))?;
+            }
+            Ok(fh)
+        }
         Err(std::fs::TryLockError::WouldBlock) => match held_by_service(c) {
+            Some(pid) if verb == "recover" => refuse!(
+                Code::Locked,
+                "REFUSED: the `{MCP_SERVICE}` service (pid {pid}) holds cauldron `{}`'s soup, so `{command}` did not touch it. \
+                 Nothing was written. The service settles an interrupted import when it opens the soup, but it does not \
+                 finish a merge or an undo of one that was cut short (a release before merging does not know them at all): \
+                 close the cauldron to it (`cauldron mcp revoke {} --env {}`, granting it again afterwards) or stop it \
+                 (`cauldron --env {} stop mcp`), then run recover. See `cauldron mcp status`.",
+                c.name,
+                c.name,
+                c.env,
+                c.env
+            ),
             Some(pid) => refuse!(
                 Code::Locked,
                 "REFUSED: the `{MCP_SERVICE}` service (pid {pid}) holds cauldron `{}`'s soup: while the cauldron is \
                  granted to the MCP door, that service is its one writer, and it recovers the soup itself when it \
-                 opens it. So `cauldron soup {verb}` did not touch it. Nothing was written. See `cauldron mcp status`.",
+                 opens it. So `{command}` did not touch it. Nothing was written. See `cauldron mcp status`.",
                 c.name
             ),
-            None => refuse!(
-                Code::Locked,
-                "REFUSED: another `cauldron soup import` or `cauldron soup recover` is writing to cauldron `{}`'s soup \
-                 right now ({} is held), so `cauldron soup {verb}` did not touch it. Nothing was written. Try again \
-                 when it has finished.",
-                c.name,
-                path.display()
-            ),
+            None => {
+                // A merge landing holds the lock for its whole length: say
+                // so, and when to try again.
+                let landing = crate::merge::pending(c).ok().flatten();
+                let retry: u64 = if landing.is_some() { 15 } else { 5 };
+                let what = match &landing {
+                    Some((id, j)) => format!(
+                        "merge {id} is landing into cauldron `{}`'s soup (began {}; a large merge can take minutes)",
+                        c.name,
+                        j["at"].as_str().or(j["began"].as_str()).unwrap_or("just now")
+                    ),
+                    None => format!(
+                        "another writer (`cauldron soup import`, `cauldron soup recover` or `cauldron merge`) is writing to cauldron \
+                         `{}`'s soup right now",
+                        c.name
+                    ),
+                };
+                Err(Error::new(
+                    Code::Locked,
+                    format!(
+                        "REFUSED: {what} ({} is held), so `{command}` did not touch it. Nothing was written. Try again when it has \
+                         finished (in about {retry} s: `retry_after_secs`).",
+                        path.display()
+                    ),
+                )
+                .with_detail(json!({"refused": "locked", "retry_after_secs": retry, "merge_landing": landing.map(|(id, _)| id)})))
+            }
         },
         Err(std::fs::TryLockError::Error(err)) => Err(Error::caused(Code::Store, format!("locking {}", path.display()), &err)),
     }

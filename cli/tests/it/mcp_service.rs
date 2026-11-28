@@ -1617,9 +1617,23 @@ fn rv3_an_older_mcp_service_is_never_sent_a_decision_it_would_misread() {
     assert_eq!(s2.queue(&[])["counts"]["unreviewed"], 1);
 }
 
-/// **The same, against the real binary of the release before `DECIDE`**,
-/// when one is named in `CAULDRON_OLD_MCP` (it is not built here): reject
-/// changes nothing and says why.
+/// **The same, against a real older binary**, when one is named in
+/// `CAULDRON_OLD_MCP` (it is not built here): reject changes nothing and
+/// says why. Which refusal is right depends on the binary, so it is asked
+/// first (its `serverInfo.version`, and whether its seam knows `DECIDE`):
+///
+/// - a version older than this build's: the version-skew check refuses
+///   before anything is sent ("Nothing was sent and nothing was written");
+/// - this build's version, without `DECIDE` (a build from before it): it is
+///   sent `DECIDE`, answers `ERR unknown request`, and nothing is decided;
+/// - this build's version WITH `DECIDE` (a build of this very release, such
+///   as the published one before the version is bumped): it is not older,
+///   and it decides as this build does; rv4 then checks only that the one
+///   reject lands as the owner's, and says it checked nothing older.
+///
+/// (Run with 0.1.16 at 0.1.17 it took the first branch; with 0.1.17 at
+/// 0.1.17 it used to expect a refusal from a service that is not older and
+/// failed: the input broke the test's premise, not the code.)
 #[test]
 fn rv4_the_real_older_mcp_service_rejects_nothing_and_says_why() {
     let Some(old) = std::env::var_os("CAULDRON_OLD_MCP") else {
@@ -1632,6 +1646,22 @@ fn rv4_the_real_older_mcp_service_rejects_nothing_and_says_why() {
     s.grant("kb");
     let svc = Service::start_bin(&s, Path::new(&old));
     let pids = [svc.pid()];
+    let version = svc.server_version(&s);
+    let parts = |v: &str| v.split('.').map(|p| p.parse::<u64>().unwrap_or(0)).collect::<Vec<_>>();
+    let older = parts(&version) < parts(env!("CARGO_PKG_VERSION"));
+    let knows_decide = !s.seam_line("DECIDE").starts_with("ERR unknown request");
+    if !older && knows_decide {
+        eprintln!(
+            "rv4: CAULDRON_OLD_MCP is cauldron {version}, this build's version, and knows DECIDE: it is not an older service, so \
+             nothing older is checked; only that it decides as this build does"
+        );
+        let o = s.on_tty(&["ripples", "reject", a[0].as_str(), "--env", "dev", "--cauldron", "kb", "--reason", "spam"], &pids, &[], None);
+        assert_eq!(o.rc, 0, "{}", o.out);
+        assert!(o.out.contains("\"outcome\": \"rejected\""), "{}", o.out);
+        assert_eq!(s.queue(&[])["counts"]["rejected"], json!(1));
+        svc.stop();
+        return;
+    }
     for args in [
         vec!["ripples", "reject", a[0].as_str(), "--env", "dev", "--cauldron", "kb", "--reason", "spam"],
         vec!["ripples", "reject", a[1].as_str(), "--env", "dev", "--cauldron", "kb", "--unreject"],
@@ -1640,12 +1670,37 @@ fn rv4_the_real_older_mcp_service_rejects_nothing_and_says_why() {
         let o = s.on_tty(&args, &pids, &[], None);
         println!("rv4 {}:\n{}", args.join(" "), o.out);
         assert_ne!(o.rc, 0, "{args:?}: {}", o.out);
-        assert!(o.out.contains("REFUSED:") && (o.out.contains("nothing was decided") || o.out.contains("nothing was written")) && o.out.contains("must be upgraded"), "{args:?}: {}", o.out);
+        assert!(o.out.contains("REFUSED:") && o.out.contains("must be upgraded"), "{args:?}: {}", o.out);
+        if older {
+            assert!(o.out.contains(&format!("is cauldron {version}, older than this cauldron")) && o.out.contains("Nothing was sent and nothing was written"), "{args:?}: {}", o.out);
+        } else {
+            assert!(o.out.contains("does not know `DECIDE`") && o.out.contains("nothing was decided"), "{args:?}: {}", o.out);
+        }
     }
     let q = s.queue(&[]);
     assert_eq!((q["counts"]["unreviewed"].clone(), q["counts"]["approved"].clone(), q["counts"]["rejected"].clone()), (json!(2), json!(0), json!(0)), "{q}");
     assert!(!s.calls().iter().any(|l| l["tool"] == "soup_approve"), "{:?}", s.calls());
     svc.stop();
+}
+
+impl Service {
+    /// The version the service says it is (`initialize`, `serverInfo.version`).
+    fn server_version(&self, s: &Scratch) -> String {
+        let body = json!({"jsonrpc": "2.0", "id": 0, "method": "initialize", "params": {"protocolVersion": "2025-06-18", "capabilities": {}, "clientInfo": {"name": "test", "version": "0"}}}).to_string();
+        let mut c = TcpStream::connect(self.door).unwrap();
+        write!(
+            c,
+            "POST /mcp HTTP/1.1\r\nHost: 127.0.0.1:{}\r\nAuthorization: Bearer {}\r\nAccept: application/json, text/event-stream\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+            self.door.port(),
+            s.secret(),
+            body.len()
+        )
+        .unwrap();
+        let mut raw = String::new();
+        c.read_to_string(&mut raw).unwrap();
+        let v: Value = serde_json::from_str(raw.split_once("\r\n\r\n").unwrap().1).unwrap();
+        v["result"]["serverInfo"]["version"].as_str().unwrap_or("").to_string()
+    }
 }
 
 /// **The version the older-service tests were last checked against.**
@@ -1660,7 +1715,7 @@ fn rv4_the_real_older_mcp_service_rejects_nothing_and_says_why() {
 /// whenever the workspace version is not this constant, so every release
 /// bump makes someone check rv3 and rv4 against the new relation and move
 /// it.
-const OLDER_SERVICE_TESTS_CHECKED_AT: &str = "0.1.18";
+const OLDER_SERVICE_TESTS_CHECKED_AT: &str = "0.1.19";
 
 #[test]
 fn rv0_the_older_service_tests_were_checked_against_the_workspace_version() {
@@ -2574,7 +2629,8 @@ fn oa2_the_setting_persists_and_a_cauldrons_choice_wins_both_ways() {
     let o = s.run_with(&["owner-acts", "open", "--only", "approve", "--cauldron", "k2", "--env", "dev"], &[], &[("CAULDRON_OWNER_ACTS", "approve")]);
     assert_eq!(o.rc, 0, "{}", o.err);
     let v = o.json();
-    assert_eq!((v["setting"].clone(), v["copied_from_root"].clone()), (json!("open"), json!("grant,ripples")), "{v}");
+    // (`open` with no --only opens every act, `merge` included.)
+    assert_eq!((v["setting"].clone(), v["copied_from_root"].clone()), (json!("open"), json!("grant,ripples,merge")), "{v}");
     assert!(v["copied_note"].as_str().unwrap().contains("no longer reaches it"), "{v}");
     let o = s.run_with(&["owner-acts", "open", "--only", "approve", "--cauldron", "k2", "--env", "dev"], &[], &[("CAULDRON_OWNER_ACTS", "approve")]);
     assert!(o.json().get("copied_from_root").is_none(), "its own choice now: nothing copied: {}", o.out);

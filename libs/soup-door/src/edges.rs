@@ -606,6 +606,29 @@ pub enum CiteOp {
     Remove(Which),
 }
 
+/// **Was record `id` of the soup's workspace pool written by a ripple?**
+/// Then its `dump` citation is its review trail (the review queue groups
+/// by it, `--dump` decides by it), and [`cite`] neither adds nor removes
+/// one. A ripple's record a merge carried counts too, whichever of the
+/// merge's writes it landed in (one whose decision was carried lands in the
+/// agent-class main write): the same test the reads make. A cluster, or a
+/// record the soup does not hold: no.
+pub fn ripple_written(c: &env::Cauldron, id: &str) -> Result<bool> {
+    if id.starts_with("CL-") {
+        return Ok(false);
+    }
+    let p = Pool::open_read_only(&Pool::path_in(&c.soup(), &ws())).map_err(|err| store(format!("reading cauldron `{}`'s soup: {err}", c.name)))?;
+    let snap = p.snapshot().map_err(store)?;
+    let Some(node) = snap.node(&NodeId(id.to_string())).map_err(store)? else { return Ok(false) };
+    match snap.created_tx(&NodeId(id.to_string())).map_err(store)? {
+        Some(h) => {
+            let meta = node.fields.get("meta").map(|f| f.value.clone()).unwrap_or(Value::Null);
+            Ok(crate::provenance::Writers::of(c)?.ripple_written(Some(&h.to_hex()), &meta))
+        }
+        None => Ok(false),
+    }
+}
+
 /// **Add or remove one entry of a record's `meta.cites`**, by one `SET` of
 /// that key and no other. Idempotent: adding a citation the record already
 /// carries answers `already-cited`, removing one that matches none answers
@@ -628,14 +651,13 @@ pub fn cite(handle: &spine::Cauldron, t: &Target, id: &str, op: &CiteOp, w: &Wri
     };
     // A record a ripple wrote: its `dump` citation is part of its review
     // trail (the review queue groups by it, and `--dump` approves and
-    // rejects by it), so it is neither added nor removed here.
-    let ripple_written = !is_cluster
-        && match snap.created_tx(&NodeId(id.to_string())).map_err(store)? {
-            Some(h) => crate::review::ripple_txs(c)?.contains_key(&h.to_hex()),
-            None => false,
-        };
+    // rejects by it), so it is neither added nor removed here. A ripple's
+    // record a merge carried counts too, whichever of the merge's writes it
+    // landed in (one whose decision was carried lands in the agent-class
+    // main write): the same test the reads make.
     drop(snap);
     drop(p);
+    let ripple_written = !is_cluster && ripple_written(c, id)?;
     let provenance = |entry: &Value| -> Result<()> {
         if ripple_written && entry.get("kind").and_then(Value::as_str) == Some(DUMP_CITE) {
             return Err(Error::new(
@@ -661,6 +683,7 @@ pub fn cite(handle: &spine::Cauldron, t: &Target, id: &str, op: &CiteOp, w: &Wri
                     .with_detail(json!({"reason": "bad-cite"})));
             }
             provenance(v)?;
+            crate::review::refuse_merge_provenance("the citation", v)?;
             if cites.contains(v) {
                 doc["outcome"] = json!("already-cited");
                 doc["written"] = json!(false);

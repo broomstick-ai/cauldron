@@ -1419,6 +1419,55 @@ fn a_halted_spine_refuses_every_write_by_name_and_stays_readable() {
     assert_eq!(docs_titled(&c, "after"), 0);
 }
 
+/// THE HOLD: a writer's work over several commits holds the cauldron in the
+/// durable halted state under its own reason. Every other handle (here, and
+/// any other process or older binary, which read the same halt) is refused
+/// naming it; the holder's own commits pass; the commit that ends the work
+/// lifts it in the same transaction as its decided flip; a crash leaves it
+/// for the next holder to adopt by its exact reason; and a spine halted for
+/// another reason is never held over.
+// RED: lifting the hold anywhere but inside the decided flip's transaction,
+// or letting a handle that does not own the reason pass it.
+#[test]
+fn a_hold_refuses_everyone_but_its_holder_and_ends_with_its_last_commit() {
+    let _env = env_shared();
+    let name = "held";
+    let mut holder = cauldron(name);
+    let other = Cauldron::open(&c_root(name), SpineConfig::default()).expect("a second handle");
+    create_doc(&holder, "before the hold");
+    let reason = "merge MG-1 into this cauldron is pending (a test hold)";
+    holder.hold(reason).expect("hold");
+    assert_eq!(holder.held(), Some(reason));
+    assert_eq!(other.halted().expect("halted"), Some(reason.to_string()), "everyone else reads it as the halt");
+    assert_eq!(holder.halted().expect("halted"), None, "its holder writes through it");
+    match other.submit(commit(r#"CREATE (d: fixture-alpha/doc { title: "theirs", state: "draft" })"#, &[])) {
+        Err(SpineError::Halted { reason: r }) => assert_eq!(r, reason),
+        other => panic!("expected Halted, got {other:?}"),
+    }
+    create_doc(&holder, "the holder's first");
+    assert!(holder.halted().expect("halted").is_none() && other.halted().expect("halted").is_some(), "an ordinary commit keeps it");
+    // Another hold is not set over it.
+    let mut third = Cauldron::open(&c_root(name), SpineConfig::default()).expect("a third handle");
+    assert!(matches!(third.hold("someone else's"), Err(SpineError::Usage { .. })));
+    // A crash leaves it: a new handle adopts it by its exact reason only.
+    assert!(!third.adopt_hold("not the reason").expect("adopt"));
+    assert!(third.adopt_hold(reason).expect("adopt"));
+    drop(holder);
+    third.lift_hold_at_next_commit();
+    create_doc(&third, "the holder's last");
+    assert_eq!(other.halted().expect("halted"), None, "the last commit lifted it");
+    create_doc(&other, "after the hold");
+    // Released outright, and only its own.
+    let mut h = Cauldron::open(&c_root(name), SpineConfig::default()).expect("handle");
+    h.hold("a second hold").expect("hold");
+    assert!(h.release_hold().expect("release"));
+    assert_eq!(other.halted().expect("halted"), None);
+    for t in ["before the hold", "the holder's first", "the holder's last", "after the hold"] {
+        assert_eq!(docs_titled(&other, t), 1, "{t}");
+    }
+    assert_eq!(docs_titled(&other, "theirs"), 0);
+}
+
 /// QUIESCE: no new commit begins; in-flight commits finish; `resume` lifts
 /// it (the backup hook, so a whole-cauldron backup never contains a
 /// half-landed commit).

@@ -19,6 +19,9 @@
 //!   `ADECIDE`, from the first two without one where the owner opened
 //!   `approve`; the earlier `APPROVE`; and the tools `soup_approve` /
 //!   `soup_reject`, where the owner opened it);
+//! - [`merge`]: a merge into a cauldron this service holds (the `MERGE`
+//!   seam verb, from `cauldron merge` at a terminal, and `AMERGE`, without
+//!   one where the owner's persisted setting opens `merge`; no MCP tool);
 //! - [`ripple`]: the seam verbs only the `ripples` service may call;
 //! - [`dumps`]: the dump tools' store, held per cauldron, and the side
 //!   effects hook a landed dump calls;
@@ -35,6 +38,7 @@ pub mod daemon;
 pub mod door;
 pub mod dumps;
 pub mod http;
+pub mod merge;
 pub mod seam;
 pub mod secret;
 pub mod ripple;

@@ -1087,28 +1087,19 @@ impl<'a> DryStatement<'a> {
     }
 }
 
-/// The COMMIT half: the accepted set, as ONE statement, through
-/// the ONE door, under ONE attempt identifier. The commit never meets a
-/// refusable item — every item in it already passed the same validator.
-fn land(
-    cauldron: &Cauldron,
-    plan: &MigrationPlan,
-    items: &[SourceItem],
-    mut manifest: Manifest,
-) -> Result<(Manifest, Landing)> {
-    let landable: BTreeSet<&str> = manifest
-        .landable()
-        .into_iter()
-        .map(|e| e.source_id.as_str())
-        .collect();
-    if landable.is_empty() {
-        return Ok((manifest, Landing::NothingAccepted));
-    }
+/// The landing statement of `items`' landable set (`landable`): existing
+/// destination nodes bound by MATCH and pinned by EXPECT, every node minted,
+/// every edge created, and every minted identifier RETURNed. Answers the
+/// statement, its bindings, and each landable node's (source identity,
+/// binding) in binding order; `None` when nothing would be minted (an empty
+/// set, or existing nodes only).
+type LandingStatement<'a> = (String, Bindings, Vec<(&'a str, String)>);
 
+fn landing_statement<'a>(items: &'a [SourceItem], landable: &BTreeSet<&str>) -> Result<Option<LandingStatement<'a>>> {
     // Bindings are assigned in SOURCE ORDER over the landable nodes; the edge
     // clauses then reference them. `binding_of` is the only place a source
     // identity meets a statement binding.
-    let mut binding_of: BTreeMap<&str, String> = BTreeMap::new();
+    let mut binding_of: BTreeMap<&'a str, String> = BTreeMap::new();
     let mut clauses: Vec<String> = Vec::new();
     let mut params = Bindings::new();
     // Existing destination nodes are bound by MATCH and pinned by EXPECT,
@@ -1170,9 +1161,9 @@ fn land(
     // namespace and cannot collide with a binding name.
     if clauses.is_empty() {
         // Only existing nodes were landable: binding them mutates nothing.
-        return Ok((manifest, Landing::NothingAccepted));
+        return Ok(None);
     }
-    let mut ordered: Vec<(&str, &String)> = binding_of.iter().map(|(k, v)| (*k, v)).collect();
+    let mut ordered: Vec<(&'a str, String)> = binding_of.into_iter().collect();
     ordered.sort_by_key(|(_, b)| binding_ordinal(b));
     let returns: Vec<String> = ordered.iter().map(|(_, b)| format!("{b}.id")).collect();
     if !returns.is_empty() {
@@ -1184,6 +1175,87 @@ fn land(
         .chain(clauses)
         .collect::<Vec<_>>()
         .join("\n");
+    Ok(Some((statement, params, ordered)))
+}
+
+/// **THE WHOLE BATCH AT ONCE**: every item accepted, as ONE statement through
+/// the door's VALIDATE mode, the landing statement itself with the mode
+/// flipped. When it validates, the landing it predicts is exactly the one
+/// [`land`] would submit, so the per-item judgement ([`dry_run`], one
+/// validate per node and per edge, each on fresh connections) has nothing
+/// to add, and the manifest is every item imported, complete. `None` when
+/// anything refuses it: the caller then judges item by item, which says
+/// which item and why. Nothing lands, no row is written.
+pub fn validate_whole(cauldron: &Cauldron, plan: &MigrationPlan, items: &[SourceItem]) -> Result<Option<Manifest>> {
+    let Some(manifest) = accepted_manifest(cauldron, plan, items)? else { return Ok(None) };
+    let all: BTreeSet<&str> = items.iter().map(SourceItem::source_id).collect();
+    let Some((statement, params, _)) = landing_statement(items, &all)? else {
+        return Ok(None);
+    };
+    match validate(cauldron, plan, &statement, params) {
+        Ok(()) => Ok(Some(manifest)),
+        // Refused, or anything else: the item-by-item judgement says what.
+        Err(_) => Ok(None),
+    }
+}
+
+/// The manifest that says every item is imported, complete: what
+/// [`validate_whole`] answers when the whole batch validates. `None` when
+/// an item names a pool this cauldron does not have.
+pub(crate) fn accepted_manifest(cauldron: &Cauldron, plan: &MigrationPlan, items: &[SourceItem]) -> Result<Option<Manifest>> {
+    plan.check()?;
+    check_source_identities(items)?;
+    let mut entries = Vec::with_capacity(items.len());
+    for item in items {
+        let (pool, shape) = match item {
+            SourceItem::Node(n) => (n.pool.clone(), ImportShape::Node { node_type: n.node_type.clone() }),
+            SourceItem::Edge(e) => (e.pool.clone(), edge_shape(e)),
+            SourceItem::Existing(x) => {
+                (x.pool.clone(), ImportShape::Existing { node_type: x.node_type.clone(), id: x.id.clone() })
+            }
+        };
+        if cauldron.grammar(&pool).is_none() {
+            return Ok(None);
+        }
+        entries.push(ManifestEntry {
+            source_id: item.source_id().to_string(),
+            disposition: Disposition::Imported {
+                pool,
+                shape,
+                resolution: Resolution::Complete,
+                transforms: item.transforms().to_vec(),
+            },
+        });
+    }
+    Ok(Some(Manifest {
+        initiator: plan.initiator.clone(),
+        instrument: plan.instrument.clone(),
+        source_count: items.len(),
+        entries,
+        attempt: None,
+    }))
+}
+
+/// The COMMIT half: the accepted set, as ONE statement, through
+/// the ONE door, under ONE attempt identifier. The commit never meets a
+/// refusable item — every item in it already passed the same validator.
+fn land(
+    cauldron: &Cauldron,
+    plan: &MigrationPlan,
+    items: &[SourceItem],
+    mut manifest: Manifest,
+) -> Result<(Manifest, Landing)> {
+    let landable: BTreeSet<&str> = manifest
+        .landable()
+        .into_iter()
+        .map(|e| e.source_id.as_str())
+        .collect();
+    if landable.is_empty() {
+        return Ok((manifest, Landing::NothingAccepted));
+    }
+    let Some((statement, params, ordered)) = landing_statement(items, &landable)? else {
+        return Ok((manifest, Landing::NothingAccepted));
+    };
 
     let envelope = Envelope {
         statement,
@@ -1206,6 +1278,9 @@ fn land(
         }) => {
             let mut landed = BTreeMap::new();
             let row = returned.0.first();
+            // Each source identity's item, looked up once (not searched for
+            // per landed node: a batch of thousands would search thousands).
+            let item_of: BTreeMap<&str, &SourceItem> = items.iter().map(|i| (i.source_id(), i)).collect();
             for (source_id, binding) in &ordered {
                 let column = format!("{binding}.id");
                 let id = row
@@ -1217,11 +1292,7 @@ fn land(
                              `{column}`"
                         ))
                     })?;
-                let pool = match items
-                    .iter()
-                    .find(|i| i.source_id() == *source_id)
-                    .expect("a landed binding comes from a source item")
-                {
+                let pool = match *item_of.get(source_id).expect("a landed binding comes from a source item") {
                     SourceItem::Node(n) => n.pool.clone(),
                     SourceItem::Edge(e) => e.pool.clone(),
                     SourceItem::Existing(x) => x.pool.clone(),

@@ -180,6 +180,31 @@ pub struct Door {
     audit: Arc<Audit>,
     /// The installed version label (`$CAULDRON_VERSION`).
     label: String,
+    /// The cauldrons a merge is landing into through this service now: when
+    /// it began, and how long it was estimated to take. A session's write to
+    /// one is refused at once ([`BUSY`], with `retry_after_secs`) rather
+    /// than queued behind the merge for as long as it runs.
+    merging: std::sync::Mutex<std::collections::HashMap<String, (std::time::Instant, u64)>>,
+}
+
+/// The refusal code of a write to a cauldron a merge is landing into
+/// through this service: try again after `detail.retry_after_secs`.
+pub const BUSY: &str = "busy";
+
+/// **A merge landing into a cauldron through this service**: while it
+/// lives, every write a session sends to that cauldron is refused at once
+/// ([`Door::refuse_while_merging`]); dropped, they go on.
+pub struct MergeMark {
+    door: Arc<Door>,
+    cauldron: String,
+}
+
+impl Drop for MergeMark {
+    fn drop(&mut self) {
+        if let Ok(mut m) = self.door.merging.lock() {
+            m.remove(&self.cauldron);
+        }
+    }
 }
 
 impl Door {
@@ -198,6 +223,7 @@ impl Door {
             env,
             secret,
             audit,
+            merging: std::sync::Mutex::new(std::collections::HashMap::new()),
             label,
         })
     }
@@ -354,6 +380,35 @@ impl Door {
         Ok((Target { env: self.env.clone(), cauldron, resolved_from: Some(from.clone()) }, grant, from))
     }
 
+    /// Mark `cauldron` as a merge's until the mark is dropped; `estimate`
+    /// is the merge's estimated seconds.
+    pub fn begin_merge(self: &Arc<Self>, cauldron: &str, estimate: u64) -> MergeMark {
+        if let Ok(mut m) = self.merging.lock() {
+            m.insert(cauldron.to_string(), (std::time::Instant::now(), estimate));
+        }
+        MergeMark { door: self.clone(), cauldron: cauldron.to_string() }
+    }
+
+    /// **Refused at once while a merge lands into `cauldron` through this
+    /// service** ([`BUSY`]): `what` names the write. `retry_after_secs` is
+    /// what is left of the merge's estimate (at least 1 second; the
+    /// estimate again once it is overrun).
+    pub fn refuse_while_merging(&self, cauldron: &str, what: &str) -> Result<(), Refusal> {
+        let Some((began, est)) = self.merging.lock().ok().and_then(|m| m.get(cauldron).copied()) else { return Ok(()) };
+        let ran = began.elapsed().as_secs();
+        let left = if est > ran { est - ran } else { est.clamp(1, 30) };
+        let retry = left.max(1);
+        Err(Refusal::with_detail(
+            BUSY,
+            format!(
+                "cauldron `{cauldron}` is taking a merge through this service (running {ran} s, estimated {est} s), and it takes no \
+                 other write until the merge is done, so this {what} was refused at once rather than held for the length of the \
+                 merge. Nothing was written. Try again in about {retry} s (`retry_after_secs`); reads go on meanwhile."
+            ),
+            json!({"retry_after_secs": retry, "merge_running_secs": ran, "merge_estimated_secs": est}),
+        ))
+    }
+
     fn call_scoped(
         &self,
         tool: &Tool,
@@ -364,10 +419,23 @@ impl Door {
         named: &mut Option<String>,
         hangup: &Hangup,
     ) -> Result<Value, Refusal> {
+        // `merged_from` is a merge's alone: no write tool takes it, in any
+        // form (flat or listed links, unlinks, a citation added or matched,
+        // a claim, a dump's cite), and the refusal names it as the
+        // write-back list does (soup_put names the record that carries it).
+        if matches!(tool.name, "soup_link" | "soup_unlink" | "soup_cite" | "soup_claim" | "soup_dump") {
+            soup_door::review::refuse_merge_provenance(&format!("{}'s arguments", tool.name), &Value::Object(args.clone())).map_err(refusal)?;
+        }
         let mut a = Args { tool: tool.name, m: args };
         let explicit = a.str("cauldron")?;
         let scopes: Vec<Scope> = std::iter::once(scope).chain(also).collect();
         let (t, grant, from) = self.target(ctx, explicit.as_deref(), &scopes, named)?;
+        if matches!(
+            tool.name,
+            "soup_put" | "soup_link" | "soup_unlink" | "soup_cite" | "soup_claim" | "soup_dump" | "soup_dump_session" | "soup_approve" | "soup_reject"
+        ) {
+            self.refuse_while_merging(&t.cauldron.name, tool.name)?;
+        }
         let mut doc = match tool.name {
             "soup_status" => {
                 let mc = a.count("max_chars")?;
@@ -518,6 +586,7 @@ impl Door {
                     if !c.get("kind").and_then(Value::as_str).is_some_and(|k| !k.is_empty()) {
                         return Err(usage("`cite` must be an object with a `kind` (meta.cites form), e.g. {\"kind\":\"url\",\"url\":\"…\"}"));
                     }
+                    soup_door::review::refuse_merge_provenance("`cite`", c).map_err(refusal)?;
                 }
                 let put = writer::Put {
                     records,
@@ -808,6 +877,7 @@ fn owner_act_open(&self, t: &Target) -> Result<(), Refusal> {
         let title = a.str("title")?;
         a.done()?;
         let (t, _, _) = self.target(ctx, explicit.as_deref(), &[Scope::Dump], named)?;
+        self.refuse_while_merging(&t.cauldron.name, "soup_dump_session")?;
         let Some(session_id) = session_id.filter(|s| soup_door::dumps::session_id_ok(s)) else {
             return Err(usage("soup_dump_session needs the session's id (`session_id`, a plain id, never a path)"));
         };

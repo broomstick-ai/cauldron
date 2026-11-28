@@ -440,3 +440,83 @@ fn w7_the_service_makes_a_cauldron_it_opens_private() {
     }
     assert_eq!(svc.stop().code(), Some(0));
 }
+
+/// **`merged_from` is refused on every write path**: where a record came
+/// from by a merge is written only by `cauldron merge`. A session's
+/// `soup_put` (in the record, any casing, dotted or nested, and in its
+/// `cite`), a link (`soup_link`), a claim (`soup_claim`), a dump's `cite`
+/// (`soup_dump`), and a ripple's batch (`RPUT`): each refused naming the
+/// key, and nothing is written.
+#[test]
+fn w8_merged_from_is_refused_on_every_write_path() {
+    let s = Scratch::new("w8", &["kb"]);
+    s.import("kb", &example());
+    s.grant("kb", &Scope::ALL, &[]);
+    let svc = Service::start(&s);
+    let c = ctx(&s.project("p"));
+    let before = s.node_count("kb");
+    let from = json!({"merge": "MG-1", "cauldron_id": "elsewhere", "id": "X-1", "written_by": {"class": "ripple", "run": "r"}});
+    let says = |r: &Value, key: &str| {
+        let (code, msg, _) = refused(r);
+        assert_eq!(code, "usage", "{msg}");
+        assert!(msg.contains(key) && msg.contains("cauldron merge"), "{msg}");
+    };
+    // soup_put: in the record.
+    for (meta, key) in [
+        (json!({"merged_from": from}), "meta.merged_from"),
+        (json!({"Merged_From": {}}), "meta.Merged_From"),
+        (json!({"meta.merged_from": {}}), "meta.meta.merged_from"),
+        (json!({"cites": [{"kind": "url", "url": "https://example.org/a", "merged_from": {}}]}), "meta.cites[0].merged_from"),
+    ] {
+        let mut t = task("t", "carries a provenance", "R-1");
+        t["meta"] = meta;
+        says(&svc.call("soup_put", json!({"cauldron": "kb", "remint": true, "records": [t]}), &c), key);
+    }
+    let mut t = task("t", "carries a provenance at the top", "R-1");
+    t["merged_from"] = from.clone();
+    says(&svc.call("soup_put", json!({"cauldron": "kb", "remint": true, "records": [t]}), &c), "merged_from");
+    // soup_put: in its cite.
+    says(
+        &svc.call("soup_put", json!({"cauldron": "kb", "remint": true, "records": [task("t", "cited", "R-1")], "cite": {"kind": "url", "url": "https://example.org/b", "merged_from": from}}), &c),
+        "merged_from",
+    );
+    // soup_link and soup_claim take no such key.
+    let r = svc.call("soup_link", json!({"cauldron": "kb", "links": [{"from": "R-2", "kind": "ref", "to": "R-1", "merged_from": from}]}), &c);
+    let (code, msg, _) = refused(&r);
+    assert_eq!(code, "usage", "{msg}");
+    assert!(msg.contains("merged_from"), "{msg}");
+    let r = svc.call("soup_claim", json!({"cauldron": "kb", "cluster": "CL-1", "region": "R-1", "merged_from": from}), &c);
+    let (code, msg, _) = refused(&r);
+    assert_eq!(code, "usage", "{msg}");
+    assert!(msg.contains("merged_from"), "{msg}");
+    // soup_dump: in its cite.
+    says(&svc.call("soup_dump", json!({"cauldron": "kb", "text": "a note", "cite": {"kind": "url", "url": "https://example.org/c", "merged_from": {}}}), &c), "merged_from");
+    // The edge and citation tools: one link given flat, an unlink, a
+    // citation added or matched for removal. Each names the key, the reason
+    // and the write-back list.
+    for (tool, args) in [
+        ("soup_link", json!({"cauldron": "kb", "from": "R-2", "kind": "ref", "to": "R-1", "merged_from": from})),
+        ("soup_unlink", json!({"cauldron": "kb", "links": [{"from": "R-2", "kind": "ref", "to": "R-1", "Merged_From": {}}]})),
+        ("soup_cite", json!({"cauldron": "kb", "id": "R-1", "add": {"kind": "url", "url": "https://example.org/d", "merged_from": {}}})),
+        ("soup_cite", json!({"cauldron": "kb", "id": "R-1", "remove": {"kind": "url", "meta.merged_from": {}}})),
+    ] {
+        let r = svc.call(tool, args, &c);
+        let (code, msg, _) = refused(&r);
+        assert_eq!(code, "usage", "{tool}: {msg}");
+        assert!(msg.contains("refused: merged_from") && msg.contains("write-back.json") && msg.contains("cauldron merge"), "{tool}: {msg}");
+    }
+    assert_eq!(s.node_count("kb"), before, "nothing was written");
+    // A ripple's batch.
+    ok(&svc.call("soup_dump", json!({"cauldron": "kb", "text": "a note for a ripple"}), &c));
+    let key = std::fs::read_to_string(s.mcp_dir().join("ripples.secret")).unwrap().trim().to_string();
+    let say = |verb: &str, args: Value| -> Value { serde_json::from_str(&seam_say(svc.seam, &format!("{verb} {key} {args}"))).unwrap() };
+    let lock = say("RLOCK", json!({"cauldron": "kb", "run": "run-a", "dump": "DM-1", "regions": ["R-1"], "ttl_secs": 120}));
+    assert_eq!(lock["outcome"], "locked", "{lock}");
+    let put = json!({"cauldron": "kb", "dump": "DM-1", "run": "run-a", "step": "put", "package": "dump", "version": "v1", "model": "sonnet", "revs": lock["revs"],
+        "records": [{"id": "n1", "type": "idea", "state": "idea", "handle": "a ripple's idea that claims a merge", "body": "b",
+                     "meta": {"merged_from": from}, "edges": [{"kind": "in_region", "to": "R-1"}]}]});
+    let p = say("RPUT", put);
+    assert_eq!(p["ok"], json!(false), "{p}");
+    assert!(p.to_string().contains("a ripple never writes `meta.merged_from`"), "{p}");
+    assert_eq!(s.node_count("kb"), before, "the ripple's batch wrote nothing");
+}

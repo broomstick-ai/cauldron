@@ -30,6 +30,11 @@
       "why": "the top-level `rejected: true` reads add to a record the owner rejected (the flag itself is `meta.rejected`, which is refused); dropped only when it is `true`, as reads write it"
     },
     {
+      "key": "merged",
+      "on": "*",
+      "why": "computed by reads from the transaction that created the record: the merge that carried it there and where it came from (`cauldron merge`); the record's own provenance is `meta.merged_from`, which is refused"
+    },
+    {
       "key": "claims",
       "on": "cluster",
       "why": "computed by reads from the cluster's `claims` edges, with each region's handle; a claim is written as a `claims` edge or with soup_claim"
@@ -50,6 +55,11 @@
       "key": "meta.ripple",
       "on": "*",
       "why": "ripple provenance, stamped by the door on the records a ripple writes and only there (refused: ripple_provenance)"
+    },
+    {
+      "key": "meta.merged_from",
+      "on": "*",
+      "why": "merge provenance (where a record came from, who wrote it there, the decision a merge carried), written only by `cauldron merge` on the records it carries; refused in any casing, dotted or nested, anywhere a record write, a link, a claim, a cite or a ripple's batch carries it (refused: merged_from)"
     },
     {
       "key": "id",

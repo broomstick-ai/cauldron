@@ -186,7 +186,8 @@ cauldron soup — a cauldron's soup, offline
         outside the grammar's bounds, a node type outside the ten, a reference to an id not in
         the input, the seed's messages and dashboards, and every unknown key (carried verbatim
         in meta.imported_from.unmapped).
-    cauldron soup recover [--cauldron <name>] [--env <env>]
+    cauldron soup recover [--cauldron <name>] [--env <env>] [--abandon-merge [--keep-partial-merge]]
+                          [--abandon-undo [--lose-undo] [--set-aside-later-writes]] [--settle-merge <MG-n>]
         Settle a soup that an interrupted import left not at rest: an import that never
         reached its commit decision is rolled back (none of it lands), one that did is
         finished (all of it lands, once). Refused while another import or recover is
@@ -205,7 +206,32 @@ cauldron soup — a cauldron's soup, offline
         process is running and whose last line is under an hour old), it moves the file
         aside to `region-locks.json.damaged-<UTC time>` and the soup holds no lock; with a
         run live it refuses, naming it, and changes nothing. When it sets one aside, its
-        output carries `region_locks` (`set_aside`, with `moved_to`).
+        output carries `region_locks` (`set_aside`, with `moved_to`). A `cauldron merge`
+        into the cauldron that was cut short is resolved here too (`merge` in the output):
+        abandoned when it was cut short before it held the cauldron (nothing of it
+        landed), finished when it held it (all of it lands, once), or, when it cannot be
+        finished, the cauldron put back exactly as the merge's snapshot holds it; the
+        blobs a merge cut short before its journal staged are swept (`merges_swept`). An
+        undo of a merge (`cauldron merge --undo`) that was cut short is finished first
+        (`merge_undo` in the output; `undo-finished` when nothing else was to do). With
+        --abandon-merge, a merge cut short is not finished: its hold is lifted and what
+        of it landed stays (listed in `merge.landed`); for a merge recover cannot finish
+        nor put back (its snapshot or staged blobs gone), so the cauldron is never
+        left refusing every writer; it also sets aside a merge journal that cannot be
+        read and lifts a merge's hold that nothing names; a merge recover can still
+        settle is refused unless --keep-partial-merge. With --abandon-undo, an undo of
+        a merge that cannot be finished (its snapshot moved, deleted or changed, or its
+        marker unreadable) is given up and the merge kept: the cauldron ends exactly as
+        the merge left it (soup, dumps and record), or it refuses and changes nothing;
+        a later write to a store the undo had put back needs --set-aside-later-writes,
+        and an undo that can still be finished needs --lose-undo. Both abandons are
+        the owner act `merge` when the merge or undo was the owner's. `merge_undo`
+        says what was done (`end_state`). --settle-merge <MG-n> completes a cauldron that
+        `cauldron merge --status` calls `torn`: a merge record left over when neither store
+        holds the merge is moved aside; where part of the merge was taken away, it settles
+        the merge as it stands (its record then names what was lost) once no record that
+        can be changed cites a missing dump, or refuses, listing those records and how to
+        re-point their cites (`soup cite`; merging the source again does not repair them).
     cauldron soup regions [--cauldron <name>] [--env <env>] [--max-chars N]
         Every region: id, handle, boundary, flags, the regions it narrows or relates to,
         and how many nodes sit in it. A region a ripple holds is marked `locked` (holder,
@@ -446,6 +472,12 @@ struct Args {
     raw: bool,
     yes: bool,
     unapprove: bool,
+    abandon_merge: bool,
+    abandon_undo: bool,
+    lose_undo: bool,
+    set_aside_later_writes: bool,
+    keep_partial_merge: bool,
+    settle_merge: Option<String>,
     view: Option<String>,
     turn_offset: Option<usize>,
     wait_secs: Option<usize>,
@@ -503,6 +535,12 @@ fn parse(verb: &str, args: &[String], allow: &[&str]) -> Result<Args> {
             "--raw" => a.raw = true,
             "--yes" => a.yes = true,
             "--unapprove" => a.unapprove = true,
+            "--abandon-merge" => a.abandon_merge = true,
+            "--abandon-undo" => a.abandon_undo = true,
+            "--lose-undo" => a.lose_undo = true,
+            "--set-aside-later-writes" => a.set_aside_later_writes = true,
+            "--keep-partial-merge" => a.keep_partial_merge = true,
+            "--settle-merge" => a.settle_merge = Some(take(&mut it)?),
             "--view" => a.view = Some(take(&mut it)?),
             "--turn-offset" => a.turn_offset = Some(count(flag, &take(&mut it)?)?),
             "--wait-secs" => a.wait_secs = Some(count(flag, &take(&mut it)?)?),
@@ -665,7 +703,9 @@ fn import_records(a: &Args, input: &str, records: &[Value]) -> Result<i32> {
                 // call (a revoke): the soup is free again, so import directly.
                 Forwarded::Released => soup_door::import::import(&t, &records, &opts)?,
             },
-            None => return Err(e.into()),
+            // Busy (another writer, a merge landing): the refusal with
+            // when to try again, as JSON on stdout too.
+            None => return refused_doc("import", e),
         },
         other => other?,
     };
@@ -1060,12 +1100,29 @@ fn forward_tool(t: &Target, verb: &str, tool: &str, mut args: serde_json::Value,
 /// not at rest (`soup_door::recover`). Prints the outcome as JSON on stdout
 /// and in words on stderr.
 fn recover(args: &[String]) -> Result<i32> {
-    let a = parse("recover", args, &["--env", "--cauldron", "-c"])?;
+    let a = parse("recover", args, &["--env", "--cauldron", "-c", "--abandon-merge", "--abandon-undo", "--lose-undo", "--set-aside-later-writes", "--keep-partial-merge", "--settle-merge"])?;
     if !a.pos.is_empty() {
         bail!("`cauldron soup recover` takes no arguments (got `{}`); `cauldron soup help`", a.pos.join(" "));
     }
     let t = target("recover", &a, true)?;
-    let report = soup_door::recover::recover(&t)?;
+    if (a.lose_undo || a.set_aside_later_writes) && !a.abandon_undo {
+        bail!("`--lose-undo` and `--set-aside-later-writes` go with `--abandon-undo`; `cauldron soup help`");
+    }
+    if a.keep_partial_merge && !a.abandon_merge {
+        bail!("`--keep-partial-merge` goes with `--abandon-merge`; `cauldron soup help`");
+    }
+    let report = soup_door::recover::recover_abandoning(
+        &t,
+        soup_door::recover::Abandon {
+            merge: a.abandon_merge,
+            keep_partial_merge: a.keep_partial_merge,
+            undo: a.abandon_undo,
+            undo_opts: soup_door::merge::AbandonUndo { lose_undo: a.lose_undo, set_aside_later_writes: a.set_aside_later_writes },
+            at_terminal: crate::review::at_terminal(),
+            var: std::env::var(env::owner_acts::VAR).ok(),
+            settle: a.settle_merge.clone(),
+        },
+    )?;
     eprintln!("cauldron soup recover: {}", soup_door::recover::say(&report.doc));
     print(&report.doc)?;
     Ok(if report.settled { 0 } else { 1 })

@@ -1,6 +1,6 @@
 {
   "name": "cauldron",
-  "version": "0.1.18",
+  "version": "0.1.19",
   "description": "Use a Cauldron soup as a knowledge graph from Claude Code: the cauldron MCP server (read, search and write the soups their owner granted, and keep text or a session transcript in a cauldron as a dump), dump commands, a curator subagent that turns notes and findings into schema-valid soup records and lands them, plus the published soup schema.",
   "author": {
     "name": "Cauldron"

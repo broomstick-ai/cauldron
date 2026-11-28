@@ -40,6 +40,42 @@ fn store(err: impl std::fmt::Display) -> Error {
 /// how many records and their ids), `rolled-back`, `landed-and-rolled-back`
 /// or `none`; `doc["instruction"]` says in words what to do next.
 pub fn recover(t: &Target) -> Result<RecoverReport> {
+    recover_with(t, false)
+}
+
+/// What `cauldron soup recover` was asked to give up rather than finish.
+#[derive(Debug, Clone, Default)]
+pub struct Abandon {
+    /// `--abandon-merge`: a merge cut short (`crate::merge::abandon`), a
+    /// merge journal that cannot be read, a merge's hold no journal names.
+    pub merge: bool,
+    /// `--keep-partial-merge`: abandon a merge recover could still settle,
+    /// keeping what of it landed.
+    pub keep_partial_merge: bool,
+    /// `--abandon-undo`: an undo cut short, keeping the merge
+    /// (`crate::merge::abandon_undo`), with what the owner chose.
+    pub undo: bool,
+    pub undo_opts: crate::merge::AbandonUndo,
+    /// Who asks: both abandons are the owner act `merge`
+    /// (`crate::merge::abandon_gate`).
+    pub at_terminal: bool,
+    pub var: Option<String>,
+    /// `--settle-merge <MG-n>`: complete a cauldron a merge left torn
+    /// (`crate::merge::settle`).
+    pub settle: Option<String>,
+}
+
+/// [`recover`]; with `abandon_merge`, a merge cut short is NOT finished: its
+/// hold on both stores is lifted and what of it landed stays, listed
+/// (`crate::merge::abandon`). The way out for a merge recover can neither
+/// finish nor put back.
+pub fn recover_with(t: &Target, abandon_merge: bool) -> Result<RecoverReport> {
+    recover_abandoning(t, Abandon { merge: abandon_merge, at_terminal: true, ..Abandon::default() })
+}
+
+/// [`recover_with`], with either or both of the ways out ([`Abandon`]).
+pub fn recover_abandoning(t: &Target, abandon: Abandon) -> Result<RecoverReport> {
+    let abandon_merge = abandon.merge;
     let (e, c) = (&t.env, &t.cauldron);
     let soup = c.soup();
     refuse_live_soup(e)?;
@@ -52,19 +88,132 @@ pub fn recover(t: &Target) -> Result<RecoverReport> {
             v["moved_to"].as_str().unwrap_or("")
         )
     });
+    // An undo of a merge cut short is finished first (`crate::merge`): it
+    // held the stores, and until it is done the soup is not as either the
+    // merge or the undo left it.
+    // On request, an undo that cannot be finished is given up instead,
+    // keeping the merge; so are merge journals that cannot be read and
+    // holds nothing names.
+    if let Some(m) = &abandon.settle {
+        crate::merge::abandon_gate(t, &format!("--settle-merge {m}"), false, abandon.at_terminal, abandon.var.as_deref())?;
+        let settled = crate::merge::settle(c, m)?;
+        let doc = json!({
+            "env": e.name,
+            "cauldron": c.name,
+            "outcome": settled["outcome"],
+            "interrupted_import": "none",
+            "merge": settled,
+            "instruction": settled["note"],
+        });
+        return Ok(RecoverReport { doc, settled: true });
+    }
+    if abandon.undo {
+        let flag = format!(
+            "--abandon-undo{}{}",
+            if abandon.undo_opts.lose_undo { " --lose-undo" } else { "" },
+            if abandon.undo_opts.set_aside_later_writes { " --set-aside-later-writes" } else { "" }
+        );
+        crate::merge::abandon_gate(t, &flag, true, abandon.at_terminal, abandon.var.as_deref())?;
+    }
+    if abandon_merge {
+        let flag = if abandon.keep_partial_merge { "--abandon-merge --keep-partial-merge" } else { "--abandon-merge" };
+        crate::merge::abandon_gate(t, flag, false, abandon.at_terminal, abandon.var.as_deref())?;
+        if crate::merge::merge_settleable(c) && !abandon.keep_partial_merge {
+            return Err(Error::new(
+                Code::NotAtRest,
+                format!(
+                    "REFUSED: the merge cut short in cauldron `{}` can still be settled by `cauldron soup recover --env {} --cauldron {}` \
+                     (it finishes the merge, or puts the cauldron back as it was before it), so it was not abandoned. Nothing was \
+                     changed. To abandon it anyway, keeping whatever part of it landed (possibly dumps without their records), add \
+                     --keep-partial-merge.",
+                    c.name, e.name, c.name
+                ),
+            ));
+        }
+    }
+    let undo_abandoned = if abandon.undo { Some(crate::merge::abandon_undo(c, abandon.undo_opts)?) } else { None };
+    let orphans = if abandon_merge { crate::merge::abandon_orphans(c)? } else { None };
+    let undo = crate::merge::finish_undo(c, true, "`cauldron soup recover`")?;
     let before = spine::offline::rest_check(&soup).map_err(|err| store(format!("REFUSED: cannot read {}'s spine: {err}", c.name)))?;
     let mut doc = json!({
         "env": e.name,
         "cauldron": c.name,
         "before": before,
     });
+    if let Some(u) = &undo_abandoned {
+        doc["merge_undo"] = u.clone();
+    }
+    if let Some(o) = &orphans {
+        doc["merge"] = o.clone();
+    }
+    if let Some(u) = &undo {
+        doc["merge_undo"] = json!({"merge": u["merge"], "outcome": "finished", "kept": u["restored"]["kept"], "note": u["note"]});
+    }
     // Only when it set a damaged table aside: a readable one leaves the
     // output as it always was.
     if let Some(v) = &locks {
         doc["region_locks"] = v.clone();
     }
+    // A merge cut short before its journal landed nothing; the blobs it
+    // staged from its source are swept (`crate::merge`).
+    let swept = crate::merge::sweep_unstarted(c)?;
+    if !swept.is_empty() {
+        doc["merges_swept"] = json!(swept);
+    }
+    // Snapshots a merge took and never used: named, never removed.
+    let unused = crate::merge::unused_snapshots(c);
+    if !unused.is_empty() {
+        doc["snapshots_unused"] = json!(unused);
+        doc["snapshots_unused_note"] = json!("each is a full private copy of the cauldron as it was before a merge that never began landing; nothing uses it, so move it away");
+    }
     let nodes_cmd = format!("cauldron soup nodes --env {} --cauldron {}", e.name, c.name);
-    if before.is_empty() {
+    // A merge cut short after its journal is finished here too
+    // (`crate::merge`), whether or not the soup's spine is at rest.
+    let mut merge_pending = crate::merge::pending(c)?.is_some();
+    let mut merge_abandoned = false;
+    if merge_pending && abandon_merge {
+        doc["merge"] = crate::merge::abandon(t)?;
+        merge_pending = false;
+        merge_abandoned = true;
+    }
+    // Its hold lifted, the soup is looked at again.
+    let before = if merge_abandoned {
+        let b = spine::offline::rest_check(&soup).map_err(|err| store(format!("REFUSED: cannot read {}'s spine: {err}", c.name)))?;
+        doc["before"] = json!(b);
+        b
+    } else {
+        before
+    };
+    // A hold of a merge or an undo that nothing left names: refused here,
+    // naming the flag that lifts it (opening the spine would not).
+    // Either store: the soup can be at rest while the dumps store is held.
+    if !merge_pending {
+        crate::merge::refuse_orphan_hold(c)?;
+    }
+    if before.is_empty() && !merge_pending && (undo_abandoned.as_ref().is_some_and(|u| u["outcome"] != "none") || orphans.is_some() || merge_abandoned) {
+        doc["outcome"] = json!(match undo_abandoned.as_ref().and_then(|u| u["outcome"].as_str()).filter(|o| *o != "none") {
+            Some(o) => o.to_string(),
+            None => "merge-abandoned".to_string(),
+        });
+        doc["interrupted_import"] = json!("none");
+        doc["instruction"] = json!(format!(
+            "{}{}The soup is at rest.",
+            undo_abandoned.as_ref().filter(|u| u["outcome"] != "none").map(|u| format!("{} ", u["note"].as_str().unwrap_or(""))).unwrap_or_default(),
+            orphans.as_ref().or(if merge_abandoned { Some(&doc["merge"]) } else { None }).map(|o| format!("{} ", o["note"].as_str().unwrap_or(""))).unwrap_or_default()
+        ));
+        return Ok(RecoverReport { doc, settled: true });
+    }
+    if before.is_empty() && !merge_pending && undo.is_some() {
+        doc["outcome"] = json!("undo-finished");
+        doc["interrupted_import"] = json!("none");
+        doc["instruction"] = json!(format!(
+            "An undo of merge {} was cut short, and recover finished it: {} The soup is at rest.",
+            undo.as_ref().map(|u| u["merge"].as_str().unwrap_or("?").to_string()).unwrap_or_default(),
+            undo.as_ref().map(|u| u["note"].as_str().unwrap_or("").to_string()).unwrap_or_default()
+        ));
+        return Ok(RecoverReport { doc, settled: true });
+    }
+    if before.is_empty() && !merge_pending {
         doc["outcome"] = json!("at-rest");
         doc["interrupted_import"] = json!("none");
         doc["note"] = json!(if locks.is_some() {
@@ -81,9 +230,15 @@ pub fn recover(t: &Target) -> Result<RecoverReport> {
         ));
         return Ok(RecoverReport { doc, settled: true });
     }
-    let cauldron = spine::Cauldron::open(&soup, spine::config::SpineConfig::default())
+    let mut cauldron = spine::Cauldron::open(&soup, spine::config::SpineConfig::default())
         .map_err(|err| store(format!("recovering cauldron `{}`'s soup: {err}", c.name)))?;
-    let rec = cauldron.recovered_at_open();
+    let rec = cauldron.recovered_at_open().clone();
+    let merged = if merge_pending {
+        cauldron.set_region_guard(crate::region_lock::Guard::new(c));
+        crate::merge::recover(t, &mut cauldron)?
+    } else {
+        None
+    };
     let hexes = |v: &[spine::envelope::TxHash]| v.iter().map(|h| h.to_hex()).collect::<Vec<_>>();
     doc["rolled_forward"] = json!(hexes(&rec.rolled_forward));
     doc["cleared"] = json!(hexes(&rec.cleared_only));
@@ -138,6 +293,19 @@ pub fn recover(t: &Target) -> Result<RecoverReport> {
     }
     if let Some(said) = locks_said {
         steps.insert(0, said.trim_end().to_string());
+    }
+    if let Some(m) = merged {
+        let id = m["merge"].as_str().unwrap_or("?");
+        steps.push(match m["outcome"].as_str() {
+            Some("finished") => format!(
+                "Merge {id} was cut short after it began landing, and recover FINISHED it: it is now in the cauldron in full \
+                 (its record: {}). Do not run that merge again; it would be refused as already merged.",
+                m["record"].as_str().unwrap_or("?")
+            ),
+            // Abandoned or put back: the merge's own note says what and why.
+            _ => m["note"].as_str().unwrap_or("").to_string(),
+        });
+        doc["merge"] = m;
     }
     doc["instruction"] = json!(steps.join(" "));
     Ok(RecoverReport { doc, settled })

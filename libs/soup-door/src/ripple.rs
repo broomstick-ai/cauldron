@@ -121,9 +121,13 @@ pub fn check_batch(c: &env::Cauldron, records: &[Value]) -> Result<Vec<Value>> {
         if r.get("meta").is_some_and(|m| !m.is_object()) {
             say(&label, "`meta` is an object".into());
         }
-        // The same check every record write makes (`review::review_flag`).
+        // The same checks every record write makes (`review::review_flag`,
+        // `review::merge_provenance`).
         if let Some(k) = crate::review::review_flag(r) {
             say(&label, format!("a ripple never sets or clears a review flag (`{k}`): its records stay unreviewed until the owner approves or rejects them"));
+        }
+        if let Some(k) = crate::review::merge_provenance(r) {
+            say(&label, format!("a ripple never writes `{k}`: where a record came from by a merge is written only by `cauldron merge`"));
         }
         let edges = match r.get("edges") {
             None => vec![],

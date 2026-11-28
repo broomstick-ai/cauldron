@@ -54,6 +54,15 @@ pub enum Code {
     CursorUnknown,
     /// A change cursor ahead of the cauldron's (`changes`).
     CursorStale,
+    /// A merge its plan blocks (`crate::merge`): each reason is listed with
+    /// what to do about it.
+    MergeBlocked,
+    /// Everything this source holds is already in this target, found by
+    /// where each record came from (`crate::merge`).
+    AlreadyMerged,
+    /// An undo of a merge refused because the target was written since
+    /// (`crate::merge::undo`).
+    ChangedSince,
     /// A link or unlink of which at least one edge was refused, so none
     /// was written (`edges`).
     LinksRefused,
@@ -83,6 +92,9 @@ impl Code {
             Code::RegionLocked => "region_locked",
             Code::CursorUnknown => "cursor_unknown",
             Code::CursorStale => "cursor_stale",
+            Code::MergeBlocked => "merge_blocked",
+            Code::AlreadyMerged => "already_merged",
+            Code::ChangedSince => "changed_since",
             Code::LinksRefused => "links_refused",
         }
     }

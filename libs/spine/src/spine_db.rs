@@ -328,6 +328,13 @@ impl std::fmt::Display for Seq {
 /// transaction handle escapes the crate (shared-contract idiom).
 pub struct SpineDb {
     conn: Connection,
+    /// The HOLD this connection's handle owns ([`crate::Cauldron::hold`]):
+    /// the exact `halted_reason` it set, which its own writes pass and
+    /// nobody else's do. `None` for every other handle.
+    hold: Option<String>,
+    /// Whether this connection's next decided flip also lifts the hold, in
+    /// the same transaction ([`crate::Cauldron::lift_hold_at_next_commit`]).
+    lift_hold: bool,
 }
 
 /// The pragmas every spine connection runs under. WAL and a 5s busy
@@ -374,7 +381,7 @@ impl SpineDb {
              COMMIT;",
             crate::locks::LOCKS_DDL
         ))?;
-        Ok(SpineDb { conn })
+        Ok(SpineDb { conn, hold: None, lift_hold: false })
     }
 
     /// Open an existing spine file.
@@ -403,7 +410,7 @@ impl SpineDb {
                 path.display()
             )));
         }
-        Ok(SpineDb { conn })
+        Ok(SpineDb { conn, hold: None, lift_hold: false })
     }
 
     /// THE SCHEMA FENCE, run by every `Cauldron` open
@@ -652,6 +659,7 @@ impl SpineDb {
         let bindings = to_json(&envelope.bindings)?;
         let payload_json = to_json(payload)?;
         let touched = to_json(&touched_pools_of(payload))?;
+        let hold = self.hold.clone();
         let tx = self
             .conn
             .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
@@ -674,7 +682,7 @@ impl SpineDb {
                 [],
                 |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
             )?;
-            if halted != 0 {
+            if halted != 0 && !(hold.is_some() && hold.as_deref() == reason.as_deref()) {
                 return Err(SpineError::Halted {
                     reason: reason
                         .unwrap_or_else(|| "halted with no recorded reason".to_string()),
@@ -816,6 +824,7 @@ impl SpineDb {
     /// The read and the flip share one `IMMEDIATE` transaction, so two
     /// processes racing the same identity cannot both pass the check.
     fn mark_decided_interior(&mut self, seq: Seq) -> Result<()> {
+        let lift = if self.lift_hold { self.hold.clone() } else { None };
         let tx = self
             .conn
             .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
@@ -861,6 +870,17 @@ impl SpineDb {
             "UPDATE transactions SET decided = 1 WHERE seq = ?1",
             params![seq.0],
         )?;
+        // THE HOLD, lifted by the commit that ends it: in this same
+        // transaction as the decided flip, so there is no moment at which
+        // the hold is gone and its commit is not (`Cauldron::hold`).
+        {
+            if let Some(hold) = &lift {
+                tx.execute(
+                    "UPDATE spine_state SET halted = 0, halted_reason = NULL WHERE singleton = 1 AND halted = 1 AND halted_reason = ?1",
+                    params![hold],
+                )?;
+            }
+        }
         tx.commit()?;
         Ok(())
     }
@@ -1376,12 +1396,59 @@ impl SpineDb {
             [],
             |r| Ok((r.get(0)?, r.get(1)?)),
         )?;
-        if halted == 0 {
+        if halted == 0 || self.owns_hold(reason.as_deref()) {
             return Ok(None);
         }
         Ok(Some(reason.unwrap_or_else(|| {
             "halted with no recorded reason".to_string()
         })))
+    }
+
+    fn owns_hold(&self, reason: Option<&str>) -> bool {
+        self.hold.is_some() && self.hold.as_deref() == reason
+    }
+
+    /// Install the hold this connection's handle owns, and whether its next
+    /// decided flip lifts it ([`crate::Cauldron::hold`]).
+    pub(crate) fn with_hold(mut self, hold: Option<String>, lift: bool) -> SpineDb {
+        self.hold = hold;
+        self.lift_hold = lift;
+        self
+    }
+
+    /// The raw halted state (`Some(reason)` when halted), whoever's it is.
+    pub(crate) fn halted_raw(&self) -> Result<Option<String>> {
+        let (halted, reason): (i64, Option<String>) = self.conn.query_row(
+            "SELECT halted, halted_reason FROM spine_state WHERE singleton = 1",
+            [],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )?;
+        Ok((halted != 0).then(|| reason.unwrap_or_default()))
+    }
+
+    /// Set the hold: halted with `reason`, in one IMMEDIATE transaction,
+    /// only when the spine is not halted already (or already holds exactly
+    /// `reason`). Answers whether it is now held with `reason`.
+    pub(crate) fn set_hold(&mut self, reason: &str) -> Result<bool> {
+        let tx = self.conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+        let (halted, current): (i64, Option<String>) =
+            tx.query_row("SELECT halted, halted_reason FROM spine_state WHERE singleton = 1", [], |r| Ok((r.get(0)?, r.get(1)?)))?;
+        if halted != 0 {
+            return Ok(current.as_deref() == Some(reason));
+        }
+        tx.execute("UPDATE spine_state SET halted = 1, halted_reason = ?1 WHERE singleton = 1", params![reason])?;
+        tx.commit()?;
+        Ok(true)
+    }
+
+    /// Lift the hold `reason`, only if it is the one set. Answers whether it
+    /// was set (and so is now lifted).
+    pub(crate) fn clear_hold(&mut self, reason: &str) -> Result<bool> {
+        let n = self.conn.execute(
+            "UPDATE spine_state SET halted = 0, halted_reason = NULL WHERE singleton = 1 AND halted = 1 AND halted_reason = ?1",
+            params![reason],
+        )?;
+        Ok(n > 0)
     }
 
     /// Enter the fail-closed halt: effectively read-only, announced

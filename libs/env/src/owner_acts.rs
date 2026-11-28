@@ -1,12 +1,13 @@
 //! **Who may act for the owner**: the one decision every owner act asks.
 //!
-//! Three acts belong to a cauldron's owner:
+//! Four acts belong to a cauldron's owner:
 //!
 //! | act | the commands (and tools) |
 //! |---|---|
 //! | `grant` | `cauldron mcp grant` |
 //! | `approve` | `cauldron soup approve` (`--unapprove`), `cauldron ripples approve | reject` (`--unapprove`, `--unreject`), the MCP tools `soup_approve` and `soup_reject` |
 //! | `ripples` | `cauldron ripples on` |
+//! | `merge` | `cauldron merge` of a source whose records carry decisions (approved or rejected) into the target, with those decisions |
 //!
 //! A command run with its input and output on a terminal may always do
 //! them. Anything else (an agent's shell, a script, CI, a server, a Claude
@@ -22,8 +23,11 @@
 //!   the whole root and, optionally, one per cauldron that wins over it
 //!   where it is set. A choice is the list of acts that are open: none
 //!   (`terminal`, the DEFAULT: no file, or no choice, means exactly the
-//!   behaviour of every release before this one), all three (`open`), or
-//!   some of them. Each choice records when it was set and how
+//!   behaviour of every release before this one), all of them (`open`), or
+//!   some of them. A choice is stored as the list of acts it opened, so a
+//!   choice recorded as `open` by a release that knew three acts opens
+//!   those three, and `merge` stays at a terminal until it is chosen; a
+//!   release that does not know an act ignores it in the file. Each choice records when it was set and how
 //!   ([`How`]). A cauldron's choice is bound to the cauldron's id, as its
 //!   MCP grant is: a cauldron removed and made again under the name, or a
 //!   choice copied from another, does not carry it (it is void, and the
@@ -82,16 +86,20 @@ pub enum Act {
     Approve,
     /// `cauldron ripples on`: automatic processing, model spend included.
     Ripples,
+    /// `cauldron merge` carrying the source's decisions (approved or
+    /// rejected) into the target.
+    Merge,
 }
 
 impl Act {
-    pub const ALL: [Act; 3] = [Act::Grant, Act::Approve, Act::Ripples];
+    pub const ALL: [Act; 4] = [Act::Grant, Act::Approve, Act::Ripples, Act::Merge];
 
     pub fn as_str(self) -> &'static str {
         match self {
             Act::Grant => "grant",
             Act::Approve => "approve",
             Act::Ripples => "ripples",
+            Act::Merge => "merge",
         }
     }
 
@@ -105,6 +113,7 @@ impl Act {
             Act::Grant => "opening a cauldron to the MCP door (`cauldron mcp grant`)",
             Act::Approve => "approving and rejecting what a ripple wrote (`cauldron soup approve`, `cauldron ripples approve | reject`, the MCP tools `soup_approve` and `soup_reject`)",
             Act::Ripples => "turning automatic processing on (`cauldron ripples on`), which starts model spend",
+            Act::Merge => "merging a cauldron whose records carry decisions (approved or rejected) into another, with those decisions (`cauldron merge`)",
         }
     }
 }
@@ -171,7 +180,7 @@ impl How {
     }
 }
 
-/// A list of acts, written the way a person writes it: `open` (all three),
+/// A list of acts, written the way a person writes it: `open` (all of them),
 /// `terminal` (none), or a comma list (`grant,approve`). An unknown word is
 /// an error naming it.
 pub fn parse_acts(v: &str) -> Result<Vec<Act>, String> {
@@ -188,7 +197,7 @@ pub fn parse_acts(v: &str) -> Result<Vec<Act>, String> {
             Some(_) => {}
             None => {
                 return Err(format!(
-                    "`{w}` is not an owner act: the acts are grant, approve and ripples (or `open` for all three, `terminal` for none)"
+                    "`{w}` is not an owner act: the acts are grant, approve, ripples and merge (or `open` for all of them, `terminal` for none)"
                 ))
             }
         }
@@ -225,7 +234,7 @@ pub fn words(acts: &[Act]) -> String {
 /// One choice: which acts are open, and when and how it was set.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Choice {
-    /// The open acts (`grant`, `approve`, `ripples`); empty is `terminal`.
+    /// The open acts (`grant`, `approve`, `ripples`, `merge`); empty is `terminal`.
     pub open: Vec<String>,
     /// When it was set (UTC, RFC 3339).
     pub set_at: String,
@@ -553,7 +562,8 @@ mod tests {
         assert_eq!(parse_acts("open").unwrap(), Act::ALL.to_vec());
         assert_eq!(parse_acts("terminal").unwrap(), vec![]);
         assert_eq!(parse_acts("ripples, grant").unwrap(), vec![Act::Grant, Act::Ripples]);
-        assert!(parse_acts("grant,merge").unwrap_err().contains("`merge` is not an owner act"));
+        assert!(parse_acts("grant,mergeall").unwrap_err().contains("`mergeall` is not an owner act"));
+        assert_eq!(parse_acts("merge").unwrap(), vec![Act::Merge]);
         assert_eq!(words(&[Act::Approve]), "approve");
         assert_eq!(words(&Act::ALL), "open");
         assert_eq!(words(&[]), "terminal");
@@ -567,6 +577,22 @@ mod tests {
             let r = decide(a, &s, "dev", "kb", None, false, None).unwrap_err();
             assert!(r.how_to_allow.contains("cauldron owner-acts open") && r.how_to_allow.contains(VAR), "{}", r.how_to_allow);
         }
+    }
+
+    #[test]
+    fn a_choice_made_before_merge_was_an_act_keeps_merge_at_a_terminal() {
+        // A root a release with three acts recorded as `open`: the file lists
+        // those three, so `merge` stays at a terminal until it is chosen.
+        let text = r#"{"version":1,"root":{"open":["approve","grant","ripples"],"set_at":"2026-11-20T00:00:00Z","how":"tty"},"cauldrons":[]}"#;
+        let s: Setting = serde_json::from_str(text).unwrap();
+        assert_eq!(decide(Act::Approve, &s, "dev", "kb", None, false, None), Ok(Allowed::Setting(Source::Root)));
+        assert!(decide(Act::Merge, &s, "dev", "kb", None, false, None).is_err());
+        assert_eq!(decide(Act::Merge, &s, "dev", "kb", None, false, Some("merge")), Ok(Allowed::Var));
+        assert_eq!(decide(Act::Merge, &s, "dev", "kb", None, true, None), Ok(Allowed::Terminal));
+        // A later act this build does not know is ignored, not an error.
+        let later = r#"{"version":1,"root":{"open":["merge","fly"],"set_at":"2026-11-20T00:00:00Z","how":"tty"},"cauldrons":[]}"#;
+        let s: Setting = serde_json::from_str(later).unwrap();
+        assert_eq!(s.root.as_ref().unwrap().acts(), vec![Act::Merge]);
     }
 
     #[test]

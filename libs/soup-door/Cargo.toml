@@ -19,6 +19,9 @@ chrono = { workspace = true }
 shapewire = { path = "../shapewire", default-features = false }
 # `env` answers with anyhow errors; they are turned into this crate's own.
 anyhow = { workspace = true }
+# A plain read-only look at a spine's halted flag (`merge::stuck`), without
+# the private copy `spine::offline::read_only_connection` makes.
+rusqlite = { version = "0.31", features = ["bundled"] }
 
 [features]
 # Test-only: the removal's seam (`dumps::fault`, `CAULDRON_REMOVE_FAULT`),
@@ -27,9 +30,6 @@ anyhow = { workspace = true }
 fault-injection = []
 
 [dev-dependencies]
-# A plain reader holding the store's log open, for the erasure tests (the
-# version spine already links).
-rusqlite = { version = "0.31", features = ["bundled"] }
 
 [lints.rust]
 unsafe_code = "forbid"

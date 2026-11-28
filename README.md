@@ -180,6 +180,12 @@ your dumps into records:
   and says where it stalled; an account is named by its email address; and
   text can be selected and copied on every surface of the terminal
   interface ([Known limitations](#known-limitations)).
+- 0.1.19: merging cauldrons (issue #9): `cauldron merge <source> --into
+  <target>` copies one cauldron's soup and dumps into another, all or
+  nothing, with the plan printed first, nothing carried twice, each review
+  decision carried only as far as the source's own history records it, a
+  size ceiling, a snapshot and `cauldron merge --undo`, and a way out of
+  every cut ([Merging cauldrons](#merging-cauldrons)).
 
 cauldron has three parts:
 
@@ -252,16 +258,16 @@ From 0.1.15, each release on GitHub carries two files: the bundle
 terminal UI, the `threads` daemon, the `mcp` service, from 0.1.17 the
 `inference` and `ripples` services, their declarations and the installer)
 and `SHA256SUMS`, its checksum. Download both with `curl`,
-check the checksum, unpack, and install (the commands are for 0.1.18;
+check the checksum, unpack, and install (the commands are for 0.1.19;
 change the version for another release):
 
 ```sh
 mkdir cauldron-download && cd cauldron-download
-curl -fLO https://github.com/broomstick-ai/cauldron/releases/download/v0.1.18/cauldron-0.1.18-aarch64-apple-darwin.tar.gz
-curl -fLO https://github.com/broomstick-ai/cauldron/releases/download/v0.1.18/SHA256SUMS
+curl -fLO https://github.com/broomstick-ai/cauldron/releases/download/v0.1.19/cauldron-0.1.19-aarch64-apple-darwin.tar.gz
+curl -fLO https://github.com/broomstick-ai/cauldron/releases/download/v0.1.19/SHA256SUMS
 shasum -a 256 -c SHA256SUMS
-tar -xzf cauldron-0.1.18-aarch64-apple-darwin.tar.gz
-cauldron-0.1.18-aarch64-apple-darwin/install --prebuilt cauldron-0.1.18-aarch64-apple-darwin.tar.gz
+tar -xzf cauldron-0.1.19-aarch64-apple-darwin.tar.gz
+cauldron-0.1.19-aarch64-apple-darwin/install --prebuilt cauldron-0.1.19-aarch64-apple-darwin.tar.gz
 ```
 
 `shasum -a 256 -c SHA256SUMS` must print `OK` for the tarball. The installer
@@ -716,23 +722,26 @@ The plugin's [README](claude-code/cauldron/README.md) has the details.
 
 ### Who may act for the owner
 
-New in 0.1.17 ([#25](https://github.com/broomstick-ai/cauldron/issues/25)).
-Three acts belong to a cauldron's owner:
+New in 0.1.17 ([#25](https://github.com/broomstick-ai/cauldron/issues/25));
+`merge` is an act from the release that brings `cauldron merge`. Four acts
+belong to a cauldron's owner:
 
 | act | commands (and tools) |
 |---|---|
 | `grant` | `cauldron mcp grant`: open a cauldron to the Claude Code sessions you run |
 | `approve` | `cauldron soup approve`, `cauldron ripples approve \| reject` (and taking either back); the MCP tools `soup_approve` and `soup_reject` |
 | `ripples` | `cauldron ripples on`: automatic processing, and the model spend it starts |
+| `merge` | `cauldron merge` of a source whose approvals or rejections travel with it into the target (see [Merging cauldrons](#merging-cauldrons)); a merge that carries no decision is no owner act (though a merge sent to the `mcp` service without a terminal always needs `merge` opened); undoing the owner's merge is the same act, and so are `cauldron soup recover --abandon-undo`, `--abandon-merge` and `--settle-merge` on the owner's merge or undo |
 
 **What the gate is for.** By default each runs only with its input and
 output on an interactive terminal: a command run at a terminal is taken to
 be the owner's, and an agent, a script or a ripple is refused (the refusal
-names the command for you to run, and how you would let agents run it). That keeps three things
+names the command for you to run, and how you would let agents run it). That keeps four things
 from happening without you deciding: an agent approving the records a
 ripple wrote, so that model output reads as reviewed; an agent opening a
-cauldron to every Claude Code session, or widening its scopes; and
-automatic model spend and unattended writes starting.
+cauldron to every Claude Code session, or widening its scopes;
+automatic model spend and unattended writes starting; and an agent carrying
+decisions from one cauldron into another with a merge.
 
 **What the gate is not.** It stops an agent that follows the rules from
 acting for you by accident. It is not a security boundary against a process
@@ -752,14 +761,19 @@ can drain piles up; and a session with no terminal (CI, a server, a
 scheduled job) cannot do these steps at all. So the gate is a setting,
 `owner_acts`, that you choose. `terminal` is the default and changes
 nothing: with nothing chosen (an upgraded root included) every act behaves
-as in 0.1.16. `open` lets all three run without a terminal; a list
-(`grant`, `approve`, `ripples`) opens only those.
+as in 0.1.16. `open` lets every act run without a terminal; a list
+(`grant`, `approve`, `ripples`, `merge`) opens only those. A choice is kept
+as the list of acts it opened, so a choice recorded as `open` by 0.1.17
+(which knew three acts) keeps `merge` at a terminal until you open it; a
+release that does not know an act ignores it in the file.
 
 **What `open` gives up.** With `approve` open, an agent can approve what a
 ripple wrote, so a record can read as reviewed without a person having read
 it. With `grant` open, an agent can open a cauldron to every Claude Code
 session of yours. With `ripples` open, an agent can start automatic model
-spend and writes. Choose it when you want your agents to do these for you.
+spend and writes. With `merge` open, an agent can carry the approvals and
+rejections of one cauldron into another. Choose it when you want your
+agents to do these for you.
 
 **Three ways to choose.**
 
@@ -774,7 +788,7 @@ cauldron owner-acts show --env prod                    # what is in effect, per 
 ```
 
 - **The command**, `cauldron owner-acts open | terminal [--only
-  grant,approve,ripples] [--cauldron C] [--env E]`. At a terminal it just
+  grant,approve,ripples,merge] [--cauldron C] [--env E]`. At a terminal it just
   applies. Without one, opening is refused unless the variable below is set
   in its environment (and opens each act it would open); closing runs from
   anywhere.
@@ -784,7 +798,10 @@ cauldron owner-acts show --env prod                    # what is in effect, per 
   `~/.claude/settings.json`, never a project's `.claude/settings.json`,
   which a cloned repository could carry), in CI or on a server. It opens
   `grant` and `ripples` for that command, whatever the setting says, and it
-  lets `cauldron owner-acts open` record a choice without a terminal.
+  lets `cauldron owner-acts open` record a choice without a terminal. It
+  opens `merge` for a merge that command runs itself; a merge sent to the
+  `mcp` service (which holds the target) is taken without a terminal only
+  where the persisted setting opens `merge`, as below for `approve`.
   Approving and rejecting are carried out by the `mcp` service, which takes
   an agent's decision only where the persisted setting opens `approve`: the
   variable alone does not, and the command says so before it sends
@@ -1712,6 +1729,399 @@ writes no workspace node or edge; the spine records the write's bookkeeping
 them. A ripple writes no cluster and no claim in this release: its batch is
 refused if it holds one.
 
+### Merging cauldrons
+
+`cauldron merge <source> --into <target> --env <env>` copies one cauldron's
+soup and dumps into another of the same environment, as one all-or-nothing
+act, for when two projects converge or knowledge was kept in the wrong
+cauldron (issue #9). Add `--dry-run` to see the plan and nothing else: it
+is judged on a private copy of the target, and nothing is held or written.
+`cauldron merge --undo <MG-n> --into <target> --env <env>` puts the target
+back exactly as it was before that merge, and `cauldron merge --status
+<MG-n> --into <target> --env <env>` says where a merge (or its undo) stands
+(below).
+
+**The plan is always printed first**, as JSON, and the merge prints the
+same plan with what landed:
+
+- `size`: the source's records (both pools), the ones a ripple wrote, its
+  edges (and the ripple part's), dumps and their bytes, the fuel each of
+  the merge's soup writes would spend, the estimated time and memory, and
+  which budget, if any, it is over (`over`: records, time, fuel; below);
+- counts by type in both pools, edges by kind, and the edges across the two
+  pools (a cluster's `claims`);
+- `id_collisions` (source ids the target also holds) and `id_map`: every
+  source id is re-minted in the target, so no id collides and nothing is
+  overwritten. Edges, `[[ID]]` links in bodies, and the ids a region's or a
+  cluster's boundary or an edge's note names (whole tokens) are rewritten
+  through it. After the merge the map is read back from what landed and
+  saved as `merges/MG-<n>/id-map.json` in the target;
+- `regions`, each with its boundary and its new id;
+- `flagged`: a source region (or cluster) whose handle or boundary reads the
+  same as one the target has. **Both are kept; nothing is folded together.**
+  To keep one, supersede the other afterwards (from a session, `soup_link
+  {links: [{from: <the one to keep>, kind: "supersedes", to: <the other>}]}`);
+- `already_here`: the source's records and dumps that are already in the
+  target (below), which are not carried again;
+- `dumps` and `dump_map`: each dump is carried in its state (`received`,
+  `processed`, `failed`, or the `removed` tombstone, which carries no text)
+  under a new `DM-<n>`, and a record's `meta.cites` of a dump names the new
+  id. Blobs are content-addressed: bytes the target already holds are
+  shared, not copied twice;
+- `review`: each record's review state there, how many decisions will and
+  will not be carried and why (below), whether the merge is the owner act
+  `merge` (`needs_terminal`, `owner_act`), and what a `cauldron` older than
+  merging will show (`older_readers`);
+- `not_carried`, each with why, and `blocking`, each with the fix.
+
+**Nothing twice.** Each record and dump has an origin: the cauldron it was
+first written in and its id there (kept in `meta.merged_from` by every
+merge that carries it on). One whose origin the target already holds, whether
+an earlier merge of this source brought it, it came by another route (`a`
+into `b`, `b` into `c`, then `a` into `c`), or it is the target's own record
+come back, is not carried again: the plan lists it under `already_here` with
+the merge it came by, and every edge, link and cite that names it names the
+target's copy instead. So merging a source again carries only what it gained
+since; a merge with nothing new is refused (`already_merged`), and so is a
+source with no record and no dump. A merge does
+not change a record it does not carry: an edge a record already here gained
+in the source since is listed under `not_carried`.
+
+**Review state, as far as the source's own history vouches for it.** Every
+carried record gets `meta.merged_from`: the merge, the source cauldron's
+name and id, the record's id there, who wrote it there (`written_by`: a
+ripple's run, or an agent, with when) and its review state there. A record a
+ripple wrote that nobody decided is **unreviewed in the target too**: it is
+in `cauldron ripples review`, marked `unreviewed: true` in every read, and
+decided by `cauldron ripples approve | reject` there as any other. It lands
+in a write of the ripple class (run `cauldron-merge:<MG-n>`), so a
+`cauldron` older than merging (0.1.17 and before) lists it as unreviewed
+too, since it decides that by the class of the write that created a
+record.
+
+An approval or a rejection is carried **only when the source's own write
+history records it as a decision** and the record holds exactly the value
+that decision wrote. A decision is the last write of that flag on that
+record by one of: `cauldron ripples approve | reject | review
+--interactive` or `cauldron soup approve` run at a terminal (`by: "tty"`);
+the same commands run without one where the owner opened `approve` (`by:
+"agent"`); or a session's `soup_approve` / `soup_reject` where the owner
+opened it to sessions (`by: "agent"`). An agent's decision, made where the
+owner allowed it, is carried exactly as a terminal's is. The write's
+initiator and the flag's own `by` must agree, and its command must be one
+of those. A decision a merge carried into the source counts too. Who
+decided (`by`, the thread and, for a session, its id), how, when and in
+which write go into `meta.merged_from.decision`, with the merge that
+carried it and who ran that merge (`carried_by: {merge, by}`); the flag is
+marked `carried_by_merge`. Any other flag (put there by editing the
+cauldron's files, changed by hand since, or written by anything else) is
+not carried: the record arrives without it (a ripple's record unreviewed),
+with `meta.merged_from.decision_not_carried` saying why, and the plan
+counts both kinds before anything is written. A record that claims
+`meta.merged_from` though no merge created it arrives without that claim.
+No route turns an unreviewed record into an approved one: no write but a
+merge may carry `meta.merged_from` (below), a merge never writes a decision
+the source's history does not hold, and merging `a` into `b` and `b` back
+into `a` leaves every such record unreviewed.
+
+How far this goes: the source's history is read from its own files, and
+the spine does not authenticate who ran a write. Someone who can write the
+source's files as your user can make a decision travel, as they could edit
+the target directly; the boundary is your user account, as it is for every
+owner act. What the check stops is a flag put or changed by hand, and
+anything that is not one of the decision commands or tools.
+
+**Carrying decisions is the owner act `merge`** (see [Who may act for the
+owner](#who-may-act-for-the-owner)): it runs at an interactive terminal
+(`by: "tty"`), or without one only where the owner opened `merge`
+(`cauldron owner-acts open --only merge`, or `CAULDRON_OWNER_ACTS=merge`
+in the environment of that `cauldron merge`; `by: "agent"`). A merge that
+carries no decision is no owner act and runs anywhere the command runs
+directly; a merge sent to the `mcp` service without a terminal is taken only
+where the persisted setting opens `merge`, whatever it carries (the command
+cannot know what the plan carries before it sends it, and the stricter rule
+is kept). **Undoing the owner's merge is the same owner act**: a merge run
+at a terminal, or one that carried decisions, is undone at a terminal, or
+without one only where `merge` is opened (`not_a_terminal` otherwise); an
+agent's merge that carried no decision is undone by anyone. The merge record
+says who ran it (`by`), the spine thread its writes are recorded under
+(`owner`, or `owner:agent`), and where the permission came from
+(`allowed`).
+
+Every write but a merge refuses a key named `merged_from`, in any casing,
+dotted or nested (to 16 levels), anywhere in what it carries, and names it
+(`refused: merged_from`, as `schema/soup/write-back.json` lists it): `soup
+import`, `soup import-corpus`, a session's `soup_put` (its records and its
+`cite`), `soup_link` (a list of links or one given flat), `soup_unlink`,
+`soup_cite` (a citation added, or the match of one removed), `soup_claim`,
+a dump's `cite`, and a ripple's batch. `meta.ripple` is written by a
+ripple's write only, with one exception: a ripple's record whose decision
+a merge carries lands in the merge's main write (an agent's) with its
+`meta.ripple` as the source holds it, so it keeps naming the run that wrote
+it; its `dump` citation stays its review trail (`soup_cite` leaves it alone,
+as on any ripple's record).
+
+`soup get` shows a merged record's `merged`: the merge, when, and the
+cauldron and id it came from. A record read back and written as read drops
+it (`merged` is in the write-back list's `ignored` keys).
+
+**Not carried.** The source's MCP grant and its automatic ripples setting:
+both are bound to the source's id, and the target keeps its own. A merge
+never opens a cauldron to anything. The source itself: a merge is a copy,
+the source is read and left untouched, byte for byte; removing it is
+`cauldron remove`, separately. Its write history, ripple runs and spend
+(who wrote each record and when are in `written_by`). A viewer for a role
+the target already has (one viewer per role), the seal flag (records land
+unsealed), and an edge to a pool a merge does not carry; each is listed.
+
+**Refused while the source is busy.** The source must be held by no writer
+(the `mcp` service holding it is named, with how to close it), have no
+live ripple run and no held region lock. A source dump whose removal was
+cut short (`removing`) blocks the merge, naming the `dump-remove` command
+that finishes it. A region the target already holds that the merge writes
+into (records of a region merged before) blocks the plan while a live
+ripple run holds it there, naming the wait.
+
+**The target's writer.** When nothing holds the target, the command line
+writes it. When the `mcp` service holds it, the merge is sent to the
+service as one seam line, `MERGE` from a terminal or `AMERGE` without one,
+and lands through it (`forwarded_to` in the output), as `soup import`
+does. Without a terminal the command line sends it, and the service takes
+it, only where your persisted `owner_acts` setting opens `merge` for the
+target (the variable never reaches the service); a service older than
+`AMERGE` refuses it, so an agent's merge is never recorded as a terminal's.
+Or close the target first with `cauldron mcp revoke` and merge directly. No
+MCP tool merges.
+
+**Size.** A merge lands the source's records as one write of the target's
+soup, and that write's time and memory grow faster than the source; the
+target refuses every other writer for most of it (an import is refused at
+once, `locked`, naming the merge, with `retry_after_secs`; a session's write
+through the `mcp` service is refused at once with `busy` and
+`retry_after_secs`; reads go on). Measured on one machine
+(Apple silicon, a release build, 200-character bodies, 100 dumps): 6.7 s
+and 620 MB at 11,000 records; 14 s and 1.2 GB at 22,000; 24 s and 1.8 GB at
+33,000; 55 s and 3.1 GB at 55,000; 15.6 s and 740 MB for 12,000 records of
+which 10,000 a ripple wrote. Edges cost too: 5,000 records with 30 edges
+each took 9.4 s and 1.1 GB, against 2.0 s and 290 MB with one. The size is
+counted from the source's files before anything is held: records, the ones
+a ripple wrote, edges (each part's own), dumps and their bytes, with the
+estimated time and memory (edges beyond one a record and dump bytes
+included). So by default **a source of more than 20,000 records** (both
+pools together), **or one estimated to take longer than 20,000 ordinary
+records would**, is refused before anything is read in full, held or
+written (`too_large`), dry run included, with its size and the estimate;
+`--allow-large` merges it anyway, after printing the estimate and that the
+target refuses writes meanwhile. **A source whose write would pass the
+soup's per-statement fuel** (about 3 a record and 5 an edge, for the main
+write and the ripple part each, against 1,000,000, with 10% kept in hand)
+cannot land as one statement at all, so it is refused up front whatever
+the flag (`size.fuel.over`): before this check, such a merge held the
+target for up to 25 minutes and then failed. Split it (move part of it
+into another cauldron and merge each), or drop edges it does not need. A
+refusal leaves nothing behind: the same source merges once it fits.
+
+**The snapshot.** Before anything lands, under the target's writer locks
+and before it opens anything of the target, the merge takes a snapshot of
+everything under the target's directory that a merge can change: both pools
+and the spine, the region lock table, the dumps store with every blob (a
+session's transcript lives only in its blob), `merges/`, `events/` and
+`cauldron.toml`. It leaves out the writer lock files, `tui/` and
+`ripples/`, each named with why. Each file is checked against its original
+by size and SHA-256, and the manifest (`manifest.json`) lists them all with
+the file count and total bytes. On APFS each file is a clone
+(copy-on-write), so a snapshot of a large dumps store costs almost no time
+or space; elsewhere it is a byte copy. It is stored beside the cauldron's
+directory as `cauldrons/<target>.<MG-n>-before-<UTC time>/` (no cauldron can
+have that name), directories 0700 and files 0600. It holds a copy of the
+target's dumps as they were, so `cauldron soup dump-remove` does not reach
+it: move it away once you no longer need it. A snapshot cut short while it
+was being taken (`cauldrons/<target>.taking-<pid>/`) is removed by the next
+`cauldron soup recover`, and a complete one no merge used is listed there
+(`snapshots_unused`), never removed.
+
+**All or nothing.** The merge judges the whole batch through the target's
+own door, takes the snapshot, stages the blobs it needs, and writes its
+journal. Then it **holds** the target: its soup and its dumps store enter
+the spine's durable halted state under a reason that names the merge and
+`cauldron soup recover`. Every release honours that state, so any other
+writer, of this release or an older one (CLI or `mcp` service), is refused
+while the hold is on, across a crash too. This release's writers and the
+`mcp` services print that reason; an older CLI says only that the soup is
+not at rest (halted) and to run `cauldron soup recover`, which this
+release's recover then settles. Then each dump lands (one write
+each), then the records: one write of the soup (both pools) for all but the
+records a ripple wrote that nobody decided, a second write (of the ripple
+class) for those, and a third for the edges from the first's records to the
+second's when there are any. The last of them lifts the soup's hold in the
+same transaction; then the dumps store is let go, and the merge record
+`merges/MG-<n>/merge.json` (who, when, the source's name and id, each write,
+the snapshot) and the id map are written. Every id they record is read back
+from what landed, never taken from the plan.
+
+A merge cut short is never left stuck. Until it is resolved, every writer of
+this release refuses, naming `cauldron soup recover --env <env> --cauldron
+<target>` and what it will do, and every read of the target (`soup get`,
+`nodes`, `search`, `region`, `regions`, and the same tools through the MCP
+door) carries `merge_pending`, since it may show part of the merge.
+`recover`:
+
+- **abandons** a merge cut short before it held the target (nothing of it
+  landed; what was written meanwhile is kept): run the merge again;
+- **finishes** one that held it, exactly once: the target then holds exactly
+  what an uninterrupted merge leaves;
+- **puts the target back** from the snapshot when it cannot finish it (a
+  staged blob lost, say), safe because the hold kept every other writer out
+  since the snapshot was taken, and says so and why. What the merge had
+  landed is moved into the snapshot's directory, not deleted;
+- with `--abandon-merge`, does not finish it: it lifts the merge's hold and
+  lists what of it landed, which stays. This is the way out when recover
+  can neither finish the merge nor put the target back (its snapshot and
+  its staged blobs both gone), so the cauldron never stays refusing every
+  writer. It also sets aside a merge journal that cannot be read
+  (`journal.json.damaged-<time>`) and lifts a merge's hold that no journal
+  names any more; every writer and `recover` refuse such a cauldron naming
+  `--abandon-merge`.
+
+Cut short before its journal, the target is unchanged; `recover` sweeps the
+blobs it staged. The hold is lifted by the merge's last soup write, so a
+merge cut short after that write (before its record was written) is not
+held, and an older `cauldron` can write to the target until `recover`
+finishes the record; the undo below then sees that write and leaves it.
+While the `mcp` service holds the target, `recover` is refused: the service
+does not finish a merge (an older one does not know merges at all), so
+close the target to it (`cauldron mcp revoke`) or stop it, then recover.
+
+**Undo.** `cauldron merge --undo <MG-n> --into <target> --env <env>` puts
+the target back exactly as the snapshot holds it, file for file, **only if
+the target holds nothing but what it held when the merge began and the
+merge's own writes**. It compares the snapshot's content with the target's
+now, reading both through connections that cannot write, and leaves out
+exactly the merge's writes: its soup writes (each part), the records they
+created and the edges from or to them, the dumps it carried (found by the
+`meta.merged_from` it gave them) and their writes, the blobs only those
+dumps name, and its own `merges/MG-<n>/`. Every other record, edge, dump,
+write of either store, blob, region lock table entry and file must be as
+it was. Anything else refuses the undo (`changed_since`), changing nothing,
+and lists what differs by kind, count and id, never text
+(`changed_outside_the_merge`), so a write made after a crash and a
+recover, by an older `cauldron` too, is never removed. The refusal says how
+to see those writes (`cauldron soup get <ids>`, or `cauldron soup changes`).
+What can be done safely then: keep the merge and hide what you do not want
+of it by writing a record that supersedes it (`reject` takes only records a
+ripple wrote; the id map names exactly the merge's records). Undoing the
+merge while keeping the later writes is not offered: a later write can name
+the merge's records (an edge, `supersedes`, a citation, a `[[link]]`), and
+writing it again onto the target as it was would give it another
+transaction and other ids, so it would not be the same write. To lose the
+later writes instead (and write them again by hand), with nothing writing
+to the target, move its `soup/`, `dumps/` and `merges/` aside, then copy
+everything under the snapshot's `files/` in their place. A cauldron renamed
+since the merge still undoes: the manifest's name is left out of the
+comparison and keeps the new name.
+
+An undo is **resumable**. It checks the snapshot whole first, then writes a
+marker (`cauldrons/<target>/merge-undoing.json`, beside the stores it puts
+back, and a copy in the snapshot), then holds both stores as a merge does
+(every writer of any release is refused; this release's and the services'
+refusals name the undo, an older CLI's says the soup is halted and to run
+`cauldron soup recover`), looks again under the hold, records every file of
+the target with its digest (and the snapshot's), and only then puts files
+back: the dumps store with its spine file last, then the soup with its
+spine file last, then the rest, the merge's record last. A file is put back
+or moved aside only while it is exactly as recorded when the undo began;
+one something else wrote after that (to a store the undo had already put
+back whole) is left as it is and listed (`restored.kept`). Cut short, the
+undo is finished by running it again, by `cauldron soup recover`
+(`merge_undo` in its output, outcome `undo-finished` when there was nothing
+else to do), or by the next writer of this release that opens the target,
+`cauldron merge` included (which finishes it, then writes), **as long as
+its snapshot is there and whole**; until then reads carry `undo_pending`,
+and `cauldron status` lists it with the command that finishes it. Between
+the dumps store being put back and the soup (a moment, or until the undo
+is finished), a read can show the soup's merged records citing dumps that
+are no longer there, and an older `cauldron` can write a dump to the
+store already put back (the undo then keeps it, listed); both end when the
+undo is finished, or when `--abandon-undo` returns the cauldron to the
+merged state (it refuses over such a later write unless told to set it
+aside). It is refused while the `mcp` service holds the target.
+What it replaces, the merge's record with it, is moved beside the cauldron
+(`cauldrons/<target>.<MG-n>-undone-<time>/`), not into the snapshot and not
+deleted, and an `undo.json` in the snapshot says what was done.
+
+**When an undo cannot be finished.** Its snapshot moved, deleted or
+changed, or its marker unreadable: every writer, `recover`, the undo again
+and a new merge refuse, naming both ways out. Put the snapshot back exactly
+as it was and run `cauldron soup recover`, which finishes the undo; or keep
+the merge with **`cauldron soup recover --env <env> --cauldron <target>
+--abandon-undo`**. That ends with the cauldron **exactly as the merge left
+it**, soup, dumps and the merge's record alike, or refuses and changes
+nothing; it never leaves one store from each side. It lists the cauldron's
+files before it opens anything, and never counts what SQLite or a reader
+leaves beside a database (`-shm`, an empty `-wal`) or the undo's own
+temporary copies as a write. Every file the undo had already put back is
+returned from the `-undone-` directory (which is why that lives outside the
+snapshot), all parts or none. A file written by something else after the
+undo put its store back makes it refuse, listing them, unless you add
+`--set-aside-later-writes` (they are moved into the abandon directory, not
+deleted). It is refused for an undo that **can** still be finished (its own
+marker readable, its snapshot whole), pointing at `recover`, unless you add
+`--lose-undo`, which says what it gives up. Like the merge and the undo, it
+is the owner act `merge` when the merge or the undo was the owner's
+(`not_a_terminal` for an agent unless `merge` is opened), and so is
+`--abandon-merge`, which also refuses a merge `recover` can still settle
+unless you add `--keep-partial-merge`. It lifts the undo's hold, sets its
+marker aside (`cauldrons/<target>.<MG-n>-undo-abandoned-<time>/`, with what
+it replaced and an `undo-abandoned.json`), and says what it did
+(`end_state`) and whether the merge can still be undone. A run of it cut
+short is finished by running it again. Only where two things were taken
+away by hand (the snapshot and the `-undone-` directory, or the marker and
+the snapshot) can neither side be had: then it lifts the hold, answers
+`undo-abandoned-torn` saying what is where, and, as always, raises the dumps
+store's next id past every dump a record cites, so no dump takes a cited
+id. An undo cut before it moved anything whose snapshot or merge record is
+gone or damaged is **dropped**, saying so and why, by whatever finds it
+(which writes nothing that time and says to run it again): the target is as
+the merge left it.
+
+**Where a merge stands.** `cauldron merge --status <MG-n> --into <target>
+--env <env>` reads, and writes nothing: `planned` (cut short before its
+journal; nothing landed), `landing` (cut short after it: `recover` settles
+it), `abandoned`, `restored`, `merged` (with its undo command), `undoing`
+(an undo cut short, which step, and which store is still held),
+`undone`, `torn` (a record whose merge the stores do not hold whole) or
+`partial` (what an abandoned merge left, its journal gone). Each answer is
+read from the stores, judged against what that merge carried (records
+only, dumps only, or both: a merge that carried only dumps, the usual
+second merge between two cauldrons, wrote nothing to the soup and needs
+nothing there), not from a marker: `stores` says what it carried
+(`carried`), whether the soup holds the writes it made, how many of its
+dumps are there, and whether its record is. A cauldron left `torn` (files
+taken away by hand mid-undo) is completed by the owner with `cauldron soup
+recover --env <env> --cauldron <target> --settle-merge <MG-n>`. A merge
+record left over when neither store holds the merge is moved aside, so the
+cauldron is exactly as before the merge. Where the stores hold part of the
+merge, the answer lists every record that cites a dump that is not there
+(`missing_cites`) and says what to do (`repair`): merging the source again
+does **not** repair them (those records are already here and are not
+carried again). A cite can be re-pointed by hand: copy the note out of the
+source (`soup dump-get <id> --raw`), `soup dump` it, then `soup cite <record>
+--remove` the missing cite and `--add` the new one. A record a ripple wrote
+keeps its dump cite (its review trail is never changed). Once no cite that
+can be changed is missing, `--settle-merge` settles the merge as it stands:
+its record then names only what the cauldron holds and lists what was lost
+(`settled.lost`, the record as it was kept beside it), and `--status` says
+`merged` again. `cauldron status` lists every merge or undo into a cauldron of the
+environment that was cut short, with the command that finishes it
+(`merges_cut_short` in `--json`).
+
+**The change feed.** `soup_changes` reports each of the merge's soup writes
+as a change of an existing op (`create`, or `link` for the third), each
+carrying `merge: {id, part: main|ripple|links, from: {cauldron_id}, counts:
+{<type>: n}, edges}` (and `resync` when `ids` cannot list every record: read
+the soup again). Each carried dump is a `dump` entry, as every dump is its
+own write. No new `op` value.
+
 ### Local inference
 
 New in 0.1.11; from 0.1.17 the prebuilt bundle carries it, and `cauldron
@@ -1885,6 +2295,24 @@ service stops the evaluation. The `--out` directory is made owner-only.
 This is an early release. These are known:
 
 - **macOS only.**
+- **A merge is a copy, of one size.** `cauldron merge` does not change a
+  record it does not carry (an edge a record already in the target gained
+  in the source since is listed, not added), a dump removed in one cauldron
+  afterwards is not removed from the other, and `--undo` is refused once
+  anything but the merge has written to the target; undoing a merge while
+  keeping later writes is not offered (a later write can name the merge's
+  records, and writing it again would make it another write). A source
+  over 20,000 records, or estimated to take longer than that many would,
+  needs `--allow-large`, and one around 100,000 records takes about a
+  quarter of an hour with the target refusing writes. A source whose write
+  would pass the soup's per-statement fuel (dense edges, mostly) is refused
+  whatever the flag: it cannot land as one statement. A
+  `cauldron` older than merging (0.1.17 and before) lists a merged record a
+  ripple wrote that nobody decided as unreviewed, but a carried approval or
+  rejection reads to it as an ordinary record (it does not count it as
+  decided in its queue), and it cannot finish a merge or an undo that was
+  cut short: it is refused while the merge or the undo holds the target,
+  until this release settles it.
 - **Nothing acts on a dump by itself unless you turn it on.** Curate a dump
   into records with `/cauldron:curate-dump`, run the dump ripple on it by
   hand (`cauldron ripples run`, see [Ripples, by hand](#ripples-by-hand)),

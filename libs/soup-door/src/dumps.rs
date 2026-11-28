@@ -202,6 +202,23 @@ fn private_store(c: &env::Cauldron, d: &Path) -> Result<()> {
 }
 
 fn take_lock(c: &env::Cauldron, holder: &str) -> Result<File> {
+    let fh = take_lock_ungated(c, holder)?;
+    // A merge that was cut short owns the store until `cauldron soup
+    // recover` finishes it (`crate::merge`).
+    crate::merge::refuse_pending_holding_dumps(c, "write to its dumps store")?;
+    Ok(fh)
+}
+
+/// **The store's writer lock alone, for a merge** (`crate::merge`): taken
+/// before the merge's snapshot of the target, so nothing writes the store
+/// while it is copied, and handed to [`Store::open_held`] afterwards. Not
+/// refused by a merge that was cut short (the merge, or `cauldron soup
+/// recover` finishing one, is what takes it).
+pub fn lock_for_merge(c: &env::Cauldron, holder: &str) -> Result<File> {
+    take_lock_ungated(c, holder)
+}
+
+fn take_lock_ungated(c: &env::Cauldron, holder: &str) -> Result<File> {
     use std::os::unix::fs::OpenOptionsExt;
     let d = dir(c);
     // The whole cauldron's data is its owner's only (`env::private`); the
@@ -268,6 +285,34 @@ impl Store {
     /// store is swept of what a killed or refused dump left (module docs).
     pub fn open(c: &env::Cauldron, holder: &str) -> Result<Store> {
         let lock = take_lock(c, holder)?;
+        Store::open_with(c, lock, None)
+    }
+
+    /// [`Store::open`] for a merge, or for `cauldron soup recover` finishing
+    /// one (`crate::merge`): the same lock and the same open, without the
+    /// refusal a merge that was cut short makes to every other writer.
+    pub fn open_for_merge(c: &env::Cauldron, holder: &str) -> Result<Store> {
+        let lock = take_lock_ungated(c, holder)?;
+        Store::open_with(c, lock, None)
+    }
+
+    /// [`Store::open_for_merge`] for `cauldron soup recover` finishing a
+    /// merge that held the store: the hold `hold` is adopted as the store is
+    /// opened, before anything the open itself writes (a removal it
+    /// finishes), so the open's writes pass it.
+    pub fn open_for_merge_held(c: &env::Cauldron, holder: &str, hold: &str) -> Result<Store> {
+        let lock = take_lock_ungated(c, holder)?;
+        Store::open_with(c, lock, Some(hold))
+    }
+
+    /// [`Store::open`] with the writer lock [`lock_for_merge`] took.
+    pub fn open_held(c: &env::Cauldron, lock: File) -> Result<Store> {
+        Store::open_with(c, lock, None)
+    }
+
+    fn open_with(c: &env::Cauldron, lock: File, hold: Option<&str>) -> Result<Store> {
+        let holder = lock_says(c).unwrap_or_default();
+        let holder = holder.as_str();
         let d = dir(c);
         let created = !d.join(spine::spine_db::SPINE_FILE).is_file();
         let (spine, recovered) = if created {
@@ -275,8 +320,11 @@ impl Store {
                 .map_err(|e| store_err(c, format!("making the store: {e}")))?;
             (s, json!({"interrupted": "none", "rolled_forward": [], "aborted": []}))
         } else {
-            let s = spine::Cauldron::open(&d, spine::config::SpineConfig::default())
+            let mut s = spine::Cauldron::open(&d, spine::config::SpineConfig::default())
                 .map_err(|e| store_err(c, format!("opening the store: {e}")))?;
+            if let Some(h) = hold {
+                s.adopt_hold(h).map_err(|e| store_err(c, e))?;
+            }
             let rec = s.recovered_at_open();
             let hexes = |v: &[spine::envelope::TxHash]| v.iter().map(|h| h.to_hex()).collect::<Vec<_>>();
             let forward: Vec<String> = hexes(&rec.rolled_forward).into_iter().chain(hexes(&rec.cleared_only)).collect();
@@ -314,6 +362,98 @@ impl Store {
         let swept = store.sweep()?;
         store.recovered["swept"] = swept;
         Ok(store)
+    }
+
+    /// **Hold the store** for a merge (`spine::Cauldron::hold`): every other
+    /// writer of it, of any version, is refused naming `reason` until the
+    /// merge lets it go; this store's own writes pass.
+    pub fn hold(&mut self, reason: &str) -> Result<()> {
+        self.spine.hold(reason).map_err(|e| store_err(&self.cauldron, format!("holding the dumps store: {e}")))
+    }
+
+    /// Adopt the hold `reason` a merge cut short left on the store; answers
+    /// whether it was there.
+    pub fn adopt_hold(&mut self, reason: &str) -> Result<bool> {
+        self.spine.adopt_hold(reason).map_err(|e| store_err(&self.cauldron, e))
+    }
+
+    /// Let the store's hold go; answers whether it was held.
+    pub fn release_hold(&mut self) -> Result<bool> {
+        self.spine.release_hold().map_err(|e| store_err(&self.cauldron, format!("letting the dumps store's hold go: {e}")))
+    }
+
+    /// The store's blob directory.
+    pub fn blobs_dir(&self) -> PathBuf {
+        self.dir.join(BLOBS)
+    }
+
+    /// The id the next dump this store creates will get (`DM-<n>`, from the
+    /// spine's own serial counter, the number a CREATE draws).
+    pub fn next_id(&self) -> Result<String> {
+        let counters = self.spine.serial_counters(&pool()).map_err(|e| store_err(&self.cauldron, e))?;
+        Ok(format!("{DUMP_PREFIX}-{}", counters.get(DUMP_PREFIX).copied().unwrap_or(0) + 1))
+    }
+
+    /// **Carry one dump in from another cauldron** (`crate::merge`): ONE
+    /// transaction creating it in `state` with `fields` (`body`, `env`,
+    /// `artifacts`, `meta` and any of `from_cluster`, `seq`, `notes`) as they
+    /// are given. A tombstone (`removing` is never carried; `removed` is)
+    /// re-pins the store to `dump@2` first, as a removal does. Its blob, if
+    /// it names one, must already be in the store. Answers its id.
+    pub fn carry(&mut self, state: &str, fields: &Map<String, Value>, by: &By) -> Result<String> {
+        let c = self.cauldron.clone();
+        if !grammar_dump::DUMP_STATES_V2.contains(&state) || state == grammar_dump::REMOVING {
+            refuse!(Code::Usage, "REFUSED: a dump is carried in state received, processed, failed or removed, not `{state}`");
+        }
+        if let Some(f) = fields.get("artifacts").and_then(Value::as_object).and_then(|a| a.values().next()).and_then(|b| b.get("file")).and_then(Value::as_str) {
+            if !self.dir.join(f).is_file() {
+                return Err(store_err(&c, format!("its blob {f} is not in the store")));
+            }
+        }
+        if state == grammar_dump::REMOVED && self.spine.grammar(&pool()).map(|g| g.version).unwrap_or(0) < 2 {
+            let held = self.spine.held().map(str::to_string);
+            self.spine = open_spine(&c)?
+                .widen_states(&pool(), &grammar_dump::dumps_v2(POOL))
+                .map_err(|e| store_err(&c, format!("re-pinning the store to dump@2: {e}")))?;
+            // The re-opened handle owns the merge's hold as the old one did.
+            if let Some(h) = held {
+                self.spine.adopt_hold(&h).map_err(|e| store_err(&c, e))?;
+            }
+        }
+        let mut b = Bindings::new();
+        let mut keys = Vec::new();
+        for k in ["body", "env", "artifacts", "meta", "from_cluster", "seq", "notes"] {
+            if let Some(v) = fields.get(k).filter(|v| !v.is_null()) {
+                b.insert(k.into(), v.clone());
+                keys.push(format!("{k}: ${k}"));
+            }
+        }
+        let statement = format!("CREATE (d: {POOL}/{DUMP} {{ state: \"{state}\", {} }}) RETURN d.id", keys.join(", "));
+        let env = Envelope {
+            statement,
+            bindings: b,
+            format_version: ENVELOPE_FORMAT_VERSION,
+            provenance: Provenance {
+                initiator: Initiator::Agent { thread: by.thread.clone(), dispatch: by.dispatch.clone() },
+                instrument: Instrument { name: by.instrument.clone(), version: by.version.clone() },
+            },
+            mode: Mode::Commit,
+            idempotency_nonce: Some(format!("dump-carry:{}:{}:{}", std::process::id(), by.dispatch, next_serial())),
+        };
+        match self.spine.submit(env) {
+            Ok(spine::Outcome::Committed { returned, .. }) => returned
+                .0
+                .first()
+                .and_then(|r| r.get("d.id"))
+                .and_then(Value::as_str)
+                .map(str::to_string)
+                .ok_or_else(|| store_err(&c, "the carried dump landed and its id was not returned")),
+            Ok(_) => Err(store_err(&c, "the carried dump was validated and not committed")),
+            Err(spine::error::SpineError::Refused { witnesses }) => {
+                Err(store_err(&c, format!("the dumps store refused the carried dump: {}", json!(witnesses))))
+            }
+            Err(e) => Err(store_err(&c, format!("writing the carried dump: {e}"))),
+        }
     }
 
     /// A writer for one blob of this store.
@@ -923,6 +1063,7 @@ pub fn check_extras(title: Option<&str>, from: Option<&str>, cite: Option<&Value
         if !c.get("kind").and_then(Value::as_str).is_some_and(|k| !k.is_empty()) {
             refuse!(Code::Usage, "REFUSED: `cite` must be an object with a `kind` (meta.cites form). Nothing was written.");
         }
+        crate::review::refuse_merge_provenance("REFUSED: the dump's `cite`", c)?;
     }
     if refs.len() > REFS_MAX || refs.iter().any(|r| r.trim().is_empty() || r.len() > 64) {
         refuse!(Code::Usage, "REFUSED: `refs` is at most {REFS_MAX} node ids. Nothing was written.");
@@ -1421,6 +1562,23 @@ fn read_pool(c: &env::Cauldron) -> Result<Option<Pool>> {
         return Ok(None);
     }
     Pool::open_read_only(&Pool::path_in(&dir(c), &pool())).map(Some).map_err(|e| store_err(c, e))
+}
+
+/// **Every dump of `c`**, newest first, read through a connection that
+/// cannot write (none when it has no store).
+pub fn all_nodes(c: &env::Cauldron) -> Result<Vec<NodeRecord>> {
+    all(c)
+}
+
+/// The blob a dump node names: its kind and `{sha256, bytes, media, file}`
+/// (`Null` for a tombstone).
+pub fn blob_of(n: &NodeRecord) -> (Kind, Value) {
+    artifact(n)
+}
+
+/// Is `n` a dump whose removal was cut short (state `removing`)?
+pub fn removal_unfinished(n: &NodeRecord) -> bool {
+    is_removing(n)
 }
 
 fn all(c: &env::Cauldron) -> Result<Vec<NodeRecord>> {

@@ -172,9 +172,12 @@ impl ReadDir {
                 .open(path.join(READ_DIR_LOCK))
                 .ok()
                 .filter(|f| f.try_lock().is_ok());
+            // Not locked: another process's sweep found the lock file in the
+            // instant between its creation and this lock, took it, and is
+            // removing the directory. Never use it; take another name.
             let Some(lock) = lock else {
                 remove_read_dir(&path);
-                return None;
+                continue;
             };
             sweep_once(base, m.uid());
             return Some(ReadDir { path, _lock: lock });
@@ -189,12 +192,37 @@ impl Drop for ReadDir {
     }
 }
 
+/// **A private scratch directory for one read that needs more than one
+/// file** (a merge's dry run judges its batch on a copy of the target's
+/// soup): the same directory a read's private copy gets (a new,
+/// unguessable name in the temporary directory, mode 0700, locked for its
+/// life), removed when dropped, and swept by the next process's first read
+/// if this one dies. `None` when no such directory can be had.
+pub struct PrivateDir(ReadDir);
+
+impl PrivateDir {
+    pub fn new() -> Option<PrivateDir> {
+        ReadDir::new(&std::env::temp_dir()).map(PrivateDir)
+    }
+
+    /// The directory (put what the read needs in a subdirectory of it).
+    pub fn path(&self) -> &Path {
+        &self.0.path
+    }
+}
+
 /// Remove a read's directory: the files directly in it (a symlink is
-/// removed as a link, never followed), then the directory.
+/// removed as a link, never followed), each real subdirectory with what is
+/// in it (a private scratch's copy of a soup), then the directory.
 fn remove_read_dir(dir: &Path) {
     if let Ok(entries) = std::fs::read_dir(dir) {
         for e in entries.flatten() {
-            let _ = std::fs::remove_file(e.path());
+            let is_dir = std::fs::symlink_metadata(e.path()).is_ok_and(|m| m.file_type().is_dir());
+            if is_dir {
+                let _ = std::fs::remove_dir_all(e.path());
+            } else {
+                let _ = std::fs::remove_file(e.path());
+            }
         }
     }
     let _ = std::fs::remove_dir(dir);

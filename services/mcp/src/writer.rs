@@ -91,11 +91,16 @@ pub struct Who {
 /// writer thread with the cauldron's handle, after the same grant check.
 pub type WithFn = Box<dyn FnOnce(&spine::Cauldron, &Target) -> Result<Value, Refusal> + Send>;
 
+/// A write that needs the handle itself, mutably (a merge, which may give
+/// the soup its cluster pool), run the same way.
+pub type WithMutFn = Box<dyn FnOnce(&mut spine::Cauldron, &Target) -> Result<Value, Refusal> + Send>;
+
 enum Job {
     Put(Put, Who, mpsc::Sender<Result<Value, Refusal>>),
     Claim(soup_door::clusters::Claim, Who, mpsc::Sender<Result<Value, Refusal>>),
     Link(Vec<Link>, Who, mpsc::Sender<Result<Value, Refusal>>),
     With(WithFn, mpsc::Sender<Result<Value, Refusal>>),
+    WithMut(WithMutFn, mpsc::Sender<Result<Value, Refusal>>),
 }
 
 /// One open cauldron.
@@ -191,6 +196,15 @@ impl Writers {
         let w = self.get_or_open(t, &who)?;
         let (tx, rx) = mpsc::channel();
         w.send(Job::With(f, tx))?;
+        rx.recv().unwrap_or_else(|_| Err(closed()))
+    }
+
+    /// Run `f` on the target's writer with its handle, mutably, opening it
+    /// first if needed.
+    pub fn with_mut(&self, t: &Target, who: Who, f: WithMutFn) -> Result<Value, Refusal> {
+        let w = self.get_or_open(t, &who)?;
+        let (tx, rx) = mpsc::channel();
+        w.send(Job::WithMut(f, tx))?;
         rx.recv().unwrap_or_else(|_| Err(closed()))
     }
 
@@ -357,6 +371,12 @@ fn run(t: Target, gate: Gate, pulse: Arc<crate::changes::Pulse>, ready: mpsc::Se
                     None => f(&cauldron, &t),
                 });
             }
+            Job::WithMut(f, reply) => {
+                let _ = reply.send(match refused {
+                    Some(r) => Err(r),
+                    None => f(&mut cauldron, &t),
+                });
+            }
         }
         ran(&pulse);
     }
@@ -399,6 +419,10 @@ fn open(t: &Target) -> Result<(spine::Cauldron, File, Value), Refusal> {
         }
         Err(std::fs::TryLockError::Error(e)) => return Err(Refusal::new("store", format!("locking {}: {e}", path.display()))),
     }
+    // A merge cut short after it began landing owns the cauldron until
+    // `cauldron soup recover` finishes it: this door does not open it
+    // meanwhile (`soup_door::merge`).
+    soup_door::merge::refuse_pending(c, "open it for this door").map_err(refusal)?;
     let _ = fh.set_len(0).and_then(|_| writeln!(fh, "mcp {}", std::process::id())).and_then(|_| fh.flush());
     let soup = c.soup();
     let mut cauldron = spine::Cauldron::open(&soup, spine::config::SpineConfig::default())

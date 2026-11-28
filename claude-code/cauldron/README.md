@@ -169,6 +169,38 @@ revoke the grant (then grant it again). A `.cauldron` marker naming the old
 name is not updated: run `cauldron link notes --env prod --replace` in that
 project.
 
+### Merging two cauldrons
+
+`cauldron merge <source> --into <target> --env prod [--dry-run]` copies one
+cauldron's soup and dumps into another: every record under a new id (the
+printed and saved `id_map`), its edges, cites and `[[links]]` rewritten,
+regions or clusters that look alike both kept and flagged (never folded),
+and nothing the target already holds carried twice. A record a ripple wrote
+that nobody decided reaches a session from the target as `unreviewed`, as
+it did from the source, an older service included; an approval or a
+rejection travels only when the source's own history records it as a
+decision (the owner's at a terminal, or an agent's or a session's where
+the owner allowed it, each with its `by`). Carrying decisions is the owner
+act `merge`, at a terminal unless the owner opened it. `soup_get` shows
+where a record came from under `merged` and in `meta.merged_from`. Each of
+the merge's writes reaches `soup_changes` as a change carrying `merge` (no
+new op). While a merge holds the target, the target refuses every write, a
+session's included; a merge cut short is settled by `cauldron soup
+recover`, and until then reads carry `merge_pending`. A source of more
+than 20,000 records needs `--allow-large`. `cauldron merge --undo <MG-n>
+--into <target>` puts the target back exactly when nothing but the merge
+has written to it since (a later write, by a session too, is never
+removed; the undo is refused instead), and `cauldron merge --status`
+says where a merge stands.
+
+A merge does not carry the source's grant or its automatic ripples
+setting: the target keeps its own, so a session that could not read the
+target before cannot after. It leaves the source untouched; removing it is
+`cauldron remove`. No MCP tool merges, and a session cannot write
+`merged_from` (`soup_put`, `soup_link`, `soup_unlink`, `soup_cite`,
+`soup_claim` and `soup_dump` refuse it). See the repository README,
+"Merging cauldrons".
+
 ## The launcher
 
 `.mcp.json` runs `${CLAUDE_PLUGIN_ROOT}/bin/cauldron-mcp`, a short `sh`
@@ -487,8 +519,10 @@ nothing and assigns nothing.
 
 New in 0.1.17 ([#25](https://github.com/broomstick-ai/cauldron/issues/25)).
 Granting a cauldron to the MCP door (`grant`), approving or rejecting what
-a ripple wrote (`approve`), and turning automatic processing on
-(`ripples`) are the owner's acts.
+a ripple wrote (`approve`), turning automatic processing on (`ripples`),
+and carrying a source's approvals and rejections into another cauldron
+with `cauldron merge` (`merge`, from the release that brings merging) are
+the owner's acts.
 
 - **What the gate is for.** By default each runs only at an interactive
   terminal, so an agent, a script or a ripple cannot do them: no model
@@ -496,9 +530,10 @@ a ripple wrote (`approve`), and turning automatic processing on
   automatic spend starts, without the owner deciding.
 - **What `open` gives up.** With `approve` open an agent can approve what a
   ripple wrote; with `grant` open it can open a cauldron to every session;
-  with `ripples` open it can start automatic model spend.
+  with `ripples` open it can start automatic model spend; with `merge` open
+  it can carry decisions from one cauldron into another.
 - **Three ways to choose** (`terminal` is the default and changes nothing):
-  `cauldron owner-acts open | terminal [--only grant,approve,ripples]
+  `cauldron owner-acts open | terminal [--only grant,approve,ripples,merge]
   [--cauldron C] [--env E]` at a terminal (a cauldron's own choice wins over
   the root's; `owner-acts show` says what is in effect); the environment
   variable `CAULDRON_OWNER_ACTS=open` (or a comma list) in the environment
@@ -506,8 +541,10 @@ a ripple wrote (`approve`), and turning automatic processing on
   settings' `env` (never a project's `.claude/settings.json`), CI or a
   server, which anything able to set its own environment can turn on, and
   that is the point: the owner decides whether their agents may act for
-  them; and `scripts/install --owner-acts open|terminal`. The variable is
-  read only by that command, and opens `grant` and `ripples` there: no
+  them; and `scripts/install --owner-acts open|terminal`. A choice recorded
+  as `open` by 0.1.17 lists the three acts it knew, so `merge` stays at a
+  terminal until it is opened. The variable is read only by that command,
+  and opens `grant`, `ripples` and a merge that command runs itself there: no
   service inherits it, and the `mcp` service, which carries out every
   approval and rejection, follows the persisted choice alone, so to let
   agents (a command without a terminal, or a session through

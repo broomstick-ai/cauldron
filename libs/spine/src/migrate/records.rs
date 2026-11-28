@@ -251,6 +251,17 @@ pub fn import_records(
     }
     let labels: BTreeSet<String> = parsed.iter().flatten().map(|p| p.label.clone()).collect();
 
+    // Every lookup of a held node goes through one handle per pool, opened
+    // once for the whole batch (not one connection per record).
+    let mut handles: BTreeMap<PoolName, crate::pool::Pool> = BTreeMap::new();
+    let mut held_node = |pool: &PoolName, id: &str| -> Result<Option<crate::pool::NodeRecord>> {
+        if !handles.contains_key(pool) {
+            handles.insert(pool.clone(), cauldron.open_pool(pool)?);
+        }
+        let snapshot = handles[pool].snapshot()?;
+        snapshot.node(&NodeId(id.to_string()))
+    };
+
     // ---- ids: carried as written, or re-minted from the serial counters ----
     let mut id_map: BTreeMap<String, String> = BTreeMap::new();
     let mut new_id: BTreeMap<String, String> = BTreeMap::new();
@@ -267,9 +278,7 @@ pub fn import_records(
                 pools.push(home.clone());
             }
             for pool in &pools {
-                let handle = cauldron.open_pool(pool)?;
-                let snapshot = handle.snapshot()?;
-                let Some(held) = snapshot.node(&NodeId(p.label.clone()))? else { continue };
+                let Some(held) = held_node(pool, &p.label)? else { continue };
                 let what = held
                     .fields
                     .get("handle")
@@ -354,11 +363,7 @@ pub fn import_records(
                     row.push(None);
                     continue;
                 }
-                let held_in = |pool: &PoolName| -> Result<Option<String>> {
-                    let handle = cauldron.open_pool(pool)?;
-                    let snapshot = handle.snapshot()?;
-                    Ok(snapshot.node(&NodeId(id.clone()))?.map(|n| n.node_type))
-                };
+                let mut held_in = |pool: &PoolName| -> Result<Option<String>> { Ok(held_node(pool, &id)?.map(|n| n.node_type)) };
                 let mut held = held_in(&target_pool)?;
                 // A routed record's bare reference falls back to the home pool.
                 let mut looked_in = vec![target_pool.clone()];
@@ -389,6 +394,11 @@ pub fn import_records(
         }
         targets.push(row);
     }
+
+    // The lookups are done: their connections close before anything is
+    // judged or landed.
+    drop(held_node);
+    drop(handles);
 
     // ---- one viewer per role ----
     let mut roles: BTreeMap<String, String> = BTreeMap::new();
@@ -510,8 +520,17 @@ pub fn import_records(
         return Ok(RecordsImport { records: out, id_map, manifest: None, landing: None });
     }
 
-    // ---- the door's judgment, item by item ----
-    let manifest = dry_run(cauldron, plan, &items)?;
+    // ---- the door's judgment: the whole batch at once first (ONE
+    // validate of the landing statement itself); item by item only when
+    // that refuses, to say which record and why. (Never a commit as the
+    // judge: a commit the door refuses late leaves an aborted row in the
+    // spine, and a refused import writes nothing.) ----
+    let adapter_accepted = out.iter().all(|r| r.disposition == ACCEPTED);
+    let whole = if adapter_accepted { super::validate_whole(cauldron, plan, &items)? } else { None };
+    let manifest = match whole {
+        Some(m) => m,
+        None => dry_run(cauldron, plan, &items)?,
+    };
     let index: BTreeMap<&str, usize> = parsed
         .iter()
         .enumerate()

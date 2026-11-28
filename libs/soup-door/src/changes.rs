@@ -23,6 +23,15 @@
 //! were. Each dump entry is `{seq, at, op: "dump", id, kind, bytes, state}`
 //! (ids and sizes, never text).
 //!
+//! A merge (`crate::merge`) lands its records in at most three soup writes
+//! (its main write; its ripple part, the records a ripple wrote that nobody
+//! decided; and the edges from the first's records to the second's), each a
+//! change of an existing op (`create`, or `link`), and each carries `merge`:
+//! `{id, part: main|ripple|links, from: {cauldron_id}, counts: {<type>: n},
+//! edges}` (plus `resync` when `ids` could not list every record). The dumps
+//! it carried are `dump` entries, one per dump, as every dump is its own
+//! write.
+//!
 //! Refusals: a cursor that is not this door's form, or that belongs to
 //! another cauldron (or to one removed and made again under the same name),
 //! is `cursor_unknown`; one whose counter is above its stream's is
@@ -110,6 +119,9 @@ struct Row {
     hash: String,
     at: String,
     by: Option<String>,
+    /// The initiator's `dispatch`, when it has one (a merge's carries its
+    /// mark: `crate::provenance::parse_mark`).
+    dispatch: Option<String>,
 }
 
 /// The answer: `{env, cauldron, since, cursor, head, changes, dumps,
@@ -219,8 +231,12 @@ fn rows_after(soup: &Path, from: u64, head: u64, n: usize) -> Result<Vec<Row>, S
     let mut out = Vec::new();
     for row in rows {
         let (counter, hash, at, initiator) = row.map_err(|e| e.to_string())?;
-        let by = serde_json::from_str::<Value>(&initiator).ok().and_then(|v| v.get("thread").and_then(Value::as_str).map(str::to_string));
-        out.push(Row { counter: counter.max(0) as u64, hash, at, by });
+        let v = serde_json::from_str::<Value>(&initiator).ok();
+        let by = v.as_ref().and_then(|v| v.get("thread").and_then(Value::as_str).map(str::to_string));
+        // A merge's mark ends its `dispatch` (or, for its ripple part, its
+        // ripple initiator's `step_id`).
+        let dispatch = v.as_ref().and_then(|v| v.get("dispatch").or_else(|| v.get("step_id")).and_then(Value::as_str).map(str::to_string));
+        out.push(Row { counter: counter.max(0) as u64, hash, at, by, dispatch });
     }
     Ok(out)
 }
@@ -404,6 +420,27 @@ fn change(soup: &Path, pools: &[std::path::PathBuf], r: &Row) -> Result<Value, S
     c.insert("count".into(), json!(count));
     if edges > 0 {
         c.insert("edges".into(), json!(edges));
+    }
+    // A merge (`crate::merge`) is one `create` change, which says it is one:
+    // which merge, from which cauldron, and how many records of each type.
+    let mark = r.dispatch.as_deref().and_then(|d| {
+        crate::provenance::parse_mark(d)
+            .map(|(m, src, _, _)| ("main".to_string(), m, src))
+            .or_else(|| crate::provenance::parse_part(d).map(|(part, m, src, _, _)| (part, m, src)))
+    });
+    if let Some((part, merge, source_id)) = mark {
+        let mut by_type: std::collections::BTreeMap<String, u64> = std::collections::BTreeMap::new();
+        for x in &ids {
+            *by_type.entry(x["type"].as_str().unwrap_or("").to_string()).or_default() += 1;
+        }
+        let mut m = json!({"id": merge, "part": part, "from": {"cauldron_id": source_id}, "counts": by_type, "edges": edges});
+        if count > IDS_PER_CHANGE {
+            m["resync"] = json!(format!(
+                "this merge created {count} records and `ids` lists the first {IDS_PER_CHANGE}: read the soup again \
+                 (soup_regions, soup_nodes) to see them all"
+            ));
+        }
+        c.insert("merge".into(), m);
     }
     c.insert("ids".into(), Value::Array(ids.into_iter().take(IDS_PER_CHANGE).collect()));
     Ok(Value::Object(c))

@@ -225,6 +225,14 @@ impl Dumps {
         Ok(h)
     }
 
+    /// **Run `f` with the held store of `cauldron`**, mutably, when this
+    /// service holds it (`None` when it does not, or it is closing).
+    pub fn with_held_mut<R>(&self, cauldron: &str, f: impl FnOnce(&mut Store) -> R) -> Option<R> {
+        let h = self.map().get(cauldron).cloned()?;
+        let mut g = h.store.lock().unwrap_or_else(|p| p.into_inner());
+        g.as_mut().map(f)
+    }
+
     /// Open (or find) the store, for a dump about to be written: the blob
     /// store is then ready to take its bytes.
     pub fn prepare(&self, t: &Target, who: &Who) -> Result<(), Refusal> {
