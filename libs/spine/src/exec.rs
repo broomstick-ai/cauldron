@@ -1109,6 +1109,7 @@ fn check_pins_and_occupancy_over(
     if names.is_empty() {
         return Ok(());
     }
+    cauldron.check_user_files(&names)?;
     let open = read::open_pools(cauldron, &names)?;
 
     // ---- the pins, off the FILES ----

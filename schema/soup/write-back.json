@@ -30,6 +30,21 @@
       "why": "the top-level `rejected: true` reads add to a record the owner rejected (the flag itself is `meta.rejected`, which is refused); dropped only when it is `true`, as reads write it"
     },
     {
+      "key": "edges_in",
+      "on": "*",
+      "why": "the edges that arrive at the record, read from their sources when asked (`soup get --edges-in`, `soup_get` with `edges_in`); an edge is written from its source record"
+    },
+    {
+      "key": "edges_in_total",
+      "on": "*",
+      "why": "how many edges arrive at the record when `edges_in` lists only the first ones"
+    },
+    {
+      "key": "pool",
+      "on": "*",
+      "why": "the pool a read found a user grammar's record in (reads add it to those records only); a write sends every record to its pool by its type, so it is dropped. A user grammar cannot declare a field `pool` (reserved), and no built-in type has one"
+    },
+    {
       "key": "merged",
       "on": "*",
       "why": "computed by reads from the transaction that created the record: the merge that carried it there and where it came from (`cauldron merge`); the record's own provenance is `meta.merged_from`, which is refused"

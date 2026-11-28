@@ -98,11 +98,6 @@ fn ws() -> PoolName {
     PoolName::new(DEFAULT_POOL)
 }
 
-fn read_ws(c: &env::Cauldron) -> Result<Pool> {
-    Pool::open_read_only(&Pool::path_in(&c.soup(), &ws()))
-        .map_err(|err| store(format!("reading cauldron `{}`'s soup: {err}", c.name)))
-}
-
 fn envelope(statement: String, bindings: Bindings, w: &Writer, nonce: &str) -> Envelope {
     Envelope {
         statement,
@@ -124,7 +119,7 @@ fn envelope(statement: String, bindings: Bindings, w: &Writer, nonce: &str) -> E
 /// One statement over `links`: a MATCH (pinned to exactly one node) per
 /// distinct endpoint, then `verb` per link. Values ride as parameters; the
 /// type and kind names spliced in are the grammar's own.
-fn statement(links: &[&Link], types: &BTreeMap<String, String>, verb: &str) -> (String, Bindings) {
+fn statement(links: &[&Link], types: &BTreeMap<String, At>, verb: &str) -> (String, Bindings) {
     let mut binding: BTreeMap<&str, String> = BTreeMap::new();
     let (mut lines, mut expects, mut acts) = (Vec::new(), Vec::new(), Vec::new());
     let mut params = Bindings::new();
@@ -132,7 +127,8 @@ fn statement(links: &[&Link], types: &BTreeMap<String, String>, verb: &str) -> (
         for end in [&l.from, &l.to] {
             if !binding.contains_key(end.as_str()) {
                 let b = format!("n{}", binding.len());
-                lines.push(format!("MATCH ({b}: {DEFAULT_POOL}/{} {{ id: $id_{b} }})", types[end]));
+                let at = &types[end];
+                lines.push(format!("MATCH ({b}: {}/{} {{ id: $id_{b} }})", at.pool.as_str(), at.ty));
                 expects.push(format!("EXPECT COUNT({b}) = 1"));
                 params.insert(format!("id_{b}"), json!(end));
                 binding.insert(end, b);
@@ -150,34 +146,144 @@ fn statement(links: &[&Link], types: &BTreeMap<String, String>, verb: &str) -> (
     (lines.into_iter().chain(expects).chain(acts).collect::<Vec<_>>().join("\n"), params)
 }
 
-/// The record ids of `links` that the soup does not hold, as refusals, and
-/// the types of those it does.
-fn endpoints(snap: &spine::pool::Snapshot<'_>, links: &[Link], c: &env::Cauldron) -> Result<(BTreeMap<String, String>, BTreeMap<usize, Value>)> {
-    let mut types = BTreeMap::new();
-    let mut why = BTreeMap::new();
-    for (i, l) in links.iter().enumerate() {
-        for end in [&l.from, &l.to] {
-            if why.contains_key(&i) || types.contains_key(end) {
-                continue;
-            }
-            match snap.node(&NodeId(end.clone())).map_err(store)? {
-                Some(n) => {
-                    types.insert(end.clone(), n.node_type);
-                }
-                None => {
-                    why.insert(i, json!({"reason": "unknown-node", "detail": format!("`{end}` is not a node in cauldron `{}`", c.name)}));
-                }
+/// Where a record the soup holds is: its pool and its type.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct At {
+    pub pool: PoolName,
+    pub ty: String,
+}
+
+impl At {
+    fn is_user(&self) -> bool {
+        self.pool.as_str() != DEFAULT_POOL && self.pool.as_str() != crate::clusters::POOL
+    }
+
+    fn qualified(&self, id: &str) -> QualifiedNodeId {
+        QualifiedNodeId { pool: self.pool.clone(), id: NodeId(id.to_string()) }
+    }
+}
+
+/// The user grammars' pools `handle` holds, by name.
+fn user_pools(handle: &spine::Cauldron) -> Vec<PoolName> {
+    handle.pools().filter(|p| handle.grammar(p).is_some_and(|g| spine::user_grammar::is_user_kind(g.kind.as_str()))).cloned().collect()
+}
+
+fn read_pool(c: &env::Cauldron, pool: &PoolName) -> Result<Pool> {
+    Pool::open_read_only(&Pool::path_in(&c.soup(), pool)).map_err(|err| store(format!("reading pool `{pool}` of cauldron `{}`'s soup: {err}", c.name)))
+}
+
+/// **Where each of `ids` is**: in `ws`, else in one of the user grammars'
+/// pools (`spine::user_grammar`; a record id names one pool, since an id
+/// prefix is used once per cauldron). An id in neither is absent.
+pub fn locate(handle: &spine::Cauldron, c: &env::Cauldron, ids: &[&String]) -> Result<BTreeMap<String, At>> {
+    let mut found = BTreeMap::new();
+    let mut pools = vec![ws()];
+    pools.extend(user_pools(handle));
+    for pool in pools {
+        let left: Vec<&&String> = ids.iter().filter(|id| !found.contains_key(id.as_str())).collect();
+        if left.is_empty() {
+            break;
+        }
+        let p = read_pool(c, &pool)?;
+        let snap = p.snapshot().map_err(store)?;
+        for id in left {
+            if let Some(n) = snap.node(&NodeId((*id).clone())).map_err(store)? {
+                found.insert((*id).clone(), At { pool: pool.clone(), ty: n.node_type });
             }
         }
     }
-    Ok((types, why))
+    Ok(found)
+}
+
+/// `<ID>@<pool>`, as reads print an edge's target: the id, and the pool it
+/// names. A plain id names no pool.
+pub fn split_end(end: &str) -> (String, Option<String>) {
+    match end.rsplit_once('@') {
+        Some((id, pool)) if !id.is_empty() && PoolName::new(pool).is_well_formed() => (id.to_string(), Some(pool.to_string())),
+        _ => (end.to_string(), None),
+    }
+}
+
+/// `links` with every `<ID>@<pool>` end made a plain id, and the pool each
+/// such end named (by link index and end: 0 from, 1 to).
+fn plain(links: &[Link]) -> (Vec<Link>, BTreeMap<(usize, u8), String>) {
+    let mut named = BTreeMap::new();
+    let out = links
+        .iter()
+        .enumerate()
+        .map(|(i, l)| {
+            let (from, fp) = split_end(&l.from);
+            let (to, tp) = split_end(&l.to);
+            if let Some(p) = fp {
+                named.insert((i, 0), p);
+            }
+            if let Some(p) = tp {
+                named.insert((i, 1), p);
+            }
+            Link { from, kind: l.kind.clone(), to, note: l.note.clone() }
+        })
+        .collect();
+    (out, named)
+}
+
+/// The record ids of `links` that the soup does not hold, as refusals, and
+/// where those it does are. An end written `<ID>@<pool>` must be in that
+/// pool.
+fn endpoints(handle: &spine::Cauldron, links: &[Link], c: &env::Cauldron) -> Result<(BTreeMap<String, At>, BTreeMap<usize, Value>, Vec<Link>)> {
+    let (links_plain, named) = plain(links);
+    let links = &links_plain[..];
+    let ids: Vec<&String> = links.iter().flat_map(|l| [&l.from, &l.to]).collect();
+    let types = locate(handle, c, &ids)?;
+    let mut why = BTreeMap::new();
+    for ((i, end), want) in &named {
+        let l = &links[*i];
+        let id = if *end == 0 { &l.from } else { &l.to };
+        if let Some(at) = types.get(id) {
+            if at.pool.as_str() != want {
+                why.insert(*i, json!({"reason": "wrong-pool", "detail": format!("`{id}@{want}` names pool `{want}`, but `{id}` is a record of pool `{}`", at.pool)}));
+            }
+        }
+    }
+    for (i, l) in links.iter().enumerate() {
+        for end in [&l.from, &l.to] {
+            if !why.contains_key(&i) && !types.contains_key(end) {
+                // An id of a registered user pool whose file is out: say so.
+                let out = handle.missing_user_pools().unwrap_or_default().into_iter().find(|g| {
+                    let named = named.iter().any(|((j, _), p)| *j == i && p == g.pool.as_str());
+                    named || g.node_types.values().any(|d| d.id_prefix.as_ref().is_some_and(|p| end.starts_with(&format!("{p}-"))))
+                });
+                match out {
+                    Some(g) => why.insert(i, json!({"reason": "pool-file-missing", "pool": g.pool.as_str(), "detail": crate::grammars::missing_note(c, &g)})),
+                    None => why.insert(i, json!({"reason": "unknown-node", "detail": format!("`{end}` is not a record of cauldron `{}` (in `ws` or a user grammar's pool)", c.name)})),
+                };
+            }
+        }
+        if why.contains_key(&i) {
+            continue;
+        }
+        let (from, to) = (&types[&l.from], &types[&l.to]);
+        // An edge leaves its source's own grammar. A built-in grammar
+        // declares no edge into a user kind (it was written before any
+        // user grammar), so no edge from a workspace record reaches one.
+        if !from.is_user() && to.is_user() {
+            why.insert(i, json!({"reason": "no-edge-into-a-user-kind",
+                "detail": format!("`{}` is a `{}` of pool `{}` and `{}` a `{}` of user pool `{}`: an edge is declared by its source's grammar, and a built-in grammar declares no edge into a user kind, so no `{}` edge leaves `{}` for `{}`. An edge the other way is written when `{}`'s grammar declares it (`cauldron soup grammar show {}`)",
+                    l.from, from.ty, from.pool, l.to, to.ty, to.pool, l.kind, l.from, l.to, to.pool, to.pool)}));
+        }
+    }
+    Ok((types, why, links_plain))
 }
 
 fn unknown_kind(grammar: &spine::schema_def::PoolGrammar, kind: &str) -> Option<Value> {
     (!grammar.edge_kinds.contains_key(kind)).then(|| {
         let kinds: Vec<&String> = grammar.edge_kinds.keys().collect();
-        json!({"reason": "unknown-kind", "detail": format!("`{kind}` is not an edge kind of this soup's grammar"), "kinds": kinds})
+        json!({"reason": "unknown-kind", "detail": format!("`{kind}` is not an edge kind of pool `{}`'s grammar (`{}@{}`)", grammar.pool, grammar.kind, grammar.version), "kinds": kinds})
     })
+}
+
+/// The grammar of the pool a link's source is in.
+fn source_grammar<'h>(handle: &'h spine::Cauldron, at: &At) -> Result<&'h spine::schema_def::PoolGrammar> {
+    handle.grammar(&at.pool).ok_or_else(|| store(format!("the soup has no pool `{}`", at.pool)))
 }
 
 /// The edge kinds whose graph may hold no cycle and no self-edge.
@@ -188,7 +294,7 @@ pub const AT_CREATION_KINDS: [&str; 1] = ["supersedes"];
 
 /// Does `from` reach `to` by `kind` edges of the soup, plus `extra` edges
 /// (from, to) of the same kind? (Breadth first; every node once.)
-fn reaches(snap: &spine::pool::Snapshot<'_>, kind: &str, from: &str, to: &str, extra: &[(String, String)]) -> Result<bool> {
+fn reaches(snap: &spine::pool::Snapshot<'_>, pool: &PoolName, kind: &str, from: &str, to: &str, extra: &[(String, String)]) -> Result<bool> {
     let mut seen = BTreeSet::new();
     let mut queue = vec![from.to_string()];
     while let Some(n) = queue.pop() {
@@ -199,7 +305,7 @@ fn reaches(snap: &spine::pool::Snapshot<'_>, kind: &str, from: &str, to: &str, e
             continue;
         }
         for e in snap.edges_from(&NodeId(n.clone()), Some(kind)).map_err(store)? {
-            if e.dst.pool == ws() {
+            if &e.dst.pool == pool {
                 queue.push(e.dst.id.0.clone());
             }
         }
@@ -304,28 +410,26 @@ fn refused_links(answers: Vec<Value>, mut doc: Value, total: usize) -> Error {
 /// outcome: linked, landed}`.
 pub fn link(handle: &spine::Cauldron, t: &Target, links: &[Link], w: &Writer) -> Result<Value> {
     let c = &t.cauldron;
-    let pool = ws();
-    let grammar = handle.grammar(&pool).ok_or_else(|| store("the soup has no `ws` pool"))?.clone();
     for l in links {
         if let Some(n) = &l.note {
             crate::notes::check(n, &format!("the link `{}` -[{}]-> `{}`", l.from, l.kind, l.to))?;
         }
     }
-    let p = read_ws(c)?;
-    let snap = p.snapshot().map_err(store)?;
-    let (types, mut why) = endpoints(&snap, links, c)?;
+    let (types, mut why, links_plain) = endpoints(handle, links, c)?;
+    let links = &links_plain[..];
     // An edge the soup already holds is answered `already-linked` and not
     // written again (the spine would treat it as a no-op, but the write
     // would still take a change entry pointing at nothing new).
     let mut present = vec![false; links.len()];
     for (i, l) in links.iter().enumerate() {
         if !why.contains_key(&i) {
-            let dst = QualifiedNodeId { pool: pool.clone(), id: NodeId(l.to.clone()) };
+            let (from, to) = (&types[&l.from], &types[&l.to]);
+            let p = read_pool(c, &from.pool)?;
+            let snap = p.snapshot().map_err(store)?;
+            let dst = to.qualified(&l.to);
             present[i] = snap.edges_from(&NodeId(l.from.clone()), Some(&l.kind)).map_err(store)?.iter().any(|e| e.dst == dst);
         }
     }
-    drop(snap);
-    drop(p);
     // Added only with the record it leaves; never a self-edge or a cycle
     // (module docs). The cycle check counts the call's other new edges.
     let new_edges: Vec<(usize, String, String, String)> = links
@@ -343,12 +447,15 @@ pub fn link(handle: &spine::Cauldron, t: &Target, links: &[Link], w: &Writer) ->
                 "detail": format!("a `supersedes` edge is written only with the record that supersedes: put a NEW record of the same type as `{}` carrying `{{\"kind\": \"supersedes\", \"to\": \"{}\", \"note\": …}}` (soup_put, or an import). soup_link never adds one, so no record can be marked replaced after the fact", l.to, l.to)}));
             continue;
         }
-        if ACYCLIC_KINDS.contains(&l.kind.as_str()) && !present[i] {
+        // A cycle runs within one pool: an edge between pools goes from a
+        // later grammar to an earlier one, never back.
+        let (from, to) = (&types[&l.from], &types[&l.to]);
+        if ACYCLIC_KINDS.contains(&l.kind.as_str()) && !present[i] && from.pool == to.pool {
             let others: Vec<(String, String)> =
                 new_edges.iter().filter(|(j, k, _, _)| *j != i && *k == l.kind).map(|(_, _, f, t)| (f.clone(), t.clone())).collect();
-            let p = read_ws(c)?;
+            let p = read_pool(c, &from.pool)?;
             let snap = p.snapshot().map_err(store)?;
-            if l.from == l.to || reaches(&snap, &l.kind, &l.to, &l.from, &others)? {
+            if l.from == l.to || reaches(&snap, &from.pool, &l.kind, &l.to, &l.from, &others)? {
                 why.insert(i, loop_refusal(l));
             }
         }
@@ -356,7 +463,7 @@ pub fn link(handle: &spine::Cauldron, t: &Target, links: &[Link], w: &Writer) ->
     let mut answers = Vec::new();
     for (i, l) in links.iter().enumerate() {
         if !why.contains_key(&i) {
-            if let Some(u) = unknown_kind(&grammar, &l.kind) {
+            if let Some(u) = unknown_kind(source_grammar(handle, &types[&l.from])?, &l.kind) {
                 why.insert(i, u);
             }
         }
@@ -372,21 +479,13 @@ pub fn link(handle: &spine::Cauldron, t: &Target, links: &[Link], w: &Writer) ->
                 Err(e) => return Err(store(format!("judging a link: {e}"))),
             }
         }
-        let mut a = json!({"from": l.from, "kind": l.kind, "to": l.to});
-        match why.remove(&i) {
-            Some(r) => {
-                a["status"] = json!("refused");
-                a["refused"] = r;
-            }
-            None => a["status"] = json!(if present[i] { "already-linked" } else { "accepted" }),
-        }
-        answers.push(a);
+        answers.push(answer(l, &types, why.remove(&i), if present[i] { "already-linked" } else { "accepted" }));
     }
-    let doc = json!({"env": t.env.name, "cauldron": c.name, "pool": pool.as_str()});
+    let doc = json!({"env": t.env.name, "cauldron": c.name, "pool": DEFAULT_POOL});
+    let mut doc = with_pools(doc, links, &types);
     if answers.iter().any(|a| a["status"] == "refused") {
         return Err(refused_links(answers, doc, links.len()));
     }
-    let mut doc = doc;
     // Each new edge once, even when the call names it twice.
     let mut seen = BTreeSet::new();
     let take: Vec<&Link> = links
@@ -427,26 +526,72 @@ pub fn link(handle: &spine::Cauldron, t: &Target, links: &[Link], w: &Writer) ->
     }
 }
 
+/// One link's answer: `{from, kind, to, status, refused?}`, plus where each
+/// end is (`from_pool`, `to_pool`) when either is in a user grammar's pool.
+fn answer(l: &Link, types: &BTreeMap<String, At>, refused: Option<Value>, ok: &str) -> Value {
+    let mut a = json!({"from": l.from, "kind": l.kind, "to": l.to});
+    if let (Some(f), Some(t)) = (types.get(&l.from), types.get(&l.to)) {
+        if f.is_user() || t.is_user() {
+            a["from_pool"] = json!(f.pool.as_str());
+            a["to_pool"] = json!(t.pool.as_str());
+        }
+    }
+    match refused {
+        Some(r) => {
+            a["status"] = json!("refused");
+            a["refused"] = r;
+        }
+        None => a["status"] = json!(ok),
+    }
+    a
+}
+
+/// `doc` with `pools`: every pool a link's source is in, when one is a user
+/// grammar's (`pool` stays the soup's own, `ws`, as before).
+fn with_pools(mut doc: Value, links: &[Link], types: &BTreeMap<String, At>) -> Value {
+    let pools: BTreeSet<&str> = links.iter().filter_map(|l| types.get(&l.from)).map(|a| a.pool.as_str()).collect();
+    if pools.iter().any(|p| *p != DEFAULT_POOL) {
+        doc["pools"] = json!(pools);
+    }
+    doc
+}
+
 // ----------------------------------------------------------------- unlink
 
-/// Would `node` still have every edge the grammar requires of its type at
-/// mint, with `gone` (kind, target) removed? `None` when it would; else the
-/// sentence that says what it would lack.
-fn still_minted(snap: &spine::pool::Snapshot<'_>, node: &spine::pool::NodeRecord, gone: &BTreeSet<(String, String)>) -> Result<Option<String>> {
+/// Would `node` (of pool `pool`, judged by its pin `grammar`) still have
+/// every edge its type requires at mint, with `gone` (kind, target)
+/// removed? `None` when it would; else the sentence that says what it would
+/// lack. A workspace record is held to workspace@6's table
+/// ([`spine::grammar_v6::required_edges`], [`spine::grammar_v6::mint_alternatives`]),
+/// a user grammar's record to its type's `required_edges_at_mint`.
+fn still_minted(
+    snap: &spine::pool::Snapshot<'_>,
+    pool: &PoolName,
+    grammar: &spine::schema_def::PoolGrammar,
+    node: &spine::pool::NodeRecord,
+    gone: &BTreeSet<(String, QualifiedNodeId)>,
+) -> Result<Option<String>> {
     let edges = snap.edges_from(&node.id, None).map_err(store)?;
     let mut left: BTreeMap<String, u32> = BTreeMap::new();
     for e in &edges {
-        if !gone.contains(&(e.kind.clone(), e.dst.id.0.clone())) || e.dst.pool != ws() {
+        if !gone.contains(&(e.kind.clone(), e.dst.clone())) {
             *left.entry(e.kind.clone()).or_default() += 1;
         }
     }
     let has = |k: &str| left.get(k).copied().unwrap_or(0);
-    for (k, n) in spine::grammar_v6::required_edges(&node.node_type) {
+    let (required, alts) = if pool.as_str() == DEFAULT_POOL {
+        (spine::grammar_v6::required_edges(&node.node_type), spine::grammar_v6::mint_alternatives(&node.node_type))
+    } else {
+        match grammar.node_types.get(&node.node_type) {
+            Some(d) => (d.required_edges_at_mint.clone(), d.required_at_mint_any_of.clone()),
+            None => (BTreeMap::new(), vec![]),
+        }
+    };
+    for (k, n) in required {
         if has(&k) < n {
             return Ok(Some(format!("a `{}` keeps at least {n} `{k}` edge(s)", node.node_type)));
         }
     }
-    let alts = spine::grammar_v6::mint_alternatives(&node.node_type);
     if alts.is_empty() {
         return Ok(None);
     }
@@ -470,14 +615,11 @@ fn still_minted(snap: &spine::pool::Snapshot<'_>, node: &spine::pool::NodeRecord
 /// landed?}`.
 pub fn unlink(handle: &spine::Cauldron, t: &Target, links: &[Link], w: &Writer) -> Result<Value> {
     let c = &t.cauldron;
-    let pool = ws();
-    let grammar = handle.grammar(&pool).ok_or_else(|| store("the soup has no `ws` pool"))?.clone();
     if links.iter().any(|l| l.note.is_some()) {
         refuse!(Code::Usage, "a removed edge takes no note: it goes, note and all. Nothing was written");
     }
-    let p = read_ws(c)?;
-    let snap = p.snapshot().map_err(store)?;
-    let (types, mut why) = endpoints(&snap, links, c)?;
+    let (types, mut why, links_plain) = endpoints(handle, links, c)?;
+    let links = &links_plain[..];
     let mut present = vec![false; links.len()];
     for (i, l) in links.iter().enumerate() {
         if l.kind == spine::grammar_cauldron::CLAIMS {
@@ -488,40 +630,47 @@ pub fn unlink(handle: &spine::Cauldron, t: &Target, links: &[Link], w: &Writer) 
         if why.contains_key(&i) {
             continue;
         }
-        if let Some(u) = unknown_kind(&grammar, &l.kind) {
+        let (from, to) = (&types[&l.from], &types[&l.to]);
+        if let Some(u) = unknown_kind(source_grammar(handle, from)?, &l.kind) {
             why.insert(i, u);
             continue;
         }
+        let p = read_pool(c, &from.pool)?;
+        let snap = p.snapshot().map_err(store)?;
         if l.kind == "supersedes" {
             // The way out of damage no write makes any more: a self-edge,
             // or an edge on a cycle of `supersedes`, records no replacement
             // and hides every record on it, so it may go.
-            let damaged = l.from == l.to || reaches(&snap, "supersedes", &l.to, &l.from, &[])?;
+            let damaged = l.from == l.to || (from.pool == to.pool && reaches(&snap, &from.pool, "supersedes", &l.to, &l.from, &[])?);
             if !damaged {
                 why.insert(i, json!({"reason": "supersedes-is-history",
                     "detail": format!("`{}` -[supersedes]-> `{}` records that one replaced the other; removing it would make `{}` read as current again. Write a new record instead. (Only a `supersedes` edge from a record to itself, or one on a cycle of `supersedes` edges, may be removed: neither records a replacement.)", l.from, l.to, l.to)}));
                 continue;
             }
         }
-        let dst = QualifiedNodeId { pool: pool.clone(), id: NodeId(l.to.clone()) };
+        let dst = to.qualified(&l.to);
         present[i] = snap.edges_from(&NodeId(l.from.clone()), Some(&l.kind)).map_err(store)?.iter().any(|e| e.dst == dst);
     }
     // The required edges, judged per source record over every removal the
     // call makes from it.
-    let mut gone: BTreeMap<String, BTreeSet<(String, String)>> = BTreeMap::new();
+    let mut gone: BTreeMap<String, BTreeSet<(String, QualifiedNodeId)>> = BTreeMap::new();
     for (i, l) in links.iter().enumerate() {
         if present[i] && !why.contains_key(&i) {
-            gone.entry(l.from.clone()).or_default().insert((l.kind.clone(), l.to.clone()));
+            gone.entry(l.from.clone()).or_default().insert((l.kind.clone(), types[&l.to].qualified(&l.to)));
         }
     }
     for (from, removed) in &gone {
-        let node = snap.node(&NodeId(from.clone())).map_err(store)?.expect("checked above");
+        let at = &types[from];
+        let grammar = source_grammar(handle, at)?;
+        let p = read_pool(c, &at.pool)?;
+        let snap = p.snapshot().map_err(store)?;
+        let node = snap.node(&NodeId(from.clone())).map_err(store)?.expect("located above");
         // A record that already lacks a required edge (written before a
         // rule) is not held to it by a removal of something else.
-        if still_minted(&snap, &node, &BTreeSet::new())?.is_some() {
+        if still_minted(&snap, &at.pool, grammar, &node, &BTreeSet::new())?.is_some() {
             continue;
         }
-        if let Some(lack) = still_minted(&snap, &node, removed)? {
+        if let Some(lack) = still_minted(&snap, &at.pool, grammar, &node, removed)? {
             for (i, l) in links.iter().enumerate() {
                 if &l.from == from && present[i] && !why.contains_key(&i) {
                     why.insert(i, json!({"reason": "required-edge",
@@ -530,21 +679,11 @@ pub fn unlink(handle: &spine::Cauldron, t: &Target, links: &[Link], w: &Writer) 
             }
         }
     }
-    drop(snap);
-    drop(p);
     let mut answers: Vec<Value> = Vec::new();
     for (i, l) in links.iter().enumerate() {
-        let mut a = json!({"from": l.from, "kind": l.kind, "to": l.to});
-        match why.remove(&i) {
-            Some(r) => {
-                a["status"] = json!("refused");
-                a["refused"] = r;
-            }
-            None => a["status"] = json!(if present[i] { "accepted" } else { "not-linked" }),
-        }
-        answers.push(a);
+        answers.push(answer(l, &types, why.remove(&i), if present[i] { "accepted" } else { "not-linked" }));
     }
-    let mut doc = json!({"env": t.env.name, "cauldron": c.name, "pool": pool.as_str()});
+    let mut doc = with_pools(json!({"env": t.env.name, "cauldron": c.name, "pool": DEFAULT_POOL}), links, &types);
     if answers.iter().any(|a| a["status"] == "refused") {
         return Err(refused_links(answers, doc, links.len()));
     }
@@ -639,16 +778,51 @@ pub fn ripple_written(c: &env::Cauldron, id: &str) -> Result<bool> {
 /// not-cited, written, cites, removed?, landed?}`.
 pub fn cite(handle: &spine::Cauldron, t: &Target, id: &str, op: &CiteOp, w: &Writer) -> Result<Value> {
     let c = &t.cauldron;
+    // `<ID>@<pool>`, as reads print it: that pool's record.
+    let (plain_id, named) = split_end(id);
+    let id = plain_id.as_str();
+    if let Some(want) = &named {
+        let at = if id.starts_with("CL-") { Some(crate::clusters::POOL.to_string()) } else { locate(handle, c, &[&id.to_string()])?.remove(id).map(|a| a.pool.as_str().to_string()) };
+        match at {
+            Some(p) if &p == want => {}
+            Some(p) => refuse!(Code::Usage, "`{id}@{want}` names pool `{want}`, but `{id}` is a record of pool `{p}`. Nothing was written"),
+            None => refuse!(Code::NotFound, "there is no record `{id}` in pool `{want}` of cauldron `{}`. Nothing was written", c.name),
+        }
+    }
     let is_cluster = id.starts_with("CL-");
-    let pool = if is_cluster { PoolName::new(crate::clusters::POOL) } else { ws() };
+    let mut pool = if is_cluster { PoolName::new(crate::clusters::POOL) } else { ws() };
     if is_cluster && !crate::clusters::has_pool(c) {
         refuse!(Code::NotFound, "there is no record `{id}` in cauldron `{}`. Nothing was written", c.name);
     }
+    // Not in `ws`: a user grammar's record, when one of its pools holds it.
+    if !is_cluster {
+        if let Some(at) = locate(handle, c, &[&id.to_string()])?.remove(id) {
+            pool = at.pool;
+        }
+    }
+    let user = pool.as_str() != DEFAULT_POOL && !is_cluster;
     let p = Pool::open_read_only(&Pool::path_in(&c.soup(), &pool)).map_err(|err| store(format!("reading cauldron `{}`'s soup: {err}", c.name)))?;
     let snap = p.snapshot().map_err(store)?;
     let Some(node) = snap.node(&NodeId(id.to_string())).map_err(store)? else {
-        refuse!(Code::NotFound, "there is no record `{id}` in cauldron `{}`. Nothing was written", c.name);
+        refuse!(Code::NotFound, "there is no record `{id}` in cauldron `{}` (in `ws` or a user grammar's pool). Nothing was written", c.name);
     };
+    // A citation is an entry of `meta.cites`: a user type that declares no
+    // `meta` field carries none (its grammar's rule, not this door's).
+    if user {
+        let g = handle.grammar(&pool).ok_or_else(|| store(format!("the soup has no pool `{pool}`")))?;
+        if !g.node_types.get(&node.node_type).is_some_and(|d| d.fields.contains_key("meta")) {
+            return Err(Error::new(
+                Code::Usage,
+                format!(
+                    "`{id}` (type `{}`, user pool `{pool}`): `{}@{}` declares no `meta` field on `{}`, so its records carry no \
+                     citations (`meta.cites`). Nothing was written. A grammar that wants them declares `\"meta\": {{\"required\": \
+                     false, \"kind\": \"object\"}}` on the type",
+                    node.node_type, g.kind, g.version, node.node_type
+                ),
+            )
+            .with_detail(json!({"reason": "no-meta-field", "pool": pool.as_str(), "type": node.node_type})));
+        }
+    }
     // A record a ripple wrote: its `dump` citation is part of its review
     // trail (the review queue groups by it, and `--dump` approves and
     // rejects by it), so it is neither added nor removed here. A ripple's
@@ -675,6 +849,9 @@ pub fn cite(handle: &spine::Cauldron, t: &Target, id: &str, op: &CiteOp, w: &Wri
     let meta = node.fields.get("meta").map(|f| f.value.clone()).unwrap_or(Value::Null);
     let mut cites: Vec<Value> = meta.get("cites").and_then(Value::as_array).cloned().unwrap_or_default();
     let mut doc = json!({"env": t.env.name, "cauldron": c.name, "id": id});
+    if user {
+        doc["pool"] = json!(pool.as_str());
+    }
     let (outcome, removed) = match op {
         CiteOp::Add(v) => {
             doc["op"] = json!("add");

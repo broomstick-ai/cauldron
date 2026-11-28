@@ -89,6 +89,9 @@ pub struct ReadOpts {
     /// `nodes`, `search`, `region`: list rejected records too (they are
     /// left out, and counted, by default).
     pub include_rejected: bool,
+    /// `get`: add each record's `edges_in`, the edges that arrive at it
+    /// from any pool (opt in: a read adds it, and a write drops it).
+    pub edges_in: bool,
 }
 
 impl ReadOpts {
@@ -183,9 +186,28 @@ pub fn rejected(fields: &BTreeMap<String, spine::pool::FieldValue>) -> bool {
         .is_some_and(|a| !a.is_null() && *a != Value::Bool(false))
 }
 
+/// **A record's review mark**, the one test `get` and its `edges_in` use:
+/// `rejected` for a record the owner rejected, `unreviewed` for one a ripple
+/// wrote (or a merge carried from a ripple, `provenance::Writers`) that the
+/// owner has not approved, else none.
+fn review_mark(n: &spine::pool::NodeRecord, writers: &crate::provenance::Writers, created: Option<&str>) -> Option<&'static str> {
+    if rejected(&n.fields) {
+        return Some("rejected");
+    }
+    let meta = n.fields.get("meta").map(|f| f.value.clone()).unwrap_or(Value::Null);
+    (writers.ripple_written(created, &meta) && !approved(&n.fields)).then_some("unreviewed")
+}
+
 /// The pool, through a connection that cannot write.
 fn read_pool(c: &env::Cauldron, pool: &PoolName) -> Result<Pool> {
     let file = Pool::path_in(&c.soup(), pool);
+    if !file.exists() {
+        // A registered user pool whose file is out says so, and what to do.
+        if let Some(g) = crate::grammars::missing(c)?.into_iter().find(|g| &g.pool == pool) {
+            return Err(Error::new(Code::NotFound, format!("REFUSED: {}", crate::grammars::missing_note(c, &g)))
+                .with_detail(json!({"reason": "pool-file-missing", "pool": pool.as_str()})));
+        }
+    }
     Pool::open_read_only(&file).map_err(|err| store(format!("reading cauldron `{}`'s pool `{pool}`: {err}", c.name)))
 }
 
@@ -266,6 +288,62 @@ pub fn regions(t: &Target, o: &ReadOpts) -> Result<Value> {
 /// Those nodes as records in the published shape, with their outgoing
 /// edges. Ids the pool does not hold are listed as `missing`.
 pub fn get(t: &Target, ids: &[String], o: &ReadOpts) -> Result<Value> {
+    // `<ID>@<pool>`, as an edge target reads: that pool's record, named
+    // outright (a pool the soup does not hold, or an id it does not hold
+    // there, is `missing` as asked).
+    if o.pool.is_none() && ids.iter().any(|i| i.contains('@')) {
+        let (named, plain): (Vec<&String>, Vec<&String>) = ids.iter().partition(|i| i.contains('@'));
+        let plain: Vec<String> = plain.into_iter().cloned().collect();
+        let mut doc = get(t, &plain, o)?;
+        let held: Vec<PoolName> = crate::grammars::pins(&t.cauldron)?.into_iter().map(|g| g.pool).collect();
+        let (mut records, mut missing) = (Vec::new(), Vec::new());
+        for asked in named {
+            let (id, p) = asked.rsplit_once('@').unwrap_or((asked, ""));
+            if !PoolName::new(p).is_well_formed() || !held.contains(&PoolName::new(p)) {
+                missing.push(json!(asked));
+                continue;
+            }
+            // The soup's own pool and the cluster pool are read as a plain id
+            // reads them (a cluster with its `claims`); the record must be in
+            // the pool named.
+            let builtin = p == DEFAULT_POOL || p == crate::clusters::POOL;
+            let o2 = if builtin {
+                ReadOpts { max_chars: o.max_chars, edges_in: o.edges_in, ..ReadOpts::default() }
+            } else {
+                ReadOpts { pool: Some(p.to_string()), max_chars: o.max_chars, edges_in: o.edges_in, ..ReadOpts::default() }
+            };
+            let found = get(t, &[id.to_string()], &o2)?;
+            let r = found["records"].as_array().and_then(|a| a.first()).cloned().filter(|r| {
+                !builtin || (r.get("pool").is_none() && ((r["type"] == crate::clusters::POOL_TYPE) == (p == crate::clusters::POOL)))
+            });
+            match r {
+                Some(mut r) => {
+                    if !builtin {
+                        r["pool"] = json!(p);
+                    }
+                    records.push(r);
+                }
+                None => missing.push(json!(asked)),
+            }
+        }
+        let mut users: Vec<String> = doc["user_pools"].as_array().map(|a| a.iter().filter_map(|x| x.as_str().map(String::from)).collect()).unwrap_or_default();
+        users.extend(records.iter().filter_map(|r| r["pool"].as_str().map(String::from)));
+        users.sort();
+        users.dedup();
+        if !users.is_empty() {
+            doc["user_pools"] = json!(users);
+        }
+        if let Some(a) = doc["records"].as_array_mut() {
+            a.extend(records);
+        }
+        say_cluster_pool(&mut doc, "records");
+        if !missing.is_empty() {
+            let mut m = doc["missing"].as_array().cloned().unwrap_or_default();
+            m.extend(missing);
+            doc["missing"] = json!(m);
+        }
+        return Ok(doc);
+    }
     let (e, c) = (&t.env, &t.cauldron);
     let pool = o.pool_name();
     let handle = read_pool(c, &pool)?;
@@ -309,12 +387,17 @@ pub fn get(t: &Target, ids: &[String], o: &ReadOpts) -> Result<Value> {
         if !by.is_empty() {
             rec.insert("superseded_by".into(), json!(by));
         }
+        if o.edges_in {
+            let (list, total) = edges_in(c, &pool, &n.id, &writers)?;
+            rec.insert("edges_in".into(), json!(list));
+            if total > list.len() {
+                rec.insert("edges_in_total".into(), json!(total));
+            }
+        }
         let created = snap.created_tx(&n.id).map_err(store)?.map(|h| h.to_hex());
         let meta = n.fields.get("meta").map(|f| f.value.clone()).unwrap_or(Value::Null);
-        if rejected(&n.fields) {
-            rec.insert("rejected".into(), json!(true));
-        } else if writers.ripple_written(created.as_deref(), &meta) && !approved(&n.fields) {
-            rec.insert("unreviewed".into(), json!(true));
+        if let Some(mark) = review_mark(&n, &writers, created.as_deref()) {
+            rec.insert(mark.into(), json!(true));
         }
         // A record a merge carried says so, and from where
         // (`crate::merge`); its `meta.merged_from` has the rest.
@@ -333,7 +416,47 @@ pub fn get(t: &Target, ids: &[String], o: &ReadOpts) -> Result<Value> {
         records.extend(clusters);
         missing = still;
     }
+    // Or a user grammar's record: each such record carries its `pool`.
+    let mut from_user_pools = Vec::new();
+    if pool.as_str() == DEFAULT_POOL && !missing.is_empty() {
+        for g in crate::grammars::user_pins(c)? {
+            if missing.is_empty() {
+                break;
+            }
+            let ids = std::mem::take(&mut missing);
+            let o2 = ReadOpts { pool: Some(g.pool.as_str().to_string()), max_chars: o.max_chars, edges_in: o.edges_in, ..ReadOpts::default() };
+            let found = get(t, &ids, &o2)?;
+            for mut r in found["records"].as_array().cloned().unwrap_or_default() {
+                r["pool"] = json!(g.pool.as_str());
+                records.push(r);
+                from_user_pools.push(g.pool.as_str().to_string());
+            }
+            missing = found["missing"].as_array().map(|a| a.iter().filter_map(|x| x.as_str().map(String::from)).collect()).unwrap_or_default();
+        }
+    }
+    // An id whose prefix is a type's of a registered user pool whose file is
+    // out: still missing, and the answer says why.
+    let mut out_pools = Vec::new();
+    if pool.as_str() == DEFAULT_POOL && !missing.is_empty() {
+        for g in crate::grammars::missing(c)? {
+            let held: Vec<&String> = missing
+                .iter()
+                .filter(|id| g.node_types.values().any(|d| d.id_prefix.as_ref().is_some_and(|p| id.starts_with(&format!("{p}-")))))
+                .collect();
+            if !held.is_empty() {
+                out_pools.push(json!({"pool": g.pool.as_str(), "ids": held, "why": crate::grammars::missing_note(c, &g)}));
+            }
+        }
+    }
     let mut doc = json!({"env": e.name, "cauldron": c.name, "pool": pool.as_str(), "records": records});
+    if !out_pools.is_empty() {
+        doc["pool_files_missing"] = json!(out_pools);
+    }
+    if !from_user_pools.is_empty() {
+        from_user_pools.sort();
+        from_user_pools.dedup();
+        doc["user_pools"] = json!(from_user_pools);
+    }
     say_cluster_pool(&mut doc, "records");
     if !missing.is_empty() {
         doc["missing"] = json!(missing);
@@ -457,6 +580,69 @@ fn reviewed_as(review: Option<&str>, n: &Entry) -> bool {
 }
 
 /// The ids of the nodes whose `supersedes` edge points at `id`, sorted.
+/// How many arriving edges `get` lists per record (`edges_in_total` says
+/// how many there are when there are more).
+pub const EDGES_IN_LIMIT: usize = 500;
+
+/// **The edges that arrive at `id` of `pool`**, from every pool of the soup
+/// (an edge is stored with its source, so each pool file is asked):
+/// `{from, kind, from_pool?, note?, <edge fields>}`, by kind and source, at
+/// most [`EDGES_IN_LIMIT`]; and how many there are. An edge names one
+/// version of a record: after a supersede, edges into the old version stay
+/// on it (records never change), so a reader follows `superseded_by`.
+fn edges_in(c: &env::Cauldron, pool: &PoolName, id: &NodeId, writers: &crate::provenance::Writers) -> Result<(Vec<Value>, usize)> {
+    let dst = QualifiedNodeId { pool: pool.clone(), id: id.clone() };
+    let mut out = Vec::new();
+    let mut total = 0;
+    // The pools every read of a user pool accepts (`grammars::pins`: each
+    // file judged against the spine's registry and bound to it, and each at
+    // its own `<pool>.db`), never the soup directory's files as found.
+    for g in crate::grammars::pins(c)? {
+        let src_pool = g.pool.clone();
+        let p = read_pool(c, &src_pool)?;
+        let snap = p.snapshot().map_err(store)?;
+        for x in snap.edges_to(&dst, None).map_err(store)? {
+            total += 1;
+            if out.len() >= EDGES_IN_LIMIT {
+                continue;
+            }
+            // The edge's fields first, then its position over them: what
+            // the entry names as the source is where the edge is stored,
+            // whatever a field says (a user grammar may not declare these
+            // names, `user_grammar::RESERVED_EDGE_FIELDS`; a built-in one
+            // does not).
+            let mut m = serde_json::Map::new();
+            for (k, v) in x.fields {
+                m.insert(k, v);
+            }
+            // The review marks are the source's, set below from its record
+            // only, never carried over from a field.
+            for k in ["from_pool", "rejected", "unreviewed"] {
+                m.remove(k);
+            }
+            m.insert("from".into(), json!(x.src.0));
+            m.insert("kind".into(), json!(x.kind));
+            if &src_pool != pool {
+                m.insert("from_pool".into(), json!(src_pool.as_str()));
+            }
+            if let Some(n) = &x.note {
+                m.insert("note".into(), json!(n));
+            }
+            // The source's review state, marked as a read of the source
+            // marks it, so a reply holding an unreviewed ripple's note
+            // carries the warning (`mcp` attaches `unreviewed_note`).
+            if let Some(src) = snap.node(&x.src).map_err(store)? {
+                let created = snap.created_tx(&src.id).map_err(store)?.map(|h| h.to_hex());
+                if let Some(mark) = review_mark(&src, writers, created.as_deref()) {
+                    m.insert(mark.into(), json!(true));
+                }
+            }
+            out.push(Value::Object(m));
+        }
+    }
+    Ok((out, total))
+}
+
 fn superseded_by(snap: &spine::pool::Snapshot<'_>, pool: &PoolName, id: &NodeId) -> Result<Vec<String>> {
     let mut by: Vec<String> = snap
         .edges_to(&QualifiedNodeId { pool: pool.clone(), id: id.clone() }, Some("supersedes"))
@@ -542,12 +728,49 @@ fn bounded<T>(mut v: Vec<T>, limit: usize) -> (Vec<T>, usize) {
 
 /// Nodes as `{id, type, state, handle, regions}`, newest first, filtered by
 /// region, type and state, at most `limit` (default [`NODES_LIMIT`]).
+/// A read aimed at the soup's own pool whose `type` is a user grammar's type
+/// reads that type's pool instead.
+fn user_pool_for_type(t: &Target, o: &ReadOpts) -> Result<Option<PoolName>> {
+    if o.pool.is_some() {
+        return Ok(None);
+    }
+    match o.node_type.as_deref() {
+        Some(ty) => {
+            crate::grammars::refuse_missing_type(&t.cauldron, ty)?;
+            crate::grammars::pool_of_type(&t.cauldron, ty)
+        }
+        None => Ok(None),
+    }
+}
+
+/// A region filter on a user grammar's pool is refused: user kinds have no
+/// region membership in this release (`in_region` and `claims` are never a
+/// user edge), so no user record is in a region to be filtered by.
+fn refuse_region_on_user_pool(t: &Target, pool: &PoolName, o: &ReadOpts) -> Result<()> {
+    let Some(r) = o.region.as_deref() else { return Ok(()) };
+    if let Some(g) = crate::grammars::user_pins(&t.cauldron)?.into_iter().find(|g| &g.pool == pool) {
+        let what = o.node_type.as_deref().map(|ty| format!("a `{ty}`")).unwrap_or_else(|| "a record".into());
+        return Err(Error::new(
+            Code::Usage,
+            format!(
+                "{what} of user pool `{pool}` (`{}@{}`) is in no region: user kinds have no region membership in this release \
+                 (`in_region` is never a user grammar's edge), so `region` cannot filter them. An edge from a user record to \
+                 a region (such as `about`) is a plain link: `soup get <id>` shows it. Read without `region`",
+                g.kind, g.version
+            ),
+        )
+        .with_detail(json!({"reason": "no-region-membership", "pool": pool.as_str(), "region": r})));
+    }
+    Ok(())
+}
+
 pub fn nodes(t: &Target, o: &ReadOpts) -> Result<Value> {
     if let Some(r) = &o.review {
         checked_review(r)?;
     }
     let (e, c) = (&t.env, &t.cauldron);
-    let pool = o.pool_name();
+    let pool = user_pool_for_type(t, o)?.unwrap_or_else(|| o.pool_name());
+    refuse_region_on_user_pool(t, &pool, o)?;
     // `--type cluster` lists the clusters of the soup's cluster pool.
     if pool.as_str() == DEFAULT_POOL && o.node_type.as_deref() == Some(spine::grammar_cauldron::CLUSTER) {
         return crate::clusters::nodes(t, o.region.as_deref(), o.state.as_deref(), o.limit.unwrap_or(NODES_LIMIT), o.max_chars);
@@ -658,7 +881,8 @@ pub fn search(t: &Target, query: &str, o: &ReadOpts) -> Result<Value> {
         checked_review(r)?;
     }
     let (e, c) = (&t.env, &t.cauldron);
-    let pool = o.pool_name();
+    let pool = user_pool_for_type(t, o)?.unwrap_or_else(|| o.pool_name());
+    refuse_region_on_user_pool(t, &pool, o)?;
     let handle = read_pool(c, &pool)?;
     let snap = handle.snapshot().map_err(store)?;
     // Clusters are searched beside the workspace's nodes (or alone, with

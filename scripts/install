@@ -6,8 +6,8 @@
 #
 # --owner-acts open|terminal (for a headless install): step 5's `cauldron
 # install --owner-acts <value>` records the root's owner_acts choice after
-# the install, as set by it (`how: install`; `open`: grant, approve and
-# ripples on may run without a terminal;
+# the install, as set by it (`how: install`; `open`: grant, approve,
+# ripples on and the grammar acts may run without a terminal;
 # `terminal`: they may not, the default). Without the flag the setting is left
 # as it is. See `cauldron owner-acts help`.
 #

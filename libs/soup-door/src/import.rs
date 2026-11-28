@@ -219,6 +219,7 @@ pub fn submit(cauldron: &spine::Cauldron, t: &Target, records: &[Value], o: &Imp
     crate::review::refuse_ripple_provenance(records)?;
     crate::notes::refuse_long_notes(records)?;
     crate::edges::refuse_edge_loops(records)?;
+    crate::grammars::refuse_missing_or_lost(cauldron, &t.cauldron, records, o.remint)?;
     let (e, c) = (&t.env, &t.cauldron);
     let mut plan = MigrationPlan::new(spine::envelope::Initiator::Agent {
         thread: o.agent.clone(),
@@ -230,9 +231,10 @@ pub fn submit(cauldron: &spine::Cauldron, t: &Target, records: &[Value], o: &Imp
         std::process::id(),
         std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_nanos()).unwrap_or(0)
     ));
-    // Records go to their pool by type (a cluster to the cluster pool) when
-    // the batch is aimed at the soup's own pool.
-    let routes = if o.pool_name().as_str() == DEFAULT_POOL { crate::clusters::routes() } else { BTreeMap::new() };
+    // Records go to their pool by type (a cluster to the cluster pool, a
+    // user grammar's type to its pool) when the batch is aimed at the soup's
+    // own pool.
+    let routes = if o.pool_name().as_str() == DEFAULT_POOL { crate::grammars::routes(cauldron) } else { BTreeMap::new() };
     let opts = RecordsOptions { pool: o.pool_name(), routes, remint: o.remint, commit: !o.dry_run };
     let run = import_records(cauldron, &plan, records, &opts).map_err(crate::region_lock::spine_error)?;
 
@@ -260,9 +262,18 @@ pub fn submit(cauldron: &spine::Cauldron, t: &Target, records: &[Value], o: &Imp
             }
         }
     }
+    // A record routed to a user grammar's pool says so: the batch's `pool`
+    // is the soup's own, where every other record goes.
+    let mut user_pools = std::collections::BTreeSet::new();
     for r in records_doc.as_array_mut().into_iter().flatten() {
         if let Some(h) = hint(r, o.remint) {
             r["hint"] = json!(h);
+        }
+        if let Some(p) = r["type"].as_str().and_then(|t| opts.routes.get(t)) {
+            if spine::user_grammar::is_user_kind(p.as_str()) {
+                r["pool"] = json!(p.as_str());
+                user_pools.insert(p.as_str().to_string());
+            }
         }
     }
     let mut doc = json!({
@@ -278,6 +289,9 @@ pub fn submit(cauldron: &spine::Cauldron, t: &Target, records: &[Value], o: &Imp
         "records": records_doc,
         "batch_digest": digest,
     });
+    if !user_pools.is_empty() {
+        doc["user_pools"] = json!(user_pools);
+    }
     if o.remint && ids_hold {
         doc["id_map"] = to_value(&run.id_map)?;
     }

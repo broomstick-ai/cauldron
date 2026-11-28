@@ -1,4 +1,4 @@
-//! **`dump@1`**: the grammar of a cauldron's dumps store, the second spine
+//! **`dumps@1`**: the grammar of a cauldron's dumps store, the second spine
 //! that sits beside its soup (`<cauldron>/dumps/`).
 //!
 //! A dump is raw text put into a cauldron for later processing: a note, a
@@ -28,7 +28,7 @@ use std::collections::BTreeMap;
 pub const POOL: &str = "dumps";
 /// The pool's kind.
 pub const KIND: &str = "dumps";
-/// The pinned version: `dump@1`.
+/// The pinned version: `dumps@1`.
 pub const VERSION: u32 = 1;
 /// The node type (v7's name).
 pub const DUMP: &str = "dump";
@@ -41,13 +41,13 @@ pub const RECEIVED: &str = "received";
 /// The state of a dump being removed (`cauldron soup dump-remove`): a
 /// tombstone whose content can no longer be read, while the erasure of its
 /// text from the store's files is not yet finished. Not one of v7's:
-/// `dump@2` adds it.
+/// `dumps@2` adds it.
 pub const REMOVING: &str = "removing";
 /// The state of a dump whose text was removed and erased: a tombstone.
-/// Recorded only once the erasure has finished. Not one of v7's: `dump@2`
-/// adds it, and a store is re-pinned to `dump@2` by its first removal.
+/// Recorded only once the erasure has finished. Not one of v7's: `dumps@2`
+/// adds it, and a store is re-pinned to `dumps@2` by its first removal.
 pub const REMOVED: &str = "removed";
-/// Every state a dump of `dump@2` can be in.
+/// Every state a dump of `dumps@2` can be in.
 pub const DUMP_STATES_V2: [&str; 5] = ["received", "processed", "failed", "removing", "removed"];
 
 /// v7's `dump` node type, as v7 defines it (no `meta`).
@@ -76,7 +76,7 @@ pub fn dump_v7() -> NodeTypeDef {
     }
 }
 
-/// The `dump@1` grammar for a pool named `pool`: v7's `dump` plus an
+/// The `dumps@1` grammar for a pool named `pool`: v7's `dump` plus an
 /// optional `meta` object.
 pub fn dumps_v1(pool: &str) -> PoolGrammar {
     let mut dump = dump_v7();
@@ -90,13 +90,13 @@ pub fn dumps_v1(pool: &str) -> PoolGrammar {
     }
 }
 
-/// The `dump@2` grammar: `dump@1` with two more states, [`REMOVING`] and
-/// [`REMOVED`], and nothing else changed. A store is made at `dump@1` and re-pinned to this
+/// The `dumps@2` grammar: `dumps@1` with two more states, [`REMOVING`] and
+/// [`REMOVED`], and nothing else changed. A store is made at `dumps@1` and re-pinned to this
 /// by its first removal (`Cauldron::widen_states`).
 pub fn dumps_v2(pool: &str) -> PoolGrammar {
     let mut g = dumps_v1(pool);
     g.version = 2;
-    g.node_types.get_mut(DUMP).expect("dump@1 has `dump`").states = DUMP_STATES_V2.iter().map(|s| s.to_string()).collect();
+    g.node_types.get_mut(DUMP).expect("dumps@1 has `dump`").states = DUMP_STATES_V2.iter().map(|s| s.to_string()).collect();
     g
 }
 
@@ -107,14 +107,14 @@ pub const V7_DUMP_JSON: &str = include_str!("grammar_dump_v7_dump.json");
 mod tests {
     use super::*;
 
-    /// The copy is v7's `dump`, field for field, and `dump@1` adds only
+    /// The copy is v7's `dump`, field for field, and `dumps@1` adds only
     /// `meta`. If either side changes, this fails.
     #[test]
     fn the_copy_is_v7_s_dump_and_dump_v1_adds_only_meta() {
         let v7: NodeTypeDef = serde_json::from_str(V7_DUMP_JSON).expect("the fixture parses");
         assert_eq!(dump_v7(), v7, "the copied dump drifted from grammar v7's");
         let g = dumps_v1(POOL);
-        g.check_wellformed().expect("dump@1 is well formed");
+        g.check_wellformed().expect("dumps@1 is well formed");
         let mine = &g.node_types[DUMP];
         let mut without_meta = mine.clone();
         assert!(without_meta.fields.remove("meta").is_some());
@@ -125,12 +125,12 @@ mod tests {
         assert_eq!((g.version, g.kind.as_str()), (1, KIND));
     }
 
-    /// `dump@2` is `dump@1` plus the states `removing` and `removed`, and
+    /// `dumps@2` is `dumps@1` plus the states `removing` and `removed`, and
     /// nothing else.
     #[test]
     fn dump_v2_adds_only_the_removal_states() {
         let (v1, v2) = (dumps_v1(POOL), dumps_v2(POOL));
-        v2.check_wellformed().expect("dump@2 is well formed");
+        v2.check_wellformed().expect("dumps@2 is well formed");
         assert_eq!(v2.version, 2);
         let mut back = v2.clone();
         back.version = 1;

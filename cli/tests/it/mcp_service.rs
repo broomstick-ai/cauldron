@@ -1715,7 +1715,7 @@ impl Service {
 /// whenever the workspace version is not this constant, so every release
 /// bump makes someone check rv3 and rv4 against the new relation and move
 /// it.
-const OLDER_SERVICE_TESTS_CHECKED_AT: &str = "0.1.19";
+const OLDER_SERVICE_TESTS_CHECKED_AT: &str = "0.1.20";
 
 #[test]
 fn rv0_the_older_service_tests_were_checked_against_the_workspace_version() {
@@ -2629,8 +2629,8 @@ fn oa2_the_setting_persists_and_a_cauldrons_choice_wins_both_ways() {
     let o = s.run_with(&["owner-acts", "open", "--only", "approve", "--cauldron", "k2", "--env", "dev"], &[], &[("CAULDRON_OWNER_ACTS", "approve")]);
     assert_eq!(o.rc, 0, "{}", o.err);
     let v = o.json();
-    // (`open` with no --only opens every act, `merge` included.)
-    assert_eq!((v["setting"].clone(), v["copied_from_root"].clone()), (json!("open"), json!("grant,ripples,merge")), "{v}");
+    // (`open` with no --only opens every act, `merge` and `grammar` included.)
+    assert_eq!((v["setting"].clone(), v["copied_from_root"].clone()), (json!("open"), json!("grant,ripples,merge,grammar")), "{v}");
     assert!(v["copied_note"].as_str().unwrap().contains("no longer reaches it"), "{v}");
     let o = s.run_with(&["owner-acts", "open", "--only", "approve", "--cauldron", "k2", "--env", "dev"], &[], &[("CAULDRON_OWNER_ACTS", "approve")]);
     assert!(o.json().get("copied_from_root").is_none(), "its own choice now: nothing copied: {}", o.out);
@@ -2944,3 +2944,154 @@ fn b7_mcp_config_never_carries_owner_acts_into_a_project() {
     assert_ne!(o.rc, 0, "no flag carries it: {}", o.out);
     assert!(o.out.is_empty(), "{}", o.out);
 }
+
+// ------------------------------------------------------- user grammars (U1)
+
+const READING_LIST: &str = include_str!("../../../schema/soup/examples/reading-list.grammar.json");
+
+/// **A user grammar, registered and used end to end**: `soup grammar check`
+/// judges a file by its rules (and refuses a kind with no hyphen and a type
+/// with no handle); `soup grammar add` is the owner act `grammar` (refused
+/// without a terminal or the owner's opening, and then nothing is added);
+/// once added, a batch of a workspace region and user records lands as one
+/// import, `soup get` and `soup nodes --type` read it, `soup_put` writes
+/// more through the service (routed to the user pool, cited), `soup_get`,
+/// `soup_nodes` and `soup_search` read it, `soup_status` lists the pool, a
+/// review flag on a user record is refused, and while the service holds the
+/// soup an agent's add is sent to it and refused there without the owner's
+/// persisted opening.
+// RED: (a) the routes built from the built-in pools only — the user records
+// go to `ws` and are refused `unknown_node_type`; (b) `reads::get` without
+// the user-pool fallback — `soup_get BK-1` answers it missing; (c) the gate
+// removed from `soup grammar add` — the first add lands without the variable.
+#[test]
+fn u1_a_user_grammar_is_registered_by_the_owner_and_its_records_are_written_and_read() {
+    let s = Scratch::new("u1", &["kb"]);
+    let file = s.0.join("reading-list.grammar.json");
+    std::fs::write(&file, READING_LIST).unwrap();
+    let f = file.to_str().unwrap();
+    let ok = s.run(&["soup", "grammar", "check", f, "--env", "dev", "--cauldron", "kb"], &[]);
+    assert_eq!(ok.rc, 0, "{}{}", ok.out, ok.err);
+    assert_eq!(ok.json()["schema"], "reading-list@1");
+    let mut bad: Value = serde_json::from_str(READING_LIST).unwrap();
+    bad["kind"] = json!("notes");
+    bad["node_types"]["book"]["fields"].as_object_mut().unwrap().remove("handle");
+    let badf = s.write("bad.grammar.json", &bad);
+    let o = s.run(&["soup", "grammar", "check", badf.to_str().unwrap()], &[]);
+    assert_eq!(o.rc, 1, "{}", o.out);
+    let rules: Vec<String> = o.json()["problems"].as_array().unwrap().iter().map(|p| p["rule"].as_str().unwrap().to_string()).collect();
+    assert!(rules.contains(&"kind_needs_hyphen".into()) && rules.contains(&"handle_required".into()), "{rules:?}");
+
+    // The owner act.
+    let o = s.run(&["soup", "grammar", "add", f, "--env", "dev", "--cauldron", "kb"], &[]);
+    assert_ne!(o.rc, 0, "{}", o.out);
+    assert!(o.err.contains("REFUSED: registering a grammar is the owner's act") && o.err.contains("owner-acts open --only grammar"), "{}", o.err);
+    assert!(!s.soup("kb").join("reading-list.db").exists(), "nothing was added");
+    let o = s.run_with(&["soup", "grammar", "add", f, "--env", "dev", "--cauldron", "kb"], &[], &[("CAULDRON_OWNER_ACTS", "grammar")]);
+    assert_eq!(o.rc, 0, "{}{}", o.out, o.err);
+    assert_eq!((o.json()["outcome"].clone(), o.json()["by"].clone()), (json!("added"), json!("agent")));
+    let again = s.run_with(&["soup", "grammar", "add", f, "--env", "dev", "--cauldron", "kb"], &[], &[("CAULDRON_OWNER_ACTS", "grammar")]);
+    assert_eq!(again.json()["outcome"], "already-added", "{}", again.out);
+
+    // Written and read through the command line.
+    let batch = s.write(
+        "books.json",
+        &json!([
+            {"id": "R-1", "type": "region", "handle": "Reading", "boundary": "Everything about the books this project reads and what they changed."},
+            {"id": "AU-1", "type": "author", "handle": "A. Writer"},
+            {"id": "BK-1", "type": "book", "state": "reading", "handle": "A book about graphs",
+             "edges": [{"kind": "written_by", "to": "AU-1"}, {"kind": "about", "to": "R-1", "why": "it shaped the region"}]}
+        ]),
+    );
+    let o = s.import("kb", &batch, &[], &[]);
+    assert_eq!(o.rc, 0, "{}{}", o.out, o.err);
+    let got = s.run(&["soup", "get", "BK-1", "R-1", "--env", "dev", "--cauldron", "kb"], &[]).json();
+    let book = got["records"].as_array().unwrap().iter().find(|r| r["id"] == "BK-1").cloned().unwrap_or(Value::Null);
+    assert_eq!(book["pool"], "reading-list", "{got}");
+    assert!(book["edges"].as_array().unwrap().iter().any(|e| e["to"] == "R-1@ws" && e["why"] == "it shaped the region"), "{book}");
+    let nodes = s.run(&["soup", "nodes", "--type", "author", "--env", "dev", "--cauldron", "kb"], &[]).json();
+    assert_eq!((nodes["pool"].clone(), nodes["total"].clone()), (json!("reading-list"), json!(1)), "{nodes}");
+
+    // Through the service.
+    s.grant("kb");
+    let svc = Service::start(&s);
+    let pids = [svc.pid()];
+    let st = svc.call(&s, "soup_status", json!({"cauldron": "kb"}));
+    let st: Value = serde_json::from_str(st["content"][0]["text"].as_str().unwrap()).unwrap();
+    assert!(st["pools"].as_array().unwrap().iter().any(|p| p["pool"] == "reading-list" && p["origin"] == "user" && p["schema"] == "reading-list@1"), "{st}");
+    assert_eq!(st["schema"], "workspace@6", "the old keys keep their meaning");
+    let r = svc.call(&s, "soup_put", json!({"cauldron": "kb", "remint": true, "cite": {"kind": "url", "url": "https://example.com/b2"}, "records": [
+        {"id": "b2", "type": "book", "state": "to-read", "handle": "Graphs in practice", "edges": [{"kind": "about", "to": "R-1"}, {"kind": "written_by", "to": "AU-1"}]}]}));
+    assert_ne!(r["isError"], json!(true), "{r}");
+    let get = svc.call(&s, "soup_get", json!({"cauldron": "kb", "ids": ["BK-2"]}));
+    let get: Value = serde_json::from_str(get["content"][0]["text"].as_str().unwrap()).unwrap();
+    assert_eq!(get["records"][0]["pool"], "reading-list", "{get}");
+    assert_eq!(get["records"][0]["meta"]["cites"][0]["url"], "https://example.com/b2", "the call's cite lands on a user record with `meta`: {get}");
+    let found = svc.call(&s, "soup_search", json!({"cauldron": "kb", "query": "graphs", "type": "book"}));
+    let found: Value = serde_json::from_str(found["content"][0]["text"].as_str().unwrap()).unwrap();
+    assert_eq!(found["total"], 2, "{found}");
+    let flag = svc.call(&s, "soup_put", json!({"cauldron": "kb", "remint": true, "records": [
+        {"id": "b3", "type": "book", "state": "read", "handle": "Flagged", "meta": {"approved": {"at": "now", "by": "me"}}}]}));
+    assert_eq!(flag["isError"], json!(true), "{flag}");
+    let film = svc.call(&s, "soup_put", json!({"cauldron": "kb", "records": [{"id": "FM-1", "type": "film", "handle": "Not registered"}]}));
+    assert_eq!(film["isError"], json!(true), "{film}");
+    // Held by the service: another add is refused, naming what to run.
+    let mut films: Value = serde_json::from_str(READING_LIST).unwrap();
+    films["kind"] = json!("film-list");
+    films["node_types"] = json!({"film": {"id_prefix": "FM", "fields": {"handle": {"required": true, "kind": "text", "min_chars": 1, "max_chars": 235}}}});
+    films["edge_kinds"] = json!({});
+    let ff = s.write("film.grammar.json", &films);
+    // (Sent to the service, which takes an agent's add only where the
+    // owner's persisted setting opens `grammar`: the variable alone does not.)
+    let o = s.run_with(&["soup", "grammar", "add", ff.to_str().unwrap(), "--env", "dev", "--cauldron", "kb"], &pids, &[("CAULDRON_OWNER_ACTS", "grammar")]);
+    assert_ne!(o.rc, 0, "{}", o.out);
+    assert!(o.err.contains("holds cauldron `kb`'s soup") && o.err.contains("owner_act_closed") && !o.err.contains("mcp revoke"), "{}", o.err);
+    assert!(!s.soup("kb").join("film-list.db").exists());
+    svc.stop();
+}
+
+/// **The real older service on a soup that holds a user pool**, when
+/// `CAULDRON_OLD_MCP` names its binary: it opens the soup, writes and reads
+/// `ws` as before, refuses a user record as a type `ws` does not know, and
+/// answers a user id missing; nothing of the user pool is lost, and this
+/// build reads every record afterwards.
+#[test]
+fn u1_the_real_older_service_refuses_user_records_and_corrupts_nothing() {
+    let Some(old) = std::env::var_os("CAULDRON_OLD_MCP") else {
+        eprintln!("u1-old: CAULDRON_OLD_MCP names no binary; skipped");
+        return;
+    };
+    let s = Scratch::new("u1old", &["kb"]);
+    let file = s.0.join("reading-list.grammar.json");
+    std::fs::write(&file, READING_LIST).unwrap();
+    let o = s.run_with(&["soup", "grammar", "add", file.to_str().unwrap(), "--env", "dev", "--cauldron", "kb"], &[], &[("CAULDRON_OWNER_ACTS", "grammar")]);
+    assert_eq!(o.rc, 0, "{}{}", o.out, o.err);
+    let batch = s.write(
+        "books.json",
+        &json!([
+            {"id": "R-1", "type": "region", "handle": "Reading", "boundary": "Everything about the books this project reads and what they changed."},
+            {"id": "BK-1", "type": "book", "state": "reading", "handle": "A book", "edges": [{"kind": "about", "to": "R-1"}]}
+        ]),
+    );
+    assert_eq!(s.import("kb", &batch, &[], &[]).rc, 0);
+    s.grant("kb");
+    let svc = Service::start_bin(&s, Path::new(&old));
+    let r = svc.call(&s, "soup_put", json!({"cauldron": "kb", "remint": true, "records": [{"id": "b", "type": "book", "state": "read", "handle": "Through the old door"}]}));
+    assert_eq!(r["isError"], json!(true), "{r}");
+    let r = svc.call(&s, "soup_put", json!({"cauldron": "kb", "remint": true, "records": [task("t", "A task through the old door")]}));
+    assert_ne!(r["isError"], json!(true), "{r}");
+    let g = svc.call(&s, "soup_get", json!({"cauldron": "kb", "ids": ["BK-1"]}));
+    let g: Value = serde_json::from_str(g["content"][0]["text"].as_str().unwrap()).unwrap();
+    assert_eq!(g["missing"], json!(["BK-1"]), "{g}");
+    svc.stop();
+    let got = s.run(&["soup", "get", "BK-1", "T-1", "--env", "dev", "--cauldron", "kb"], &[]).json();
+    assert_eq!(got["records"].as_array().unwrap().len(), 2, "{got}");
+    let list = s.run(&["soup", "grammar", "list", "--env", "dev", "--cauldron", "kb"], &[]).json();
+    assert!(list["pools"].as_array().unwrap().iter().any(|p| p["pool"] == "reading-list" && p["nodes"] == 1), "{list}");
+}
+
+#[path = "mcp_service_u2.rs"]
+mod u2;
+
+#[path = "mcp_service_u3.rs"]
+mod u3;

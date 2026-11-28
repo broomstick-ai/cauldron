@@ -20,6 +20,9 @@
 //!   a terminal where the owner's `owner_acts` choice opens `approve`, and
 //!   recorded as an agent's (`by: "agent"`); a verb of its own so that an
 //!   older service refuses it instead of recording it as a person's;
+//! - `GRAMMAR`: the owner's `cauldron soup grammar add` while this service
+//!   holds the soup, added through the writer's own handle
+//!   ([`crate::grammar`]), with the same key as `DECIDE`.
 //! - `MERGE`: a merge into a cauldron this service holds, from `cauldron
 //!   merge` at a terminal, with the same approval key (`crate::merge`);
 //! - `AMERGE`: the same, from `cauldron merge` without a terminal where the
@@ -81,6 +84,7 @@ impl Service for McpSeam {
         Verb::new("MERGE", McpSeam::v_merge),
         Verb::new("AMERGE", McpSeam::v_amerge),
         Verb::new("ADECIDE", McpSeam::v_adecide),
+        Verb::new(crate::grammar::VERB, McpSeam::v_grammar),
         Verb::new("RDUMPS", McpSeam::v_rdumps),
         Verb::new("RNOTE", McpSeam::v_rnote),
         Verb::new("RFAIL", McpSeam::v_rfail),
@@ -184,6 +188,11 @@ impl McpSeam {
 
     fn v_adecide(&self, c: &mut Conn<'_>, rest: &str) -> Result<()> {
         c.line(&crate::approve::answer_adecide(&self.state, &self.approve, rest))?;
+        Ok(())
+    }
+
+    fn v_grammar(&self, c: &mut Conn<'_>, rest: &str) -> Result<()> {
+        c.line(&crate::grammar::answer(&self.state, &self.approve, rest))?;
         Ok(())
     }
 

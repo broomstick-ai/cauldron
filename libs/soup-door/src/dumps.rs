@@ -5,7 +5,7 @@
 //!
 //! ```text
 //!   <cauldron>/dumps/            (the legacy cauldron: data/<env>/soup/dumps/)
-//!       spine.db, dumps.db       a spine of its own, one pool `dumps` on grammar `dump@1`
+//!       spine.db, dumps.db       a spine of its own, one pool `dumps` on grammar `dumps@1`
 //!       writer.lock              its writer lock (`mcp <pid>` while the service holds it)
 //!       blobs/<sha256>.txt       a text dump's bytes, content-addressed
 //!       blobs/<sha256>.jsonl     a session transcript's bytes, verbatim
@@ -1378,7 +1378,7 @@ fn finish_pending(c: &env::Cauldron, mut spine: spine::Cauldron, by: &By) -> Res
 /// it), in two phases:
 ///
 /// 1. **the mark**: one ordinary commit makes the dump a tombstone in state
-///    `removing` (the store is re-pinned from `dump@1` to `dump@2`, which
+///    `removing` (the store is re-pinned from `dumps@1` to `dumps@2`, which
 ///    adds that state and `removed`, on its first removal): `body`
 ///    [`REMOVED_BODY`], `artifacts` empty, and `meta` only `{source: {kind},
 ///    received_at, removed: {at, kind, bytes}}`. Title, source note,
@@ -1465,7 +1465,7 @@ pub fn remove(c: &env::Cauldron, id: &str, yes: bool, by: &By) -> Result<Value> 
         if pin < 2 {
             spine = spine
                 .widen_states(&pool(), &grammar_dump::dumps_v2(POOL))
-                .map_err(|e| store_err(c, format!("re-pinning the store to dump@2: {e}")))?;
+                .map_err(|e| store_err(c, format!("re-pinning the store to dumps@2: {e}")))?;
         }
         let removed_at = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
         let old = field(&n, "meta").cloned().unwrap_or(Value::Null);
@@ -3251,7 +3251,7 @@ mod tests {
         assert_eq!(get(&c, "DM-2", 0, 1000).unwrap()["text"], "an unrelated note that stays");
         assert_eq!(landed_after(&c, 0, 20, 30).unwrap().len(), 11, "six dumps, five removals");
 
-        // The store reopens, is pinned at dump@2, and takes new dumps.
+        // The store reopens, is pinned at dumps@2, and takes new dumps.
         let s = Store::open(&c, "test").unwrap();
         assert_eq!(s.recovered["interrupted"], "none");
         assert_eq!(s.spine.grammar(&pool()).unwrap().version, 2);

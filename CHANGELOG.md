@@ -22,11 +22,174 @@ Planned, and not released yet. Ripples and the soup engine arrive in 0.2.0.
 
 - **Fix: threads daemon boot with an oversized write-ahead log.** The daemon
   will fold the log once at boot, before recovery, and its periodic fold will
-  first run at 30 seconds instead of 5 minutes. Through 0.1.19, a large log
+  first run at 30 seconds instead of 5 minutes. Through 0.1.20, a large log
   left from earlier runs can stall startup until the supervisor kills the daemon.
 - **Fix: re-login re-enables a disabled account.** A verified login will lift
-  the disable and trigger a fresh usage reading. Through 0.1.19, only an
+  the disable and trigger a fresh usage reading. Through 0.1.20, only an
   explicit enable clears it.
+
+## [0.1.20] — 2026-11-28
+
+User-defined grammars (ontologies), first steps (issue #28): the README
+says how a cauldron holds several grammars, and a cauldron can register a
+grammar you write as a new pool and hold its records.
+
+### Added
+
+- **Docs: grammars and pools.** The README's new section "Grammars and pools
+  (ontologies)" says what already held: a soup holds several grammars, each
+  `kind@version` in its own pool, with edges that cross between kinds from
+  the source; where `workspace@6` (`ws`) and `cauldron@1` (`cauldron`) sit;
+  and that `dumps@1` (`dumps@2` after the store's first `dump-remove`) is
+  the dumps store's. It also says, key by key, how to write a grammar file,
+  with a second worked example.
+- **`cauldron soup grammar check <file> [--pool <p>] [--env <e> --cauldron
+  <c>]`** judges a grammar file, writing nothing: size (256 KiB) and depth
+  (8) before it is parsed, then a strict parse (a key the format does not
+  know is refused by name), then every rule a user grammar meets, alone and
+  against the cauldron's pools. Each problem names its `rule` and where in
+  the file. The format is `cauldron-grammar/1`: the published
+  `grammar.json` shape plus `format`, with `pool` optional. Its JSON
+  Schema is `schema/soup/grammar.schema.json`, generated from the same rules
+  and held to them by a drift test; `schema/soup/examples/reading-list.grammar.json`
+  is a worked example.
+- **`cauldron soup grammar add <file> --env <e> --cauldron <c> [--pool
+  <p>]`** registers a user grammar as a new pool of the soup, as one
+  additive act under the soup's writer lock (the act that added the cluster
+  pool to older stores). It is an owner act, `grammar`, under the owner_acts
+  setting: at a terminal, or where the owner opened `grammar` (`cauldron
+  owner-acts open --only grammar`); refused otherwise, naming the command.
+  While the `mcp` service holds the soup, the add is sent to it (seam verb
+  `GRAMMAR`, with the owner's key) and made through its own writer handle:
+  its sessions write the new types at once, and no grant changes (an
+  agent's add there needs the owner's recorded `grammar` choice). A service
+  from before this release cannot take it: the refusal says to stop the
+  service, add and start it, which changes no grant, and never to revoke
+  and grant again (a new grant has the default scopes and no projects).
+  Adding the same grammar again answers `already-added`.
+- **`cauldron soup grammar list | show <pool>`**: every pool with its kind,
+  version, `origin` (`builtin` or `user`), types, prefixes and node count,
+  and a user grammar's `digest` (SHA-256 of its canonical JSON, the pool's
+  name left out); one pool's grammar as a grammar file.
+- **Records of a user grammar's types** are written and read like any
+  other: `cauldron soup import` (direct or forwarded to the `mcp` service)
+  and `soup_put` send each record to its pool by type, in one write with
+  workspace records; `soup get` and `soup_get` find a user record by id and
+  say its `pool`; `soup nodes`, `soup search`, `soup_nodes` and
+  `soup_search` with a user type read its pool. A bare reference (`R-1`,
+  `BK-1`) finds the record in its own pool. `soup_status` gains `pools`
+  (every pool, built-in and user); `schema`, `cluster_schema`, `counts` and
+  `total` keep their meaning. A record read with `soup get` or `soup_get`
+  is written back through `soup import` or `soup_put` as read: the `pool` a
+  read adds is dropped and named in `ignored` (`schema/soup/write-back.json`).
+  An import's records name the user pool each went to. `soup get
+  <ID>@<pool>` names a record outright, as an edge target reads.
+- **Links and citations of user records.** `cauldron soup link | unlink |
+  cite` and `soup_link`, `soup_unlink`, `soup_cite` find a record in `ws` or
+  a user pool. A link from a user record is judged by its own grammar's
+  edge kinds; one from a workspace record to a user record is refused
+  `no-edge-into-a-user-kind`; a citation on a user type with no `meta` field
+  is refused `no-meta-field`. A region filter (`--region`, `region`) with a
+  user type is refused: user records have no region membership in this
+  release.
+- **The spine records each user pool** (name, kind, version, digest), and
+  every pool file is judged against that record whenever it is read: any
+  edit of a user pool's pin (a kind with no hyphen included), a pool file
+  the spine never registered, a removed pool's file, and a built-in pool
+  declaring a user pool's type or prefix are refused, naming the file that
+  is wrong; a user pool file from another cauldron, an older copy, and one
+  that will not open are refused too. Until then every open of the soup
+  for writing is refused; reads of the workspace's own records still
+  answer. A write through an open soup refuses a user pool file swapped in
+  after the open (writes to the workspace go on until the soup is opened
+  again).
+- **`cauldron soup grammar rebind <pool> [--yes]`** takes one pool file
+  restored from a backup older than its last write: it names the writes
+  the copy lacks and their records' ids, and with `--yes` (an owner act)
+  records them as lost; this release never mints or writes a lost id
+  again (0.1.19 and earlier do not know the list: their `soup import
+  --pool` with an explicit id can write one, and `soup grammar list` then
+  names it). It refuses a copy with another pin, a write or a record this
+  soup's spine never made in the pool, or a write in flight. It also
+  registers a pool an earlier build of this release added. A pool it left
+  with no record can be removed and its name added again.
+- **A pool file moved out** no longer blocks the soup: the rest opens, its
+  types are refused naming the missing file, and its kind, types and
+  prefixes stay registered; an id prefix another pool has minted under is
+  never taken (`prefix_has_history`), so no id is minted twice.
+- **`cauldron soup grammar remove <pool> [--yes]`** removes a user pool
+  with no record that no other pool reaches (an owner act; its file moves to
+  `<soup>/.removed/`; sent to the `mcp` service when it holds the soup).
+- `soup link | unlink | cite` take `<ID>@<pool>` as reads print it.
+- **What points at a record:** `soup get --edges-in` and `soup_get` with
+  `edges_in` list the edges arriving at each record from every pool (at
+  most 500 a record; dropped on a write-back). After a supersede, edges into
+  the old version stay on it, by design; `superseded_by` leads on.
+- **A registry row written in an earlier digest form is migrated, never
+  refused** (development builds of this release before the form was fixed
+  wrote one): the pin is matched by every form this release knows and by the
+  grammar the row records, and the next open for writing rewrites the row.
+  A row from a newer release's form is refused saying so; a pin that differs
+  is refused naming what differs.
+- A `grammar add` or `remove` sent to the service waits up to ten minutes
+  behind the writes queued before it, and if that runs out says the act may
+  still be made and how to check.
+- **Owner act `grammar`** in owner_acts, for `cauldron soup grammar add`,
+  `grammar rebind --yes` and `grammar remove --yes` (`open` now means all
+  four acts).
+  A choice recorded before this release names its acts, so it does not
+  open `grammar`.
+
+### The rules a user grammar meets
+
+- Its kind has a hyphen (`reading-list`), so it can never be a built-in
+  kind's name; so does its pool's name. One pool per user kind, at most 8
+  per cauldron.
+- Every type declares an `id_prefix` and a `handle` declared required
+  text with `min_chars` of at least 1 and `max_chars` of at most 235; `body`, if declared, is text of at most 10,000;
+  `meta`, if declared, is an object. No count cells.
+- Type names and id prefixes are used once per cauldron, built-in ones
+  included; reserved field names (`id`, `state`, `edges`, `pool`, ...) are
+  refused.
+- An edge may point at its own types, the workspace's region and content
+  types (not `viewer`), or a type of a user grammar the cauldron already
+  holds; never at clusters or dumps. `in_region` and `claims` are never a
+  user edge's name; another built-in name only for an edge that stays in
+  its own grammar.
+- Names are held to fixed character sets (they are spliced into
+  statements); there are no patterns; counts are bounded (64 types, 64 edge
+  kinds, 48 fields a type, 32 states, 16 endpoints, 10,000 characters a cap).
+  A key named twice in one object is refused (`duplicate_key`); a leading
+  UTF-8 byte order mark is skipped. `pool_in_use` for the same
+  `kind@version` with other content gives both digests.
+
+### Compatibility
+
+- Nothing is added to the store but the new pool file, pinned exactly as a
+  built-in pool is, and three registry tables in the spine (made only when
+  a soup first adds a user grammar; an older release does not read them and
+  opens the spine as before): `workspace@6` and `cauldron@1` are unchanged, and no
+  store version moves. Checked with the 0.1.17 command line and `mcp`
+  service on a soup holding two user pools: they open it and read and write
+  `ws` as before; they refuse a user record through `soup_put` and `soup
+  import` (no `--pool`) as a type `ws` does not know, answer its id
+  `missing` from `soup_get`, and refuse `soup_nodes --type book` as an
+  unknown type; with `--pool <user pool>` the 0.1.17 command line reads the
+  pool and judges an import under its pinned grammar (a bad state is
+  refused); its change feed lists user records. Nothing was lost or
+  changed.
+- An older release's `cauldron owner-acts` ignores the act word `grammar`
+  (it opens nothing there), and a choice it rewrites drops it.
+
+### Not yet
+
+- Moving a user grammar to a new version, removing one that holds records, region membership
+  for user records, ripples writing them, review and approval of them,
+  `soup_grammar` and `grammar export`, and merge carrying user pools: a
+  `cauldron merge` whose source holds records in a user pool is refused
+  whole, naming the pool; an empty one is listed as not carried; the
+  target's own user pools are untouched by a merge and its undo.
+  `soup nodes` and `soup search` without a type read the workspace only.
 
 ## [0.1.19] — 2026-11-28
 
@@ -1857,7 +2020,7 @@ the dumps store in `cauldron mcp status`, a schema for `--remint` batches
   - Reading a removed dump answers its tombstone (`soup dump-get`,
     `soup_dump_get`), `--raw` is refused, and a soup record that cites it
     still finds it. The first removal re-pins the store's grammar from
-    `dump@1` to `dump@2`, which adds only the states `removing` and
+    `dumps@1` to `dumps@2`, which adds only the states `removing` and
     `removed`.
   - It is a CLI verb only, never an MCP tool. It is refused while the `mcp`
     service holds the cauldron's dumps store and is not sent to it, because
@@ -2125,7 +2288,7 @@ unchanged.
 
 - **The dumps store.** Each cauldron's dumps live in `<cauldron>/dumps/`
   (for the implicit legacy cauldron, `data/<env>/soup/dumps/`), beside its
-  soup: a spine of its own with one pool, `dumps`, whose grammar `dump@1`
+  soup: a spine of its own with one pool, `dumps`, whose grammar `dumps@1`
   is grammar v7's `dump` node type copied (prefix `DM`, states `received`,
   `processed`, `failed`, the same fields) plus an optional `meta` object, and
   a content-addressed blob store, `blobs/<sha256>.<txt|jsonl>`. It is made on
@@ -2660,7 +2823,8 @@ The first public release.
   paths ship) and `scripts/check-no-personal-data.sh` (what the shipped files
   say).
 
-[Unreleased]: https://github.com/broomstick-ai/cauldron/compare/v0.1.19...HEAD
+[Unreleased]: https://github.com/broomstick-ai/cauldron/compare/v0.1.20...HEAD
+[0.1.20]: https://github.com/broomstick-ai/cauldron/compare/v0.1.19...v0.1.20
 [0.1.19]: https://github.com/broomstick-ai/cauldron/compare/v0.1.18...v0.1.19
 [0.1.18]: https://github.com/broomstick-ai/cauldron/compare/v0.1.17...v0.1.18
 [0.1.17]: https://github.com/broomstick-ai/cauldron/compare/v0.1.16...v0.1.17

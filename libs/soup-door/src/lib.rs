@@ -28,6 +28,7 @@ pub mod cursor;
 pub mod cut;
 pub mod dumps;
 pub mod edges;
+pub mod grammars;
 pub mod grants;
 pub mod import;
 pub mod notes;

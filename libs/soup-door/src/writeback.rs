@@ -7,7 +7,8 @@
 //!
 //! - [`IGNORED`]: keys a READ ADDS that are not stored on the record
 //!   (`superseded_by`, `unreviewed`, a top-level `rejected: true`, a merged
-//!   record's `merged`, a cluster's `claims` list). Every record write (`soup_put`, `cauldron
+//!   record's `merged`, a cluster's `claims` list, a user grammar's record's
+//!   `pool`, and `edges_in`). Every record write (`soup_put`, `cauldron
 //!   soup import`) drops them before judging and names each one it dropped
 //!   in the answer's `ignored` list. Dropping one changes nothing a write
 //!   could have done: none of them is a stored field.
@@ -57,6 +58,21 @@ pub const IGNORED: &[Key] = &[
         key: "rejected",
         on: "*",
         why: "the top-level `rejected: true` reads add to a record the owner rejected (the flag itself is `meta.rejected`, which is refused); dropped only when it is `true`, as reads write it",
+    },
+    Key {
+        key: "edges_in",
+        on: "*",
+        why: "the edges that arrive at the record, read from their sources when asked (`soup get --edges-in`, `soup_get` with `edges_in`); an edge is written from its source record",
+    },
+    Key {
+        key: "edges_in_total",
+        on: "*",
+        why: "how many edges arrive at the record when `edges_in` lists only the first ones",
+    },
+    Key {
+        key: "pool",
+        on: "*",
+        why: "the pool a read found a user grammar's record in (reads add it to those records only); a write sends every record to its pool by its type, so it is dropped. A user grammar cannot declare a field `pool` (reserved), and no built-in type has one",
     },
     Key {
         key: "merged",
@@ -198,5 +214,8 @@ mod tests {
         assert_eq!(out[2], recs[2], "not a cluster, not `true`, another casing: left for the door to judge");
         let keys: Vec<String> = ignored.iter().map(|v| format!("{}:{}", v["record"].as_str().unwrap(), v["key"].as_str().unwrap())).collect();
         assert_eq!(keys, ["I-3:superseded_by", "I-3:unreviewed", "I-3:rejected", "CL-1:claims"]);
+        let (out, ignored) = strip_read_only(&[json!({"id": "BK-1", "type": "book", "pool": "reading-list", "handle": "h"})]);
+        assert_eq!(out[0], json!({"id": "BK-1", "type": "book", "handle": "h"}), "a user record's `pool`, as reads add it");
+        assert_eq!(ignored, vec![json!({"record": "BK-1", "key": "pool"})]);
     }
 }

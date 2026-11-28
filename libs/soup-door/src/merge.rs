@@ -1215,8 +1215,24 @@ pub fn prepare(src: &Target, dst: &Target) -> Result<Prepared> {
     for p in &src_pools {
         if carried_pools.contains(&p.as_str()) {
             nodes.extend(read_pool(&src_soup, p)?);
+            continue;
+        }
+        // A user grammar's pool (issue #28) is not carried in this release.
+        // Its records are never left behind silently: a source pool that
+        // holds any refuses the whole merge (nothing is half-merged), and
+        // an empty one is listed as not carried.
+        let held = read_pool(&src_soup, p)?.len();
+        if held > 0 {
+            blocking.push(json!({
+                "what": format!("user pool `{p}` of the source ({held} record(s))"),
+                "why": format!(
+                    "a merge carries the soup's `ws` pool and its cluster pool, and merging the records of a user grammar is not \
+                     built in this release, so carrying the rest would leave pool `{p}`'s records behind (and the edges from them)"
+                ),
+                "fix": "merge a source whose user pools are empty, or keep the two cauldrons apart; the source is not changed",
+            }));
         } else {
-            not_carried.push(json!({"what": format!("pool `{p}`"), "why": "a merge carries the soup's `ws` pool and its cluster pool only"}));
+            not_carried.push(json!({"what": format!("pool `{p}`"), "why": "an empty user grammar's pool: a merge does not register a grammar in the target (`cauldron soup grammar add` does)"}));
         }
     }
     let src_dumps = dumps::all_nodes(s)?;

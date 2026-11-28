@@ -159,8 +159,8 @@ cauldron soup — a cauldron's soup, offline
         open (`cauldron mcp status`), a real import is sent to that service and lands
         through it: the same judgement, the same JSON (with `forwarded_to`), the same
         batch-already-landed check and --allow-duplicate; the service records the writer
-        as `mcp:cli`, not --agent, and writes only the soup's own pools (`ws`, and the cluster
-        pool for cluster records). A dry run is never sent.
+        as `mcp:cli`, not --agent, and writes only the soup's own pools (`ws`, the cluster
+        pool for cluster records, and a user grammar's pool for its types). A dry run is never sent.
         A batch over the 16 MiB the service reads in one request is refused before it is
         sent (never split): import it in smaller files, or revoke the grant (or stop the
         service) and import directly.
@@ -257,11 +257,14 @@ cauldron soup — a cauldron's soup, offline
         case-insensitively as a substring; ranked by how many terms match, then handle hits over body hits, then newest.
         Prints {id, type, state, handle, regions, score, snippet}, at most --limit (20);
         the snippet is --max-chars long (default 160) around the first hit.
-    cauldron soup get <id>... [--cauldron <name>] [--env <env>] [--max-chars N]
+    cauldron soup get <id>... [--cauldron <name>] [--env <env>] [--max-chars N] [--edges-in]
         Those nodes as records in the published shape, with their outgoing edges. A node
         another node supersedes (an inbound `supersedes` edge) is answered all the same, with
         `superseded_by: [ids]`, which is read from the edges and is not a field: leave it out
-        when writing the record again. A cluster (CL-<n>) is answered with `claims` (each
+        when writing the record again. With --edges-in, each record also lists `edges_in`:
+        the edges that arrive at it from any pool (`from`, `kind`, `from_pool` when another),
+        at most 500 (`edges_in_total` when there are more); an edge names one version of a
+        record, so after a supersede the edges into the old one stay on it. A cluster (CL-<n>) is answered with `claims` (each
         claimed region, its handle and the claim's note), read from its edges, not a field.
         An edge's note longer than 1,000 characters (written before notes were bounded) is
         shown cut to 1,000, named in `truncated`.
@@ -366,6 +369,11 @@ cauldron soup — a cauldron's soup, offline
         Refused while the `mcp` service holds the cauldron's dumps store: revoke its
         grant (`cauldron mcp revoke <name> --env <env>`) or stop the service, run this,
         then grant again. Never an MCP tool.
+    cauldron soup grammar check | add | list | show ...
+        A cauldron's grammars (ontologies): judge a grammar file, register a user-defined
+        one as a new pool (an owner act), list the pools, print one's grammar. Records of
+        a user grammar's types then go to its pool by type through `soup import` and
+        `soup_put`. `cauldron soup grammar help`.
     cauldron soup approve <id>... --env <env> --cauldron <name> [--unapprove]
         Approve records a ripple wrote (`cauldron ripples run`): each named record that
         reads as `unreviewed` gets `meta.approved: {at, by}` and reads as
@@ -434,13 +442,14 @@ pub(crate) fn verb_soup(args: &[String]) -> Result<i32> {
         Some("unlink") => link(&args[1..], true),
         Some("cite") => cite(&args[1..]),
         Some("changes") => changes(&args[1..]),
+        Some("grammar") => crate::grammar::verb_grammar(&args[1..]),
         None => {
             eprint!("{USAGE}");
             Ok(2)
         }
         Some(other) => {
             eprintln!(
-                "cauldron soup: no verb `{other}` (import | import-corpus | recover | regions | region | nodes | search | get | claim | link | unlink | cite | changes | dump | dumps | dump-get | dump-remove | approve | help)"
+                "cauldron soup: no verb `{other}` (import | import-corpus | recover | regions | region | nodes | search | get | claim | link | unlink | cite | changes | grammar | dump | dumps | dump-get | dump-remove | approve | help)"
             );
             Ok(2)
         }
@@ -463,6 +472,7 @@ struct Args {
     remint: bool,
     allow_duplicate: bool,
     include_superseded: bool,
+    edges_in: bool,
     include_rejected: bool,
     review: Option<String>,
     title: Option<String>,
@@ -526,6 +536,7 @@ fn parse(verb: &str, args: &[String], allow: &[&str]) -> Result<Args> {
             "--remint" => a.remint = true,
             "--allow-duplicate" => a.allow_duplicate = true,
             "--include-superseded" => a.include_superseded = true,
+            "--edges-in" => a.edges_in = true,
             "--include-rejected" => a.include_rejected = true,
             "--review" => a.review = Some(soup_door::reads::checked_review(&take(&mut it)?)?),
             "--title" => a.title = Some(take(&mut it)?),
@@ -625,6 +636,7 @@ fn read_opts(a: &Args) -> ReadOpts {
         include_superseded: a.include_superseded,
         include_rejected: a.include_rejected,
         review: a.review.clone(),
+        edges_in: a.edges_in,
     }
 }
 
@@ -1141,7 +1153,7 @@ fn regions(args: &[String]) -> Result<i32> {
 }
 
 fn get(args: &[String]) -> Result<i32> {
-    let a = parse("get", args, &["--env", "--cauldron", "-c", "--pool", "--max-chars"])?;
+    let a = parse("get", args, &["--env", "--cauldron", "-c", "--pool", "--max-chars", "--edges-in"])?;
     if a.pos.is_empty() {
         bail!("`cauldron soup get` needs at least one id");
     }

@@ -496,8 +496,9 @@ impl Door {
             "soup_get" => {
                 let ids = a.strings("ids")?;
                 let mc = a.count("max_chars")?;
+                let edges_in = a.flag("edges_in")?;
                 a.done()?;
-                bounded(reads::get(&t, &ids, &ReadOpts::default()).map_err(refusal)?, mc, &t)
+                bounded(reads::get(&t, &ids, &ReadOpts { edges_in, ..ReadOpts::default() }).map_err(refusal)?, mc, &t)
             }
             "soup_review" => {
                 let o = soup_door::review::QueueOpts {
@@ -1005,11 +1006,19 @@ impl Door {
             Ok(s) => env::owner_acts::sessions_view(&s, &self.env.name, &t.cauldron.name, t.cauldron.id().as_deref()),
             Err(e) => json!({"approve": "terminal", "error": e.to_string()}),
         };
+        // Every pool the soup holds, built-in and user (additive: `schema`,
+        // `cluster_schema`, `counts` and `total` keep their meaning).
+        let pools: Vec<Value> = soup_door::grammars::pins(&t.cauldron)
+            .map_err(refusal)?
+            .iter()
+            .map(|g| soup_door::grammars::listed(g, None))
+            .collect();
         Ok(json!({
             "env": t.env.name,
             "cauldron": t.cauldron.name,
             "scopes": grant.scopes.iter().map(|s| s.as_str()).collect::<Vec<_>>(),
             "owner_acts": owner_acts,
+            "pools": pools,
             "schema": SCHEMA,
             "cluster_schema": soup_door::clusters::SCHEMA,
             "clusters": clusters,

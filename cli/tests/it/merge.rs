@@ -2954,3 +2954,86 @@ fn m29_a_torn_cauldron_says_what_can_be_done_and_doing_it_settles_it() {
     assert!(!cited.contains(&fresh) && !missing.iter().any(|m| m["cites"] == json!(fresh)), "{fresh}");
     assert_eq!(s.import_with("b", &task("after the settle"), &["--remint"]).rc, 0);
 }
+
+// ------------------------------------------- user grammars (issue #28)
+
+const READING_LIST: &str = include_str!("../../../schema/soup/examples/reading-list.grammar.json");
+
+/// `c` registers the reading list, at `version` (2 renames nothing else).
+fn add_reading_list(s: &Scratch, c: &str, version: u32) {
+    let mut g: Value = serde_json::from_str(READING_LIST).unwrap();
+    g["version"] = json!(version);
+    let f = s.file(&format!("rl-{c}-{version}.json"), &g.to_string());
+    let o = s.run_with(CAULDRON, &["soup", "grammar", "add", f.to_str().unwrap(), "--env", "dev", "--cauldron", c], &[], &[("CAULDRON_OWNER_ACTS", "grammar")]);
+    assert_eq!(o.rc, 0, "{}{}", o.out, o.err);
+}
+
+fn region_and_a_book(handle: &str) -> Value {
+    json!([
+        {"id": "R-1", "type": "region", "handle": "Reading", "boundary": "Everything about the books this project reads and what they changed."},
+        {"id": "b", "type": "book", "handle": handle, "edges": [{"kind": "about", "to": "R-1"}]}
+    ])
+}
+
+fn ws_only() -> Value {
+    json!([{"id": "R-1", "type": "region", "handle": "Reading", "boundary": "Everything about the books this project reads and what they changed."}])
+}
+
+fn grammar_list(s: &Scratch, c: &str) -> Value {
+    s.run(&["soup", "grammar", "list", "--env", "dev", "--cauldron", c], &[]).json()
+}
+
+/// **A merge and user grammars** (issue #28 × merging): a merge carries the
+/// `ws` and cluster pools only, so a source whose user pool holds records
+/// is refused whole, before anything is written, naming the pool and why,
+/// whether the target registered the same grammar, another version of it,
+/// or none; nothing in either cauldron changes. A source whose user pool
+/// is empty merges, the pool listed as not carried and not registered in
+/// the target. A target's own user pool is untouched by a merge and by its
+/// undo, and stays readable and bound.
+// RED: the 0.1.19 merge listing a user pool as "not carried" and landing
+// the rest — the source's books are left behind.
+#[test]
+fn mu1_a_merge_with_user_grammars_lands_whole_or_is_refused_whole() {
+    // Records in the source's user pool: refused, against each target.
+    for (tag, target_version) in [("same", Some(1)), ("other-version", Some(2)), ("none", None)] {
+        let s = Scratch::new(&format!("mu1-{tag}"), &["a", "b"]);
+        add_reading_list(&s, "a", 1);
+        if let Some(v) = target_version {
+            add_reading_list(&s, "b", v);
+        }
+        assert_eq!(s.import_with("a", &region_and_a_book("A source book"), &["--remint"]).rc, 0);
+        assert_eq!(s.import_with("b", &ws_only(), &["--remint"]).rc, 0);
+        let (a0, b0) = (files(&s.cauldron_dir("a")), files(&s.cauldron_dir("b")));
+        let o = merge(&s, "a", "b", &[]);
+        assert_ne!(o.rc, 0, "{tag}: {}{}", o.out, o.err);
+        let text = format!("{}{}", o.out, o.err);
+        assert!(text.contains("user pool `reading-list` of the source (1 record(s))") && text.contains("not built in this release"), "{tag}: {text}");
+        assert!(files(&s.cauldron_dir("a")) == a0 && files(&s.cauldron_dir("b")) == b0, "{tag}: nothing was written");
+    }
+    // An empty source pool: the merge lands; the pool is not carried.
+    let s = Scratch::new("mu1-empty", &["a", "b"]);
+    add_reading_list(&s, "a", 1);
+    add_reading_list(&s, "b", 2);
+    assert_eq!(s.import_with("b", &region_and_a_book("The target's own book"), &["--remint"]).rc, 0);
+    assert_eq!(s.import_with("a", &ws_only(), &["--remint"]).rc, 0);
+    let plan = merge(&s, "a", "b", &["--dry-run"]).json();
+    assert!(plan["not_carried"].as_array().unwrap().iter().any(|n| n["what"] == "pool `reading-list`"), "{plan}");
+    let target_pool = files(&s.soup("b")).into_iter().filter(|(k, _)| k.starts_with("reading-list.db")).collect::<BTreeMap<_, _>>();
+    let o = merge(&s, "a", "b", &[]);
+    assert_eq!(o.rc, 0, "{}{}", o.out, o.err);
+    let list = grammar_list(&s, "b");
+    assert!(list.get("refused").is_none(), "{list}");
+    let pools: Vec<(String, String)> = list["pools"].as_array().unwrap().iter().map(|p| (p["pool"].as_str().unwrap().into(), p["schema"].as_str().unwrap().into())).collect();
+    assert!(pools.contains(&("reading-list".into(), "reading-list@2".into())), "the target keeps its own version: {pools:?}");
+    assert_eq!(s.get("b", "BK-1")["handle"], "The target's own book");
+    let after = files(&s.soup("b")).into_iter().filter(|(k, _)| k.starts_with("reading-list.db")).collect::<BTreeMap<_, _>>();
+    assert!(after == target_pool, "the merge did not touch the target's user pool");
+    // Undone: the target's user pool still reads, and writes.
+    let o = s.run(&["merge", "--undo", "MG-1", "--into", "b", "--env", "dev"], &[]);
+    assert_eq!((o.rc, o.json()["outcome"].clone()), (0, json!("undone")), "{}{}", o.out, o.err);
+    assert_eq!(s.get("b", "BK-1")["handle"], "The target's own book");
+    let o = s.import_with("b", &json!([{"id": "n", "type": "book", "handle": "After the undo"}]), &["--remint"]);
+    assert_eq!(o.rc, 0, "{}{}", o.out, o.err);
+    assert!(grammar_list(&s, "b").get("refused").is_none());
+}

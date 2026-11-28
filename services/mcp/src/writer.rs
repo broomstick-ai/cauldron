@@ -91,8 +91,10 @@ pub struct Who {
 /// writer thread with the cauldron's handle, after the same grant check.
 pub type WithFn = Box<dyn FnOnce(&spine::Cauldron, &Target) -> Result<Value, Refusal> + Send>;
 
-/// A write that needs the handle itself, mutably (a merge, which may give
-/// the soup its cluster pool), run the same way.
+/// A write that changes the handle itself, mutably: the owner's grammar
+/// add or remove (a pool, and with it the routes) or a merge (which may give
+/// the soup its cluster pool), run on the writer thread after the same
+/// grant check.
 pub type WithMutFn = Box<dyn FnOnce(&mut spine::Cauldron, &Target) -> Result<Value, Refusal> + Send>;
 
 enum Job {
@@ -197,6 +199,18 @@ impl Writers {
         let (tx, rx) = mpsc::channel();
         w.send(Job::With(f, tx))?;
         rx.recv().unwrap_or_else(|_| Err(closed()))
+    }
+
+    /// Run `f` on the target's writer with its handle to change, but only
+    /// when that writer is open (`None` when it is not: nothing here holds
+    /// the soup, so the caller may write it directly).
+    pub fn with_mut_if_open(&self, t: &Target, f: WithMutFn) -> Option<Result<Value, Refusal>> {
+        let w = self.get(&t.cauldron.name)?;
+        let (tx, rx) = mpsc::channel();
+        if let Err(r) = w.send(Job::WithMut(f, tx)) {
+            return Some(Err(r));
+        }
+        Some(rx.recv().unwrap_or_else(|_| Err(closed())))
     }
 
     /// Run `f` on the target's writer with its handle, mutably, opening it
@@ -471,10 +485,11 @@ pub fn cursor_after(c: &spine::Cauldron, t: &Target) -> Value {
 // --------------------------------------------------------------- soup_put
 
 /// Does `type` declare a `meta` field in the grammar of the pool its records
-/// go to (`ws`, or the cluster pool for a `cluster`)?
-fn has_meta(_c: &spine::Cauldron, node_type: Option<&str>) -> bool {
+/// go to (`ws`, the cluster pool for a `cluster`, a user grammar's pool for
+/// its types)?
+fn has_meta(c: &spine::Cauldron, node_type: Option<&str>) -> bool {
     let Some(t) = node_type else { return false };
-    let Some(g) = soup_door::clusters::grammar_of_type(t) else { return false };
+    let Some(g) = soup_door::grammars::grammar_of_type(c, t) else { return false };
     g.node_types.get(t).is_some_and(|d| d.fields.contains_key("meta"))
 }
 

@@ -37,6 +37,7 @@ pub mod cursor;
 pub mod daemon;
 pub mod door;
 pub mod dumps;
+pub mod grammar;
 pub mod http;
 pub mod merge;
 pub mod seam;

@@ -520,9 +520,11 @@ nothing and assigns nothing.
 New in 0.1.17 ([#25](https://github.com/broomstick-ai/cauldron/issues/25)).
 Granting a cauldron to the MCP door (`grant`), approving or rejecting what
 a ripple wrote (`approve`), turning automatic processing on (`ripples`),
-and carrying a source's approvals and rejections into another cauldron
-with `cauldron merge` (`merge`, from the release that brings merging) are
-the owner's acts.
+carrying a source's approvals and rejections into another cauldron with
+`cauldron merge` (`merge`, from the release that brings merging), and
+changing which user grammars a soup holds (`grammar`: `cauldron soup
+grammar add`, `rebind --yes`, `remove --yes`; no MCP tool; from the release
+that brings user grammars) are the owner's acts.
 
 - **What the gate is for.** By default each runs only at an interactive
   terminal, so an agent, a script or a ripple cannot do them: no model
@@ -531,9 +533,10 @@ the owner's acts.
 - **What `open` gives up.** With `approve` open an agent can approve what a
   ripple wrote; with `grant` open it can open a cauldron to every session;
   with `ripples` open it can start automatic model spend; with `merge` open
-  it can carry decisions from one cauldron into another.
+  it can carry decisions from one cauldron into another; with `grammar`
+  open it can add, rebind or remove a soup's user grammars.
 - **Three ways to choose** (`terminal` is the default and changes nothing):
-  `cauldron owner-acts open | terminal [--only grant,approve,ripples,merge]
+  `cauldron owner-acts open | terminal [--only grant,approve,ripples,merge,grammar]
   [--cauldron C] [--env E]` at a terminal (a cauldron's own choice wins over
   the root's; `owner-acts show` says what is in effect); the environment
   variable `CAULDRON_OWNER_ACTS=open` (or a comma list) in the environment
@@ -542,9 +545,10 @@ the owner's acts.
   server, which anything able to set its own environment can turn on, and
   that is the point: the owner decides whether their agents may act for
   them; and `scripts/install --owner-acts open|terminal`. A choice recorded
-  as `open` by 0.1.17 lists the three acts it knew, so `merge` stays at a
-  terminal until it is opened. The variable is read only by that command,
-  and opens `grant`, `ripples` and a merge that command runs itself there: no
+  as `open` by an earlier release lists the acts it knew, so a newer act
+  (`merge` after 0.1.17, `grammar` after 0.1.19) stays at a terminal until it
+  is opened. The variable is read only by that command, and opens `grant`,
+  `ripples`, `grammar` and a merge that command runs itself there: no
   service inherits it, and the `mcp` service, which carries out every
   approval and rejection, follows the persisted choice alone, so to let
   agents (a command without a terminal, or a session through

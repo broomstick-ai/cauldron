@@ -52,6 +52,8 @@ pub mod schema_def;
 pub mod schema_publish;
 pub mod spine_db;
 pub mod tranche;
+pub mod user_grammar;
+pub mod user_registry;
 pub mod witness;
 
 use crate::config::SpineConfig;
@@ -117,10 +119,21 @@ pub struct Cauldron {
     /// The guard asked about every commit's regions
     /// ([`regions::RegionGuard`]), when the writer installed one.
     region_guard: Option<std::sync::Arc<dyn regions::RegionGuard>>,
+    /// Each user pool file's identity (device, inode) when this handle
+    /// judged it (open, or `add_pool`): a commit touching the pool refuses
+    /// if the file at that path is another one now (renamed in, restored
+    /// over), since only the open judged and bound it.
+    user_files: BTreeMap<PoolName, (u64, u64)>,
     /// THE HOLD this handle owns ([`Cauldron::hold`]), if any, and whether
     /// its next commit lifts it.
     hold: Option<String>,
     lift_hold: bool,
+}
+
+/// A file's (device, inode), or `None` when it is not there.
+pub(crate) fn file_identity(path: &Path) -> Option<(u64, u64)> {
+    use std::os::unix::fs::MetadataExt;
+    std::fs::metadata(path).ok().map(|m| (m.dev(), m.ino()))
 }
 
 impl Cauldron {
@@ -205,6 +218,7 @@ impl Cauldron {
             recovered_at_open: RecoveryReport::default(),
             tranches_at_open: TranchePassReport::default(),
             region_guard: None,
+            user_files: BTreeMap::new(),
             hold: None,
             lift_hold: false,
         })
@@ -228,19 +242,47 @@ impl Cauldron {
     /// no pool and a staging directory (which the next add removes and
     /// builds again; an open never reads it) or the whole pool.
     ///
-    /// ONLY THE CLUSTER POOL: the one grammar a cauldron may gain after it
-    /// was made is `cauldron@1` under its own name, `cauldron`
+    /// THE CLUSTER POOL, OR A USER GRAMMAR: the one built-in grammar a
+    /// cauldron may gain after it was made is `cauldron@1` under its own
+    /// name, `cauldron`
     /// ([`crate::grammar_cauldron::cauldron_v1`] of
     /// [`crate::grammar_cauldron::POOL`]); any other grammar or name is
     /// refused, so this is not a second, general door to the pool set
-    /// (`Cauldron::create` makes every other pool). A staging directory left
+    /// (`Cauldron::create` makes every other pool). A user grammar (a kind
+    /// with a hyphen) is taken when [`crate::user_grammar::check_user`]
+    /// finds nothing against the pins held now (the caller judges the FILE
+    /// with [`crate::user_grammar::parse_file`] first). A staging directory left
     /// by an add that died after its rename (a second name for the live pool
     /// file) is removed whenever the pool is found already in place.
     pub fn add_pool(&mut self, grammar: &PoolGrammar) -> Result<bool> {
         grammar.check_wellformed()?;
         let name = grammar.pool.clone();
         let only = crate::grammar_cauldron::cauldron_v1(crate::grammar_cauldron::POOL);
-        if grammar != &only {
+        // A USER grammar (its kind has a hyphen, which no built-in kind has)
+        // may join too, when it meets every rule of
+        // [`crate::user_grammar::check_user`] against the pins this cauldron
+        // holds now AND the user pools it registered whose files are out
+        // (their kinds, types and prefixes stay taken), and takes no id
+        // prefix another pool has minted under. Its pool file is pinned
+        // exactly as a built-in pool is, so an older binary reads it as a
+        // pool; the spine records it in `crate::user_registry`.
+        if crate::user_grammar::is_user_kind(grammar.kind.as_str()) {
+            let held = self.held_and_registered()?;
+            let pins: Vec<&PoolGrammar> = held.iter().collect();
+            let mut problems = crate::user_grammar::check_user(&crate::user_grammar::UserGrammar::from_pin(grammar), &pins);
+            problems.extend(crate::user_grammar::history_problems(&self.root, grammar)?);
+            if let Some(first) = problems.first() {
+                return Err(SpineError::usage(format!(
+                    "user grammar `{}@{}` cannot be added as pool `{name}`: {} problem(s), the first `{}` at `{}`: {}",
+                    grammar.kind,
+                    grammar.version,
+                    problems.len(),
+                    first.rule,
+                    first.at,
+                    first.detail
+                )));
+            }
+        } else if grammar != &only {
             return Err(SpineError::usage(format!(
                 "a pool can be added to an existing cauldron only as `{}` pinned to `{}` v{} (the cluster pool); `{name}` \
                  pinned to `{}` v{} is not one, and is made only with the cauldron",
@@ -259,6 +301,21 @@ impl Cauldron {
             };
         }
         let target = Pool::path_in(&self.root, &name);
+        // A pool name this spine has written to, whose file is gone, is not
+        // made again empty: its ids would be minted again from 1, and an
+        // edge another pool holds into one of its old records would read
+        // as one into a new record.
+        if !target.exists()
+            && crate::user_grammar::is_user_kind(grammar.kind.as_str())
+            && crate::offline::pool_has_history(&self.root, name.as_str())?
+        {
+            return Err(SpineError::usage(format!(
+                "{}: this soup's spine records writes to a pool `{name}` whose file is no longer in the soup, so it is not \
+                 made again as a new, empty pool (its ids would be minted again, and edges other pools hold into its old \
+                 records would point at new ones). Put back the pool file this cauldron wrote: a copy older than its last write is taken by `cauldron soup grammar rebind {name}`, which records the records it lacks as lost (after which, if it holds no record, it can be removed and added again)",
+                crate::user_grammar::POOL_HAS_HISTORY
+            )));
+        }
         if !target.exists() {
             let staging = self.stage_pool(grammar)?;
             let built = Pool::path_in(&staging, &name);
@@ -294,9 +351,132 @@ impl Cauldron {
             )));
         }
         drop(found);
+        if crate::user_grammar::is_user_kind(grammar.kind.as_str()) {
+            let spine = self.spine()?;
+            crate::user_registry::register(spine.conn(), grammar)?;
+            if let Some(id) = file_identity(&target) {
+                self.user_files.insert(name.clone(), id);
+            }
+        }
         let added = !self.grammars.contains_key(&name);
         self.grammars.insert(name, grammar.clone());
         Ok(added)
+    }
+
+    /// The pins of the pool files this handle opened, and the grammars of
+    /// the user pools the spine registered whose files are not in the soup
+    /// (`crate::user_registry::registered_grammars`): what a new user
+    /// grammar is judged against.
+    pub fn held_and_registered(&self) -> Result<Vec<PoolGrammar>> {
+        let mut out: Vec<PoolGrammar> = self.grammars.values().cloned().collect();
+        let spine = self.spine()?;
+        for g in crate::user_registry::registered_grammars(spine.conn())? {
+            if !self.grammars.contains_key(&g.pool) {
+                out.push(g);
+            }
+        }
+        Ok(out)
+    }
+
+    /// **Remove a user pool** (`cauldron soup grammar remove`): only one
+    /// whose file holds no record, which no other pool's grammar reaches,
+    /// and that this spine registered. Its file (and log) is moved to
+    /// `<soup>/.removed/<pool>.<n>/`, never deleted; the registry keeps the
+    /// name as removed. No id is minted twice afterwards: a pool with no
+    /// record minted none, and a prefix another pool minted under is never
+    /// taken (`user_grammar::PREFIX_HAS_HISTORY`). With `apply` false,
+    /// judges and answers what it would do, moving nothing.
+    pub fn remove_user_pool(&mut self, pool: &PoolName, apply: bool) -> Result<serde_json::Value> {
+        let spine = self.spine()?;
+        let reg = crate::user_registry::read(spine.conn())?.unwrap_or_default();
+        let Some(row) = reg.get(pool.as_str()).filter(|r| r.is_live()) else {
+            return Err(SpineError::not_found(format!("this soup has no registered user pool `{pool}` (`cauldron soup grammar list`)")));
+        };
+        let file = Pool::path_in(&self.root, pool);
+        let records = if file.exists() { crate::user_registry::record_count(&file)? } else { 0 };
+        let landed: i64 = spine.conn().query_row("SELECT count(*) FROM tx_parts WHERE pool = ?1 AND landed = 1", [pool.as_str()], |r| r.get(0))?;
+        if records > 0 || (!file.exists() && landed > 0) {
+            return Err(SpineError::usage(format!(
+                "user pool `{pool}` holds records ({}), so it is not removed: a record is never deleted, and its id must keep \
+                 naming it. A grammar with a mistake that has records stays; write a corrected grammar as a new kind with its \
+                 own prefixes",
+                if file.exists() { format!("{records}") } else { format!("its file is out, and the spine records {landed} write(s) to it") }
+            )));
+        }
+        let kind = row.grammar.kind.clone();
+        for g in self.held_and_registered()? {
+            if g.pool == *pool {
+                continue;
+            }
+            let reaches = g.edge_kinds.iter().find(|(_, e)| e.to.iter().any(|t| matches!(t, crate::schema_def::TypeRef::Reach { kind: k, .. } if *k == kind)));
+            if let Some((edge, _)) = reaches {
+                return Err(SpineError::usage(format!(
+                    "pool `{}`'s edge `{edge}` reaches kind `{kind}`, so `{pool}` is not removed while `{}` is registered",
+                    g.pool, g.pool
+                )));
+            }
+        }
+        let mut doc = serde_json::json!({"pool": pool.as_str(), "schema": format!("{}@{}", row.kind, row.version), "records": 0});
+        if !apply {
+            doc["outcome"] = serde_json::json!("would-remove");
+            return Ok(doc);
+        }
+        let mut moved = None;
+        if file.exists() {
+            let base = self.root.join(".removed");
+            std::fs::create_dir_all(&base).map_err(|e| SpineError::hard(format!("making `{}`: {e}", base.display())))?;
+            let mut n = 1;
+            let to = loop {
+                let d = base.join(format!("{pool}.{n}"));
+                if std::fs::create_dir(&d).is_ok() {
+                    break d;
+                }
+                n += 1;
+                if n > 10_000 {
+                    return Err(SpineError::hard(format!("no free name under `{}`", base.display())));
+                }
+            };
+            for side in ["", "-wal", "-shm"] {
+                let from = PathBuf::from(format!("{}{side}", file.display()));
+                if from.exists() {
+                    let dest = to.join(format!("{pool}.db{side}"));
+                    std::fs::rename(&from, &dest).map_err(|e| SpineError::hard(format!("moving `{}`: {e}", from.display())))?;
+                }
+            }
+            moved = Some(to);
+        }
+        crate::user_registry::mark_removed(spine.conn(), pool.as_str())?;
+        self.grammars.remove(pool);
+        self.user_files.remove(pool);
+        doc["outcome"] = serde_json::json!("removed");
+        doc["moved_to"] = serde_json::json!(moved.map(|p| p.display().to_string()));
+        Ok(doc)
+    }
+
+    /// Refused when a user pool file `names` holds is not the file this
+    /// handle judged (`user_files`): it was renamed in or restored over
+    /// while the soup was open. Nothing is written.
+    pub(crate) fn check_user_files(&self, names: &[PoolName]) -> Result<()> {
+        for p in names {
+            let Some(want) = self.user_files.get(p) else { continue };
+            let path = Pool::path_in(&self.root, p);
+            if file_identity(&path).as_ref() != Some(want) {
+                return Err(SpineError::hard(format!(
+                    "user pool file `{}` is not the file this soup was opened with (it was moved, replaced or restored while \
+                     the soup was open); nothing was written. Close and open the soup again (`cauldron --env <env> stop mcp` \
+                     and `start mcp` for the service), so the file is judged and bound before anything writes to it",
+                    path.display()
+                )));
+            }
+        }
+        Ok(())
+    }
+
+    /// The live registered user pools whose files are not in the soup
+    /// (moved out): their grammars.
+    pub fn missing_user_pools(&self) -> Result<Vec<PoolGrammar>> {
+        let spine = self.spine()?;
+        Ok(crate::user_registry::registered_grammars(spine.conn())?.into_iter().filter(|g| !self.grammars.contains_key(&g.pool)).collect())
     }
 
     /// The staging half of [`Cauldron::add_pool`]: the whole pool file built
@@ -478,7 +658,7 @@ impl Cauldron {
             if entry.file_name().and_then(|n| n.to_str()) == Some(SPINE_FILE) {
                 continue;
             }
-            let pool = Pool::open(&entry)?;
+            let pool = Pool::open(&entry).map_err(|e| user_grammar::unreadable(&entry, e))?;
             let name = pool.name().clone();
             let expected = Pool::path_in(dir, &name);
             if expected != entry {
@@ -498,6 +678,25 @@ impl Cauldron {
                 dir.display()
             )));
         }
+        // A user grammar's pool file is judged, every time the soup is
+        // opened, by the rules `add_pool` judged it by, and must be bound to
+        // this spine (`user_grammar::judge_pins`, `offline::pool_bound`): a
+        // hand edit or a file copied in is refused, never routed.
+        {
+            let pins: Vec<&PoolGrammar> = grammars.values().collect();
+            if let Some(why) = user_grammar::refusal(dir, &pins)? {
+                return Err(SpineError::hard(why));
+            }
+            // A registry row whose digest is of an earlier form, for a pin it
+            // matches, is rewritten to this release's form (a migration).
+            let spine = SpineDb::open(&spine_path)?;
+            user_registry::migrate_digests(spine.conn(), &pins)?;
+        }
+        let user_files = grammars
+            .keys()
+            .filter(|p| !user_grammar::BUILT_IN_POOLS.contains(&p.as_str()) && user_grammar::is_user_kind(grammars[*p].kind.as_str()))
+            .filter_map(|p| file_identity(&Pool::path_in(dir, p)).map(|id| (p.clone(), id)))
+            .collect();
         Ok(Cauldron {
             root: dir.to_path_buf(),
             config,
@@ -505,6 +704,7 @@ impl Cauldron {
             recovered_at_open: RecoveryReport::default(),
             tranches_at_open: TranchePassReport::default(),
             region_guard: None,
+            user_files,
             hold: None,
             lift_hold: false,
         })

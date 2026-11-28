@@ -1,0 +1,46 @@
+{
+  "format": "cauldron-grammar/1",
+  "kind": "reading-list",
+  "version": 1,
+  "node_types": {
+    "book": {
+      "id_prefix": "BK",
+      "states": ["to-read", "reading", "read"],
+      "fields": {
+        "handle": {"required": true, "kind": "text", "min_chars": 1, "max_chars": 235},
+        "body": {"required": false, "kind": "text", "max_chars": 10000},
+        "year": {"required": false, "kind": "integer"},
+        "meta": {"required": false, "kind": "object"}
+      }
+    },
+    "author": {
+      "id_prefix": "AU",
+      "fields": {
+        "handle": {"required": true, "kind": "text", "min_chars": 1, "max_chars": 235},
+        "meta": {"required": false, "kind": "object"}
+      }
+    }
+  },
+  "edge_kinds": {
+    "written_by": {
+      "from": [{"at": "local", "node_type": "book"}],
+      "to": [{"at": "local", "node_type": "author"}]
+    },
+    "about": {
+      "from": [{"at": "local", "node_type": "book"}],
+      "to": [
+        {"at": "reach", "kind": "workspace", "node_type": "region"},
+        {"at": "reach", "kind": "workspace", "node_type": "decision"},
+        {"at": "reach", "kind": "workspace", "node_type": "question"}
+      ],
+      "fields": {
+        "why": {"required": false, "kind": "text", "max_chars": 1000}
+      }
+    },
+    "supersedes": {
+      "from": [{"at": "local", "node_type": "book"}],
+      "to": [{"at": "same_as_source"}],
+      "at_most_one_per_from": true
+    }
+  }
+}

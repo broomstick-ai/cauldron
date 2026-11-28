@@ -45,7 +45,9 @@
 //!   region land together or not at all. A bare reference from a routed
 //!   record names a record of the batch first, then a node of its own pool,
 //!   then a node of the home pool (`opts.pool`), so a cluster's `claims` edge
-//!   may name a held region as `R-3`.
+//!   may name a held region as `R-3`; last, a node of the user grammar's
+//!   pool whose type carries the id's prefix (a user grammar's prefixes are
+//!   used once per cauldron), so a `film` may name a held `book` as `BK-1`.
 //! - **Citations.** `meta` is open, so the grammar never looks inside it;
 //!   a `meta.cites` entry of an unknown kind, or without its kind's keys
 //!   ([`crate::grammar_v6::CITE_KINDS`]), refuses its record here
@@ -372,6 +374,27 @@ pub fn import_records(
                     looked_in.push(home.clone());
                     if held.is_some() {
                         target_pool = home.clone();
+                    }
+                }
+                // A bare reference into a USER grammar's pool (a kind with a
+                // hyphen) is found by its id prefix: a user grammar's
+                // prefixes are used once per cauldron
+                // (`user_grammar::check_user`), so the prefix names the pool.
+                if held.is_none() && at.is_none() {
+                    let pre = id.split_once('-').map(|(p, _)| p).unwrap_or("");
+                    let owner = cauldron.pools().find(|p| {
+                        !looked_in.contains(p)
+                            && cauldron.grammar(p).is_some_and(|g| {
+                                crate::user_grammar::is_user_kind(g.kind.as_str())
+                                    && g.node_types.values().any(|d| d.id_prefix.as_deref() == Some(pre))
+                            })
+                    });
+                    if let Some(p) = owner.cloned() {
+                        held = held_in(&p)?;
+                        looked_in.push(p.clone());
+                        if held.is_some() {
+                            target_pool = p;
+                        }
                     }
                 }
                 match held {

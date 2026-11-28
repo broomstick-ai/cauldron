@@ -75,6 +75,19 @@ recorded in [CHANGELOG.md](CHANGELOG.md).
   undo that keeps later writes, and a merge in more than one write (so a
   very large or edge-dense source neither holds the target for minutes nor
   is refused).
+- **0.1.20: user-defined grammars** (issue #28): a cauldron holds grammars
+  (ontologies) you write beside `workspace@6` and `cauldron@1`, each a
+  `kind@version` in a pool of its own, registered with `cauldron soup
+  grammar add` (the owner act `grammar`); their records are written and
+  read through the same verbs and MCP tools as any record, edges reach the
+  workspace and other user grammars, and the spine records every user pool
+  and checks each pool file against it at every open (`rebind` takes back
+  an older copy, `remove` an empty grammar); `soup get --edges-in` says what
+  points at a record. Not yet: a new version of a registered grammar,
+  removing one that holds records, region membership and ripples for user
+  records, publishing a user grammar (`soup_grammar`, `grammar export`),
+  and merging user pools (a merge whose source holds user records is
+  refused).
 
 ## Next
 

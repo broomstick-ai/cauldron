@@ -56,16 +56,18 @@ pub(crate) fn act(act: Act, e: &Environment, cauldron: &str, refusal: &str) -> R
 const USAGE: &str = "\
 cauldron owner-acts — who may act for the owner without a terminal
 
-    cauldron owner-acts open [--only grant,approve,ripples,merge] [--cauldron <name>] [--env <env>]
-    cauldron owner-acts terminal [--only grant,approve,ripples,merge] [--cauldron <name>] [--env <env>]
+    cauldron owner-acts open [--only grant,approve,ripples,merge,grammar] [--cauldron <name>] [--env <env>]
+    cauldron owner-acts terminal [--only grant,approve,ripples,merge,grammar] [--cauldron <name>] [--env <env>]
         Choose which owner acts may run without an interactive terminal: `grant`
         (`cauldron mcp grant`), `approve` (`cauldron soup approve`, `cauldron ripples
         approve | reject`, and the MCP tools `soup_approve` and `soup_reject`), `ripples`
-        (`cauldron ripples on`) and `merge` (`cauldron merge` carrying the source's
+        (`cauldron ripples on`), `merge` (`cauldron merge` carrying the source's
         approvals and rejections; undoing the owner's merge, and `cauldron soup recover
-        --abandon-undo | --abandon-merge | --settle-merge` on the owner's merge or undo). `open` opens them (all four, or those --only names,
-        added to what is open already; a choice recorded before `merge` was an act lists
-        the three it opened, so `merge` stays at a terminal until it is opened); `terminal` closes them again (all, or those
+        --abandon-undo | --abandon-merge | --settle-merge` on the owner's merge or undo) and
+        `grammar` (`cauldron soup grammar add`, which registers a user grammar as a new pool,
+        and `grammar rebind | remove --yes`). `open` opens them (all five, or those --only names,
+        added to what is open already; a choice recorded before an act existed lists the acts
+        it opened, so a newer act stays at a terminal until it is opened); `terminal` closes them again (all, or those
         --only names). Without --cauldron the choice is the root's, for every cauldron of
         every environment of this root; with --cauldron it is that cauldron's own and wins
         over the root's (both ways), bound to the cauldron's id (a cauldron made again
@@ -168,7 +170,8 @@ const GIVES_UP: &str = "Open acts run without a terminal: an agent, a script or 
                         lets an agent approve or reject what a ripple wrote (approved records then read as reviewed); \
                         `grant` lets it open a cauldron to every Claude Code session of this user; `ripples` lets it start \
                         automatic model spend and writes; `merge` lets it carry the source's approvals and rejections into another \
-                        cauldron with a merge. Each act records `by: \"agent\"`. A ripple never approves or rejects.";
+                        cauldron with a merge; `grammar` lets it register, rebind or remove a user grammar, which changes what a \
+                        cauldron's soup accepts. Each act records `by: \"agent\"`. A ripple never approves or rejects.";
 
 /// The environment for `--cauldron`, and that cauldron (it must exist).
 fn the_cauldron(env_flag: Option<&str>, name: &str) -> Result<(Environment, env::Cauldron)> {
@@ -202,7 +205,7 @@ pub(crate) fn set_as(open: bool, args: &[String], how: Option<owner_acts::How>) 
         Some(o) => {
             let v = owner_acts::parse_acts(o).map_err(|e| anyhow::anyhow!("`--only`: {e}"))?;
             if v.is_empty() {
-                bail!("`--only` names one or more of grant, approve, ripples, merge");
+                bail!("`--only` names one or more of grant, approve, ripples, merge, grammar");
             }
             v
         }

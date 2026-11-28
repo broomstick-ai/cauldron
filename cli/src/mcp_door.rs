@@ -82,6 +82,30 @@ pub fn find(e: &Environment) -> std::result::Result<Found, Absent> {
 }
 
 /// One line to the service's seam, one line back.
+/// [`seam_ask`], waiting up to `wait` for the answer (an act queued behind
+/// other writes). A wait that runs out is an error [`timed_out`] knows.
+pub fn seam_ask_waiting(addr: &str, line: &str, wait: Duration) -> Result<String> {
+    let sa: SocketAddr = addr.parse().with_context(|| format!("the seam address `{addr}`"))?;
+    let s = env::egress::connect_tcp("mcp seam", &sa, Duration::from_secs(2))?;
+    s.set_read_timeout(Some(wait))?;
+    let mut w = s.try_clone()?;
+    w.write_all(format!("{line}\n").as_bytes())?;
+    w.flush()?;
+    let mut out = String::new();
+    BufReader::new(s).read_line(&mut out)?;
+    let out = out.trim().to_string();
+    if out.is_empty() {
+        bail!("{addr} said nothing to the request");
+    }
+    Ok(out)
+}
+
+/// Is `err` a read that ran out of time (the far side took the request and
+/// has not answered)?
+pub fn timed_out(err: &anyhow::Error) -> bool {
+    err.chain().any(|c| c.downcast_ref::<std::io::Error>().is_some_and(|e| matches!(e.kind(), std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut)))
+}
+
 pub fn seam_ask(addr: &str, line: &str) -> Result<String> {
     seam_ask_within(addr, line, Duration::from_secs(5))
 }

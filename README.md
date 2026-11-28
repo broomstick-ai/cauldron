@@ -186,6 +186,13 @@ your dumps into records:
   decision carried only as far as the source's own history records it, a
   size ceiling, a snapshot and `cauldron merge --undo`, and a way out of
   every cut ([Merging cauldrons](#merging-cauldrons)).
+- 0.1.20: user-defined grammars (ontologies, issue #28): a cauldron holds
+  grammars you write beside its built-in ones, each registered as a new
+  pool by `cauldron soup grammar add` (an owner act), its records written
+  and read through the same CLI verbs and MCP tools, checked against the
+  spine's record of the pool at every open, with `rebind` and `remove` for
+  the ways a pool file goes wrong, and `soup get --edges-in` for what
+  points at a record ([Grammars and pools](#grammars-and-pools-ontologies)).
 
 cauldron has three parts:
 
@@ -258,16 +265,16 @@ From 0.1.15, each release on GitHub carries two files: the bundle
 terminal UI, the `threads` daemon, the `mcp` service, from 0.1.17 the
 `inference` and `ripples` services, their declarations and the installer)
 and `SHA256SUMS`, its checksum. Download both with `curl`,
-check the checksum, unpack, and install (the commands are for 0.1.19;
+check the checksum, unpack, and install (the commands are for 0.1.20;
 change the version for another release):
 
 ```sh
 mkdir cauldron-download && cd cauldron-download
-curl -fLO https://github.com/broomstick-ai/cauldron/releases/download/v0.1.19/cauldron-0.1.19-aarch64-apple-darwin.tar.gz
-curl -fLO https://github.com/broomstick-ai/cauldron/releases/download/v0.1.19/SHA256SUMS
+curl -fLO https://github.com/broomstick-ai/cauldron/releases/download/v0.1.20/cauldron-0.1.20-aarch64-apple-darwin.tar.gz
+curl -fLO https://github.com/broomstick-ai/cauldron/releases/download/v0.1.20/SHA256SUMS
 shasum -a 256 -c SHA256SUMS
-tar -xzf cauldron-0.1.19-aarch64-apple-darwin.tar.gz
-cauldron-0.1.19-aarch64-apple-darwin/install --prebuilt cauldron-0.1.19-aarch64-apple-darwin.tar.gz
+tar -xzf cauldron-0.1.20-aarch64-apple-darwin.tar.gz
+cauldron-0.1.20-aarch64-apple-darwin/install --prebuilt cauldron-0.1.20-aarch64-apple-darwin.tar.gz
 ```
 
 `shasum -a 256 -c SHA256SUMS` must print `OK` for the tarball. The installer
@@ -723,7 +730,8 @@ The plugin's [README](claude-code/cauldron/README.md) has the details.
 ### Who may act for the owner
 
 New in 0.1.17 ([#25](https://github.com/broomstick-ai/cauldron/issues/25));
-`merge` is an act from the release that brings `cauldron merge`. Four acts
+`merge` is an act from the release that brings `cauldron merge`, and
+`grammar` one from the release that brings user grammars. Five acts
 belong to a cauldron's owner:
 
 | act | commands (and tools) |
@@ -732,16 +740,18 @@ belong to a cauldron's owner:
 | `approve` | `cauldron soup approve`, `cauldron ripples approve \| reject` (and taking either back); the MCP tools `soup_approve` and `soup_reject` |
 | `ripples` | `cauldron ripples on`: automatic processing, and the model spend it starts |
 | `merge` | `cauldron merge` of a source whose approvals or rejections travel with it into the target (see [Merging cauldrons](#merging-cauldrons)); a merge that carries no decision is no owner act (though a merge sent to the `mcp` service without a terminal always needs `merge` opened); undoing the owner's merge is the same act, and so are `cauldron soup recover --abandon-undo`, `--abandon-merge` and `--settle-merge` on the owner's merge or undo |
+| `grammar` | `cauldron soup grammar add`, `cauldron soup grammar rebind --yes`, `cauldron soup grammar remove --yes`: what a cauldron's soup accepts (no MCP tool does any of them) |
 
 **What the gate is for.** By default each runs only with its input and
 output on an interactive terminal: a command run at a terminal is taken to
 be the owner's, and an agent, a script or a ripple is refused (the refusal
-names the command for you to run, and how you would let agents run it). That keeps four things
+names the command for you to run, and how you would let agents run it). That keeps five things
 from happening without you deciding: an agent approving the records a
 ripple wrote, so that model output reads as reviewed; an agent opening a
 cauldron to every Claude Code session, or widening its scopes;
-automatic model spend and unattended writes starting; and an agent carrying
-decisions from one cauldron into another with a merge.
+automatic model spend and unattended writes starting; an agent carrying
+decisions from one cauldron into another with a merge; and an agent
+changing which grammars a soup holds.
 
 **What the gate is not.** It stops an agent that follows the rules from
 acting for you by accident. It is not a security boundary against a process
@@ -762,9 +772,10 @@ scheduled job) cannot do these steps at all. So the gate is a setting,
 `owner_acts`, that you choose. `terminal` is the default and changes
 nothing: with nothing chosen (an upgraded root included) every act behaves
 as in 0.1.16. `open` lets every act run without a terminal; a list
-(`grant`, `approve`, `ripples`, `merge`) opens only those. A choice is kept
-as the list of acts it opened, so a choice recorded as `open` by 0.1.17
-(which knew three acts) keeps `merge` at a terminal until you open it; a
+(`grant`, `approve`, `ripples`, `merge`, `grammar`) opens only those. A
+choice is kept as the list of acts it opened, so a choice recorded as
+`open` by an earlier release keeps the acts it did not know (`merge` after
+0.1.17, `grammar` after 0.1.19) at a terminal until you open them; a
 release that does not know an act ignores it in the file.
 
 **What `open` gives up.** With `approve` open, an agent can approve what a
@@ -772,7 +783,8 @@ ripple wrote, so a record can read as reviewed without a person having read
 it. With `grant` open, an agent can open a cauldron to every Claude Code
 session of yours. With `ripples` open, an agent can start automatic model
 spend and writes. With `merge` open, an agent can carry the approvals and
-rejections of one cauldron into another. Choose it when you want your
+rejections of one cauldron into another. With `grammar` open, an agent can
+add, rebind or remove a soup's user grammars. Choose it when you want your
 agents to do these for you.
 
 **Three ways to choose.**
@@ -788,7 +800,7 @@ cauldron owner-acts show --env prod                    # what is in effect, per 
 ```
 
 - **The command**, `cauldron owner-acts open | terminal [--only
-  grant,approve,ripples,merge] [--cauldron C] [--env E]`. At a terminal it just
+  grant,approve,ripples,merge,grammar] [--cauldron C] [--env E]`. At a terminal it just
   applies. Without one, opening is refused unless the variable below is set
   in its environment (and opens each act it would open); closing runs from
   anywhere.
@@ -797,11 +809,12 @@ cauldron owner-acts show --env prod                    # what is in effect, per 
   it in your shell profile, in your user settings for Claude Code (`env` in
   `~/.claude/settings.json`, never a project's `.claude/settings.json`,
   which a cloned repository could carry), in CI or on a server. It opens
-  `grant` and `ripples` for that command, whatever the setting says, and it
-  lets `cauldron owner-acts open` record a choice without a terminal. It
-  opens `merge` for a merge that command runs itself; a merge sent to the
-  `mcp` service (which holds the target) is taken without a terminal only
-  where the persisted setting opens `merge`, as below for `approve`.
+  `grant`, `ripples` and `grammar` for that command, whatever the setting
+  says, and it lets `cauldron owner-acts open` record a choice without a
+  terminal. It opens `merge` for a merge that command runs itself; a merge,
+  or a `grammar add` or `remove`, sent to the `mcp` service (which holds the
+  target) is taken without a terminal only where the persisted setting
+  opens `merge` or `grammar`, as below for `approve`.
   Approving and rejecting are carried out by the `mcp` service, which takes
   an agent's decision only where the persisted setting opens `approve`: the
   variable alone does not, and the command says so before it sends
@@ -1728,6 +1741,289 @@ writes no workspace node or edge; the spine records the write's bookkeeping
 (which parts of it have landed) in each pool it touched, `ws.db` among
 them. A ripple writes no cluster and no claim in this release: its batch is
 refused if it holds one.
+
+### Grammars and pools (ontologies)
+
+A cauldron's soup is a knowledge graph that holds **several grammars side by
+side**. A grammar (an ontology) says which node types exist, their fields
+and states, and which edges may join them. Each grammar has a **kind** and a
+**version**, written `kind@version`, and lives in its own **pool**: a file of
+the soup (`<pool>.db`) with the grammar pinned inside it. Every node is
+stamped with the version it was written under, and a pinned grammar never
+changes.
+
+Edges cross between grammars **by kind, from the source**. An edge kind is
+declared by the grammar of the node it leaves, and it may name a type in
+its own pool or a type of another kind ("reach"). The far pool is never
+asked: the source grammar alone decides what it may point at.
+
+Every soup is made with two built-in grammars:
+
+| Pool | Grammar | What it holds |
+|---|---|---|
+| `ws` | `workspace@6` | regions, viewers and the ten content types (decision, task, question and the rest); its edges stay inside the workspace kind |
+| `cauldron` | `cauldron@1` | clusters; its `claims` edge reaches across to `workspace` regions |
+
+A third built-in grammar, `dumps@1`, is the dumps store's, which sits
+beside the soup rather than in it; the store's first `dump-remove`
+re-pins it to `dumps@2`. The published files of each built-in grammar
+are in [`schema/soup/`](schema/soup/).
+
+**Your own grammar.** From this release, a cauldron can also hold
+grammars you write. A grammar file is the published `grammar.json` shape
+with `"format": "cauldron-grammar/1"` added; its JSON Schema is
+[`schema/soup/grammar.schema.json`](schema/soup/grammar.schema.json), and
+[`schema/soup/examples/reading-list.grammar.json`](schema/soup/examples/reading-list.grammar.json)
+is a worked example: books and authors, with books pointing at workspace
+regions, decisions and questions.
+
+```sh
+# judge the file, writing nothing (add --env/--cauldron to judge it against a cauldron)
+cauldron soup grammar check reading-list.grammar.json --env prod --cauldron kb
+# register it as a new pool: an owner act, run at a terminal
+cauldron soup grammar add reading-list.grammar.json --env prod --cauldron kb
+# the pools the soup holds, and one pool's grammar
+cauldron soup grammar list --env prod --cauldron kb
+cauldron soup grammar show reading-list --env prod --cauldron kb
+```
+
+**Writing one.** The file, key by key (every key not listed is refused by
+name, never ignored):
+
+```json
+{
+  "format": "cauldron-grammar/1",
+  "kind": "recipe-book",
+  "version": 1,
+  "node_types": {
+    "recipe": {
+      "id_prefix": "RC",
+      "states": ["draft", "tested"],
+      "fields": {
+        "handle": {"required": true, "kind": "text", "min_chars": 1, "max_chars": 235},
+        "body":   {"required": false, "kind": "text", "max_chars": 10000},
+        "serves": {"required": false, "kind": "integer"},
+        "meta":   {"required": false, "kind": "object"}
+      }
+    },
+    "ingredient": {
+      "id_prefix": "IN",
+      "fields": {"handle": {"required": true, "kind": "text", "min_chars": 1, "max_chars": 235}}
+    }
+  },
+  "edge_kinds": {
+    "uses": {
+      "from": [{"at": "local", "node_type": "recipe"}],
+      "to":   [{"at": "local", "node_type": "ingredient"}],
+      "fields": {"amount": {"required": false, "kind": "text", "max_chars": 50}}
+    },
+    "for_task": {
+      "from": [{"at": "local", "node_type": "recipe"}],
+      "to":   [{"at": "reach", "kind": "workspace", "node_type": "task"}]
+    },
+    "supersedes": {
+      "from": [{"at": "local", "node_type": "recipe"}],
+      "to":   [{"at": "same_as_source"}],
+      "at_most_one_per_from": true
+    }
+  }
+}
+```
+
+- `kind` (with a hyphen) and `version` (1 or more) name the grammar;
+  `pool`, optional, names its pool (else the kind does).
+- A **node type** has `id_prefix` (1 to 6 capital letters or digits,
+  starting with a letter), `fields`, and optionally `states` (a closed
+  list: a record's `state`, when it has one, is one of them),
+  `required_edges_at_mint`
+  (`{"<edge kind>": <minimum>}`: edges a record must be written with) and
+  `required_at_mint_any_of` (alternatives of the same, with fields).
+- A **field** has `kind` (`text`, `integer`, `boolean`, `object` or `any`),
+  `required` (at creation), and, for text, `max_chars` and `min_chars`.
+- An **edge kind** has `from` and `to`, each a list of endpoints:
+  `{"at": "local", "node_type": "<a type of this grammar>"}`, `{"at":
+  "reach", "kind": "<another kind>", "node_type": "<its type>"}` (`to`
+  only), or `{"at": "same_as_source"}` (`to` only: the type the edge left).
+  It may have `fields` (as a node type's), `at_most_one_per_from` and
+  `at_most_one_per_to` (at most one such edge leaves, or arrives at, a
+  record; `at_most_one_per_to` not on an edge that reaches another kind).
+- **A record is never written over.** A write creates; its fields and
+  state never change after. Its edges and citations can be changed
+  (`cauldron soup link | unlink | cite`, `soup_link`, `soup_unlink`,
+  `soup_cite`), but a new version of a record is a new record with a
+  `supersedes` edge to the old one, so declare a local `supersedes` edge
+  (as above) for any type whose records will change.
+
+The rules a user grammar meets (`check` names each one it breaks, with
+where in the file):
+
+- **Its kind has a hyphen** (`reading-list`, not `reading`). No built-in
+  kind ever will, so the two can never collide. Its pool is named after
+  the kind unless the file or `--pool` names it, and has a hyphen too.
+- **Every type has an `id_prefix`** (ids are `BK-1`, `BK-2`, ...) **and a
+  `handle`**: `{"required": true, "kind": "text", "min_chars": 1,
+  "max_chars": <at most 235>}`, which reads, search and the change feed
+  show. A `body`, if declared, is text of at most 10,000 characters; a
+  `meta`, if declared, is an object (it carries `meta.cites`, and a type
+  without it takes no citation). These field names are reserved and never
+  declared: `id rev schema_version created_tx sealed state type edges
+  unreviewed pool provenance label`; an edge field is never named `kind`,
+  `to`, `from`, `from_pool`, `note`, `rejected` or `unreviewed` (the keys
+  reads print an edge with).
+- **Type names and id prefixes are used once per cauldron**, built-in ones
+  included: a record goes to its pool by its type, and an id names no
+  pool.
+- **Its edges** may point at its own types, at the workspace's region and
+  content types (not `viewer`), or at a type of another user grammar the
+  cauldron already holds. They may not reach clusters or dumps, and may not
+  be named `in_region` or `claims`; another built-in edge name (such as
+  `supersedes` or `relates`) is allowed only for an edge that stays in its
+  own grammar, so an edge to the workspace needs a name of its own
+  (`for_task` above, not `relates`). A built-in grammar cannot point at a
+  user grammar's records.
+- **The file is untrusted input**: at most 256 KiB, nested at most 8 deep,
+  names held to fixed character sets, no patterns of any kind, at most 64
+  types and 64 edge kinds, at most 8 user grammars per cauldron, no count
+  cells. A key the format does not know is refused by name, never ignored;
+  a key named twice in one object is refused (`duplicate_key`); a leading
+  UTF-8 byte order mark is skipped.
+
+Registering is an owner act, like `cauldron mcp grant`: it runs at a
+terminal, or where the owner opened `grammar` under owner_acts (`cauldron
+owner-acts open --only grammar`; [Who may act for the
+owner](#who-may-act-for-the-owner)). While the `mcp` service holds the
+soup, `grammar add` is sent to it and made through its own handle (the
+answer says `forwarded_to`): its sessions write the new types at once,
+and no grant changes. There, an agent's add (no terminal) is taken only
+where the owner's recorded owner_acts choice opens `grammar`; the
+`CAULDRON_OWNER_ACTS` variable alone does not reach the service. A service
+older than this release cannot take the add; the refusal then says to
+stop it, add and start it (`cauldron --env prod stop mcp`, the add,
+`cauldron --env prod start mcp`), which changes no grant. Do not revoke
+and grant again instead: a new grant has the default scopes and no
+projects. Adding the same grammar again changes nothing. No MCP tool
+registers a grammar.
+
+**Writing and reading its records** works as for any record. A record of
+a user type goes to its pool by type, alone or in a batch with workspace
+records, all or nothing:
+
+```json
+[
+  {"id": "a1", "type": "author", "handle": "A. Writer"},
+  {"id": "b1", "type": "book", "state": "reading", "handle": "A book about graphs",
+   "edges": [{"kind": "written_by", "to": "a1"}, {"kind": "about", "to": "R-1", "why": "it shaped the region"}]}
+]
+```
+
+`cauldron soup import` and `soup_put` land it, and the answer names the
+user pool each such record went to; `soup get BK-1` and `soup_get` find it
+by id (the record says its `pool`; written back, that key is dropped and
+named in `ignored`, so a record read can be written back as read);
+`soup nodes --type book` and `soup search ... --type book` (and
+`soup_nodes`, `soup_search`) read its pool; `soup_status` lists every pool
+under `pools`, each with its kind, version, `origin` (`builtin` or
+`user`), types and prefixes, and a user grammar's `digest`. A bare
+reference such as `R-1` or `BK-1` finds the record in its own pool;
+`<ID>@<pool>` names it outright, in an edge's `to`, in `soup get`, and in
+`soup link | unlink | cite` (a record of another pool than the one named
+is refused `wrong-pool`).
+`soup link`, `unlink` and `cite` (and their tools) change a user record's
+edges and citations as its grammar allows; an edge from a workspace record
+to a user record is refused (`no-edge-into-a-user-kind`). A user record is
+in no region, so `--region` (`region`) with a user type is refused, saying
+so. The owner's review flags stay the owner's on user records too.
+
+**What points at a record.** `soup get <id> --edges-in` (`soup_get` with
+`edges_in: true`) adds each record's `edges_in`: the edges that arrive at
+it from every pool (`from`, `kind`, `from_pool` when another pool, the
+edge's note and fields, and `unreviewed: true` or `rejected: true` when
+its source is), at most 500 (`edges_in_total` says when there are
+more); the key is dropped when the record is written back. An edge names
+one version of a record: when a record is superseded, the edges other
+records hold into the old version stay on it (no record changes once
+written), so a reader takes `superseded_by` from there to the current
+version, and a writer that wants an edge on the new version writes it.
+
+**The spine records each user pool.** When a grammar is added, the
+soup's spine records the pool's name, kind, version and digest, and from
+then on every pool file is judged against that record each time the soup
+is opened or a read reaches a user pool:
+
+- a user pool file whose pin is not the registered grammar (any hand edit,
+  a kind changed to a word with no hyphen included), a pool file the spine
+  never registered, a removed pool's file put back, and a `ws.db` or
+  `cauldron.db` declaring a user pool's type or prefix are refused, naming
+  the file that is wrong;
+- a user pool file must be the file this soup's spine wrote to (every write
+  is recorded in both): another cauldron's file, a file that will not open,
+  and an older copy are refused, each with its way out;
+- until then every open of the soup for writing is refused (a command
+  line's write, or the `mcp` service's first write after it starts); reads
+  of the workspace's own records still answer, and `cauldron soup grammar
+  list` shows each pool's problem. A service that already holds the soup
+  when a user pool file is swapped under it refuses writes and reads of
+  that pool at once, and keeps writing the workspace until it restarts.
+
+What to do:
+
+- **A damaged user pool file, or one restored alone from a backup.** Put
+  back the file this cauldron wrote. A copy older than the pool's last write
+  (a backup taken before it) is taken only by `cauldron soup grammar rebind
+  <pool> --env prod --cauldron kb`. Without `--yes` it names the writes the
+  copy lacks, the ids of the records they made and the edges other pools
+  hold into them; with `--yes` (the owner's act) it records them as lost.
+  Those records are gone from the soup, and this release never mints or
+  writes their ids again (an older release's `soup import --pool <pool>`
+  with an explicit id does not know the list and can write one; this
+  release then reads it as a new record, and `cauldron soup grammar list`
+  names it under `lost_ids_written_again`). `rebind` refuses a copy whose
+  pin differs, one holding a write or a record this soup's spine never made
+  in the pool (another cauldron's file, whatever its write log says), and
+  one with a write in flight. Restoring the
+  **whole soup directory** (spine and every pool) from one backup also
+  works, and loses nothing that backup holds.
+- **A pool file moved out of the soup.** The rest of the soup still opens,
+  including pools whose edges reach it (their edges into it point at nothing
+  until it is back). Its records cannot be read or written: a write or
+  typed read of its types is refused, naming the missing file, and `soup
+  get` lists its ids under `pool_files_missing`. Its kind, types and id
+  prefixes stay registered, so no other pool can take them and no id is
+  ever minted twice; put the file back to use it again.
+- **A grammar with a mistake.** `cauldron soup grammar remove <pool> --env
+  prod --cauldron kb --yes` (the owner's act) removes a user pool that holds
+  **no record** and that no other pool reaches. Its file is moved to
+  `<soup>/.removed/`, never deleted, and the name can be added again (also
+  after `rebind` recorded every record of it as lost; their ids stay lost
+  and the next one minted goes past them). A pool
+  with records is not removed, since a record is never deleted and its id
+  must keep naming it: write the corrected grammar as a new kind with its
+  own id prefixes. While the `mcp` service holds the soup, `remove` is sent
+  to it as `add` is. `rebind` needs the service stopped (`cauldron --env prod
+  stop mcp`, `rebind`, `start mcp`; no grant changes).
+
+**Not yet:** moving a user grammar to a new version, removing one that
+holds records, putting user records in regions (an edge to a region is a
+plain link: `soup region` does not list it), ripples writing user records,
+and publishing a user grammar's files (`soup_grammar`, `grammar export`).
+`cauldron merge` does not carry user pools yet: a merge whose source holds
+records in a user grammar's pool is refused whole, before anything is
+written, naming the pool (so no record is left behind); a source whose user
+pools are empty merges, and they are listed as not carried. A target's own
+user pools are not touched by a merge or by its undo.
+
+**Older releases.** A user pool is pinned exactly as a built-in pool is,
+and the spine's record of it is three tables an older release does not
+read (they do not move the spine's schema version), so 0.1.19 and earlier releases open
+a soup that holds one and read and write its other pools as before. They
+do not route user types: their `soup_put` and `soup import` refuse a user
+record as a type `ws` does not know, their `soup get` answers its id
+`missing`, and their `soup nodes --type book` is refused as an unknown
+type. Their command line reads and writes a user pool only when it is named
+(`--pool reading-list`), and then judges each record under the pool's
+pinned grammar, as this release does; such a write does not know the ids
+`rebind` recorded as lost (above). Their change feed lists user records
+by id, type and handle.
 
 ### Merging cauldrons
 

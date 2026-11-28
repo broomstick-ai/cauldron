@@ -92,3 +92,29 @@ fn clean_text_is_not_flagged() {
     let v = violations(clean);
     assert!(v.is_empty(), "clean text flagged: {v:?}");
 }
+
+/// The private file is shared with `scripts/check-no-personal-data.sh`,
+/// whose `history*` lines this guard skips; any other unknown line is still
+/// refused, and the personal patterns and samples are read as before.
+#[test]
+fn the_shared_pattern_file_s_history_lines_are_left_to_the_leak_check() {
+    let dir = std::env::temp_dir().join(format!("scrub-shared-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let f = dir.join("patterns");
+    let lines = [
+        "# a comment",
+        "personal\tname\tzq[x]v",
+        "sample\tname\tzqxv",
+        "history\tcode\t\\bZZ-[0-9]+\\b",
+        "history-allow\tcode\tZZ-0",
+        "history-sample\tcode\tZZ-12",
+        "history-base\t0123abc",
+        "history-fixtures\tscripts/x",
+    ];
+    std::fs::write(&f, lines.join("\n")).unwrap();
+    let (pats, samples) = load_personal(&f).unwrap().unwrap();
+    assert_eq!((pats.len(), samples), (1, vec![("name".to_string(), "zqxv".to_string())]));
+    std::fs::write(&f, format!("{}\nhistoric\tx\ty", lines.join("\n"))).unwrap();
+    assert_eq!(load_personal(&f).err().as_deref(), Some("line 9: not a pattern line"));
+    let _ = std::fs::remove_dir_all(&dir);
+}

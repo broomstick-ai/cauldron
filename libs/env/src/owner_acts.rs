@@ -1,6 +1,6 @@
 //! **Who may act for the owner**: the one decision every owner act asks.
 //!
-//! Four acts belong to a cauldron's owner:
+//! Five acts belong to a cauldron's owner:
 //!
 //! | act | the commands (and tools) |
 //! |---|---|
@@ -8,6 +8,7 @@
 //! | `approve` | `cauldron soup approve` (`--unapprove`), `cauldron ripples approve | reject` (`--unapprove`, `--unreject`), the MCP tools `soup_approve` and `soup_reject` |
 //! | `ripples` | `cauldron ripples on` |
 //! | `merge` | `cauldron merge` of a source whose records carry decisions (approved or rejected) into the target, with those decisions |
+//! | `grammar` | `cauldron soup grammar add`, `grammar rebind --yes`, `grammar remove --yes` |
 //!
 //! A command run with its input and output on a terminal may always do
 //! them. Anything else (an agent's shell, a script, CI, a server, a Claude
@@ -89,10 +90,13 @@ pub enum Act {
     /// `cauldron merge` carrying the source's decisions (approved or
     /// rejected) into the target.
     Merge,
+    /// `cauldron soup grammar add`: a user grammar (an ontology) becomes a
+    /// pool of the cauldron, which changes what its soup accepts.
+    Grammar,
 }
 
 impl Act {
-    pub const ALL: [Act; 4] = [Act::Grant, Act::Approve, Act::Ripples, Act::Merge];
+    pub const ALL: [Act; 5] = [Act::Grant, Act::Approve, Act::Ripples, Act::Merge, Act::Grammar];
 
     pub fn as_str(self) -> &'static str {
         match self {
@@ -100,6 +104,7 @@ impl Act {
             Act::Approve => "approve",
             Act::Ripples => "ripples",
             Act::Merge => "merge",
+            Act::Grammar => "grammar",
         }
     }
 
@@ -114,6 +119,7 @@ impl Act {
             Act::Approve => "approving and rejecting what a ripple wrote (`cauldron soup approve`, `cauldron ripples approve | reject`, the MCP tools `soup_approve` and `soup_reject`)",
             Act::Ripples => "turning automatic processing on (`cauldron ripples on`), which starts model spend",
             Act::Merge => "merging a cauldron whose records carry decisions (approved or rejected) into another, with those decisions (`cauldron merge`)",
+            Act::Grammar => "registering a user grammar as a new pool of a cauldron (`cauldron soup grammar add`)",
         }
     }
 }
@@ -197,7 +203,7 @@ pub fn parse_acts(v: &str) -> Result<Vec<Act>, String> {
             Some(_) => {}
             None => {
                 return Err(format!(
-                    "`{w}` is not an owner act: the acts are grant, approve, ripples and merge (or `open` for all of them, `terminal` for none)"
+                    "`{w}` is not an owner act: the acts are grant, approve, ripples, merge and grammar (or `open` for all of them, `terminal` for none)"
                 ))
             }
         }

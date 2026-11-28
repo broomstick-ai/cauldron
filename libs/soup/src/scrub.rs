@@ -65,6 +65,11 @@ pub struct Personal {
     pub re: Regex,
 }
 
+/// The first words of the lines `scripts/check-no-personal-data.sh` reads
+/// from the same private file (its history patterns), which this guard
+/// leaves to it.
+pub const HISTORY_WORDS: &[&str] = &["history", "history-allow", "history-sample", "history-base", "history-fixtures"];
+
 /// The personal patterns and the positive samples of the private pattern file
 /// (`scripts/personal-patterns.private`, tab-separated
 /// `personal<TAB><kind><TAB><regex>` / `sample<TAB><kind><TAB><text>`). The
@@ -89,6 +94,10 @@ pub fn load_personal(path: &Path) -> Result<Option<(Vec<Personal>, Vec<(String, 
                 re: Regex::new(&format!("(?i){pat}")).map_err(|_| format!("line {}: bad regex", n + 1))?,
             }),
             ["sample", kind, s] => samples.push((kind.to_string(), s.to_string())),
+            // The same file holds the release leak check's own lines
+            // (`scripts/check-no-personal-data.sh`: history patterns, matched
+            // against what is new since the last release): not this guard's.
+            [word, ..] if HISTORY_WORDS.contains(word) => {}
             _ => return Err(format!("line {}: not a pattern line", n + 1)),
         }
     }

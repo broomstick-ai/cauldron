@@ -94,6 +94,8 @@ mod merge;
 mod mcp_bridge;
 // The owner acts' one gate (`env::owner_acts`), on the command line.
 mod owner_acts;
+/// `cauldron soup grammar`: a cauldron's grammars, and user-defined ones.
+mod grammar;
 // `cauldron ripples`: a dump into records, by hand or automatically, through the ripples service.
 mod ripples;
 // `cauldron ripples review`: the records a ripple wrote, waiting for review.
@@ -152,7 +154,7 @@ const VERBS: &[(&str, &str)] = &[
     ("list", "the cauldrons of this environment (the implicit legacy one marked)"),
     ("rename", "rename a cauldron of this environment (its soup, dumps and MCP grant follow)"),
     ("remove", "put a cauldron away in cauldrons/.removed/ (never deleted; a dry run without --yes)"),
-    ("soup", "a cauldron's soup, offline: import | recover | regions | get | nodes | search | region | dump | dumps | dump-get | dump-remove | approve (`soup help`)"),
+    ("soup", "a cauldron's soup, offline: import | recover | regions | get | nodes | search | region | dump | dumps | dump-get | dump-remove | approve | grammar (`soup help`)"),
     ("merge", "copy one cauldron's soup and dumps into another, all or nothing; a plan first; --undo, --status (`merge help`)"),
     ("link", "name this project's cauldron in a .cauldron marker, so `soup` finds it from here (`link help`; an edge between records is `soup link`)"),
     ("mcp", "the MCP door: grant | revoke | grants | status | stdio (`mcp help`)"),
@@ -212,8 +214,8 @@ cauldron — the Cauldron entry point
                                      where that merge (or its undo) stands
     cauldron owner-acts open|terminal|unset|show [--only <acts>] [--cauldron <c>]
                                      who may act for the owner without a terminal
-                                     (grant, approve, ripples on, merge with decisions);
-                                     default `terminal`
+                                     (grant, approve, ripples on, merge with decisions,
+                                     grammar add); default `terminal`
                                      (`cauldron owner-acts help`)
     cauldron link <cauldron> --env <e> [--dir <path>] | --show
                                      write a .cauldron marker naming this project's

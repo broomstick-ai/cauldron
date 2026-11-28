@@ -1514,3 +1514,363 @@ impl Fingerprint {
         assert_eq!(self, &now, "{what}: something landed in some pool");
     }
 }
+
+/// **A user grammar joins a cauldron by the same additive act**: the pool
+/// file is built whole and linked in, no spine row and no other pool moves,
+/// a fresh open discovers it, and its records cross to the workspace by
+/// reach. A grammar the user check refuses (no hyphen, or a type name the
+/// workspace uses) is refused by `add_pool` itself, not only by the command
+/// that judges the file first.
+// RED: the user check removed from `add_pool` — the bad grammars below land.
+#[test]
+fn add_pool_takes_a_user_grammar_the_check_passes_and_no_other() {
+    let (dir, mut c) = soup("add-user-pool", true);
+    let r = region(&c);
+    let counter = c.committed_commit_counter().unwrap();
+    let ws_bytes = std::fs::read(dir.join("ws.db")).unwrap();
+    let file = include_str!("../../../schema/soup/examples/reading-list.grammar.json");
+    let g = spine::user_grammar::parse_file(file.as_bytes(), None).unwrap().grammar;
+    assert!(c.add_pool(&g).expect("the user pool is added"));
+    assert_eq!(c.committed_commit_counter().unwrap(), counter, "adding a pool writes no spine row");
+    assert_eq!(std::fs::read(dir.join("ws.db")).unwrap(), ws_bytes, "the workspace pool is not touched");
+    assert!(!c.add_pool(&g).unwrap(), "adding it again is a no-op");
+    let mut bad = g.clone();
+    bad.kind = PoolKind::new("readinglist");
+    bad.pool = PoolName::new("readinglist");
+    let err = c.add_pool(&bad).expect_err("a kind with no hyphen is not a user kind, and not cauldron@1");
+    assert!(format!("{err}").contains("only as `cauldron`"), "{err}");
+    let mut clash = g.clone();
+    clash.kind = PoolKind::new("other-list");
+    clash.pool = PoolName::new("other-list");
+    let err = c.add_pool(&clash).expect_err("types and prefixes already used");
+    assert!(format!("{err}").contains("type_name_taken") || format!("{err}").contains("kind_registered"), "{err}");
+    // A book reaching the workspace region lands in the user pool's part.
+    let (_, rows) = committed(
+        &c,
+        commit(
+            r#"MATCH (r: ws/region { id: $r }) CREATE (b: reading-list/book { handle: "A book", state: "reading" }) CREATE (b) -[about]-> (r) RETURN b.id"#,
+            &[("r", serde_json::json!(r.0))],
+        ),
+    );
+    let b = returned_id(&rows, "b.id");
+    assert!(b.0.starts_with("BK-"), "{b:?}");
+    drop(c);
+    let reopened = Cauldron::open(&dir, SpineConfig::default()).expect("the store opens");
+    assert_eq!(reopened.pools().map(|p| p.as_str().to_string()).collect::<Vec<_>>(), ["cauldron", "reading-list", "ws"]);
+    assert_eq!(reopened.grammar(&PoolName::new("reading-list")), Some(&g), "pinned exactly as given");
+}
+
+/// A pool file's bytes with its log folded in, and no side files left.
+fn settle(file: &Path) -> Vec<u8> {
+    let conn = rusqlite::Connection::open(file).unwrap();
+    conn.query_row("PRAGMA wal_checkpoint(TRUNCATE)", [], |_| Ok(())).unwrap();
+    drop(conn);
+    for side in ["-wal", "-shm"] {
+        let mut p = file.as_os_str().to_owned();
+        p.push(side);
+        let _ = std::fs::remove_file(PathBuf::from(p));
+    }
+    std::fs::read(file).unwrap()
+}
+
+/// `file`'s pinned grammar, changed by `edit` (a hand edit of the pin).
+fn edit_pin(file: &Path, edit: impl FnOnce(&mut serde_json::Value)) {
+    let conn = rusqlite::Connection::open(file).unwrap();
+    let text: String = conn.query_row("SELECT grammar FROM pool_meta", [], |r| r.get(0)).unwrap();
+    let mut g: serde_json::Value = serde_json::from_str(&text).unwrap();
+    edit(&mut g);
+    conn.execute("UPDATE pool_meta SET grammar = ?1", [g.to_string()]).unwrap();
+    drop(conn);
+    settle(file);
+}
+
+/// **A user pool file is judged at every open against the spine's registry,
+/// and bound to its spine** (issue #28, inspections F4, F7, F8, N4): the
+/// pin is the registered grammar or the file is refused, whatever was
+/// edited (a built-in type, a built-in prefix, a built-in kind, a kind
+/// with no hyphen such as `dumps`, a dropped state, an added field); a pool
+/// file from another cauldron, and an older copy of this one's, are refused
+/// as not this soup's own, each with its way out. A pool whose file is out
+/// does not block the soup, and its name, kind and prefix stay taken. The
+/// file put back, the soup opens as before.
+// RED: (a) `user_grammar::refusal` judging only hyphenated kinds (the
+// U2 build) — `kind=dumps` and `drop-states` open; (b) `pool_has_history`
+// not asked by `add_pool` — the removed pool is made again.
+#[test]
+fn a_user_pool_file_edited_or_swapped_in_is_refused_at_open_and_a_removed_one_is_not_made_again() {
+    let file_text = include_str!("../../../schema/soup/examples/reading-list.grammar.json");
+    let g = spine::user_grammar::parse_file(file_text.as_bytes(), None).unwrap().grammar;
+    let book = r#"CREATE (b: reading-list/book { handle: "A book", state: "reading" }) RETURN b.id"#;
+    let (dir, mut c) = soup("user-pool-bound", true);
+    assert!(c.add_pool(&g).unwrap());
+    drop(c);
+    let pool = dir.join("reading-list.db");
+    let empty = settle(&pool);
+    let c = Cauldron::open(&dir, SpineConfig::default()).unwrap();
+    committed(&c, commit(book, &[]));
+    drop(c);
+    let good = settle(&pool);
+    let refused = |why: &str| {
+        let err = Cauldron::open(&dir, SpineConfig::default()).err().unwrap_or_else(|| panic!("{why}: the soup opened"));
+        format!("{err}")
+    };
+    let edits: [(&str, fn(&mut serde_json::Value)); 6] = [
+        ("hijack decision", |g| {
+            g["node_types"]["decision"] = g["node_types"]["author"].clone();
+            g["node_types"]["decision"]["id_prefix"] = "DEC".into();
+        }),
+        ("kind workspace", |g| g["kind"] = "workspace".into()),
+        ("kind dumps", |g| g["kind"] = "dumps".into()),
+        ("prefix R", |g| g["node_types"]["author"]["id_prefix"] = "R".into()),
+        ("drop states", |g| g["node_types"]["book"]["states"] = serde_json::json!([])),
+        ("add a field", |g| g["node_types"]["book"]["fields"]["approved"] = serde_json::json!({"required": false, "kind": "any"})),
+    ];
+    for (what, edit) in edits {
+        edit_pin(&pool, edit);
+        let text = refused(what);
+        assert!(text.contains("is not the one this soup recorded when pool `reading-list` was added") && text.contains("Put back the file this cauldron wrote"), "{what}: {text}");
+        std::fs::write(&pool, &good).unwrap();
+    }
+    Cauldron::open(&dir, SpineConfig::default()).expect("put back, the soup opens");
+    // Another cauldron's pool file, and an older copy of this one's.
+    let (other, mut o) = soup("user-pool-bound-other", true);
+    assert!(o.add_pool(&g).unwrap());
+    // (Its own write: two cauldrons' transactions differ, by what they say
+    // and by the nonce every door gives a write.)
+    committed(&o, commit(r#"CREATE (b: reading-list/book { handle: "Another cauldron's book", state: "read" }) RETURN b.id"#, &[]));
+    drop(o);
+    std::fs::write(&pool, settle(&other.join("reading-list.db"))).unwrap();
+    let text = refused("another cauldron's");
+    assert!(text.contains("is not this soup's own: it holds 1 write(s) this soup's spine never made") && text.contains("restore the whole soup directory"), "{text}");
+    std::fs::write(&pool, &empty).unwrap();
+    let text = refused("an older copy");
+    assert!(text.contains("records 1 write(s) to pool `reading-list` that the file does not hold") && text.contains("grammar rebind reading-list"), "{text}");
+    std::fs::write(&pool, &good).unwrap();
+    // Moved out: the rest of the soup opens; the name, the kind and the
+    // prefix stay taken, so no id is minted twice.
+    std::fs::create_dir_all(dir.join("aside")).unwrap();
+    let aside = dir.join("aside").join("reading-list.db");
+    std::fs::rename(&pool, &aside).unwrap();
+    let mut c = Cauldron::open(&dir, SpineConfig::default()).expect("without the pool file, the rest of the soup opens");
+    assert_eq!(c.missing_user_pools().unwrap(), vec![g.clone()]);
+    let err = c.add_pool(&g).expect_err("a pool name with a history is not made again empty");
+    assert!(format!("{err}").contains(spine::user_grammar::POOL_HAS_HISTORY), "{err}");
+    let mut renamed = g.clone();
+    renamed.pool = PoolName::new("reading-list-2");
+    let err = format!("{}", c.add_pool(&renamed).expect_err("the kind stays registered"));
+    assert!(err.contains("kind_registered") || err.contains("prefix"), "{err}");
+    let mut other_kind = g.clone();
+    other_kind.kind = PoolKind::new("book-list");
+    other_kind.pool = PoolName::new("book-list");
+    // Its own type names and edges: only the prefixes `BK` and `AU` clash.
+    other_kind.node_types = g.node_types.iter().map(|(t, d)| (format!("{t}2"), d.clone())).collect();
+    other_kind.edge_kinds = BTreeMap::new();
+    let err = format!("{}", c.add_pool(&other_kind).expect_err("the prefix BK stays taken"));
+    assert!(err.contains("prefix_taken") || err.contains(spine::user_grammar::PREFIX_HAS_HISTORY), "{err}");
+    assert!(!pool.exists() && !dir.join("reading-list-2.db").exists() && !dir.join("book-list.db").exists(), "nothing was made");
+    drop(c);
+    std::fs::rename(&aside, &pool).unwrap();
+    let c = Cauldron::open(&dir, SpineConfig::default()).expect("put back, the soup opens");
+    assert_eq!(c.grammar(&PoolName::new("reading-list")), Some(&g));
+}
+
+/// **An older copy of a user pool file is taken by `rebind`** (inspection
+/// N1): judged first (the writes it lacks, the ids they made), then, with
+/// `apply`, recorded as lost; the soup opens again, the lost id is never
+/// minted again, and the ids already minted go on from where they were. A
+/// copy with another cauldron's write, or an edited pin, is never taken.
+/// **A pool with no record is removed** (F7), its file moved aside, its
+/// name free again; one with records, or one another pool reaches, is not.
+// RED: `rebind` not recording the forgiven parts — the soup stays refused.
+#[test]
+fn an_older_copy_is_rebound_and_an_empty_pool_is_removed() {
+    let file_text = include_str!("../../../schema/soup/examples/reading-list.grammar.json");
+    let g = spine::user_grammar::parse_file(file_text.as_bytes(), None).unwrap().grammar;
+    let book = |h: &str| format!(r#"CREATE (b: reading-list/book {{ handle: "{h}", state: "reading" }}) RETURN b.id"#);
+    let (dir, mut c) = soup("user-pool-rebind", true);
+    assert!(c.add_pool(&g).unwrap());
+    committed(&c, commit(&book("one"), &[]));
+    drop(c);
+    let pool = dir.join("reading-list.db");
+    let backup = settle(&pool);
+    let c = Cauldron::open(&dir, SpineConfig::default()).unwrap();
+    let (_, rows) = committed(&c, commit(&book("two"), &[]));
+    assert_eq!(returned_id(&rows, "b.id").0, "BK-2");
+    drop(c);
+    std::fs::write(&pool, &backup).unwrap();
+    assert!(Cauldron::open(&dir, SpineConfig::default()).is_err(), "the older copy is refused at open");
+    let judged = spine::user_registry::rebind(&dir, "reading-list", false, "test").unwrap();
+    assert_eq!((judged["outcome"].clone(), judged["lost_ids"].clone()), (serde_json::json!("would-rebind"), serde_json::json!(["BK-2"])), "{judged}");
+    assert!(Cauldron::open(&dir, SpineConfig::default()).is_err(), "judging wrote nothing");
+    let done = spine::user_registry::rebind(&dir, "reading-list", true, "test").unwrap();
+    assert_eq!(done["outcome"], "rebound", "{done}");
+    let c = Cauldron::open(&dir, SpineConfig::default()).expect("rebound, the soup opens");
+    let (_, rows) = committed(&c, commit(&book("three"), &[]));
+    assert_eq!(returned_id(&rows, "b.id").0, "BK-3", "BK-2 is never minted again");
+    drop(c);
+    // An edited pin is never taken.
+    edit_pin(&pool, |g| g["node_types"]["book"]["states"] = serde_json::json!([]));
+    let err = format!("{}", spine::user_registry::rebind(&dir, "reading-list", true, "test").unwrap_err());
+    assert!(err.contains("a pin that is not the grammar this soup registered"), "{err}");
+    edit_pin(&pool, |g| g["node_types"]["book"]["states"] = serde_json::json!(["to-read", "reading", "read"]));
+    let mut c = Cauldron::open(&dir, SpineConfig::default()).expect("the pin as it was");
+    // Remove: refused with records; an empty pool goes, and comes back empty.
+    let err = format!("{}", c.remove_user_pool(&PoolName::new("reading-list"), true).unwrap_err());
+    assert!(err.contains("holds records"), "{err}");
+    let mut films: PoolGrammar = g.clone();
+    films.kind = PoolKind::new("film-list");
+    films.pool = PoolName::new("film-list");
+    films.node_types = BTreeMap::from([("film".to_string(), {
+        let mut d = g.node_types["author"].clone();
+        d.id_prefix = Some("FM".into());
+        d
+    })]);
+    films.edge_kinds = BTreeMap::new();
+    assert!(c.add_pool(&films).unwrap());
+    let judged = c.remove_user_pool(&PoolName::new("film-list"), false).unwrap();
+    assert_eq!(judged["outcome"], "would-remove");
+    assert!(dir.join("film-list.db").exists(), "judging moved nothing");
+    let done = c.remove_user_pool(&PoolName::new("film-list"), true).unwrap();
+    assert_eq!(done["outcome"], "removed", "{done}");
+    assert!(!dir.join("film-list.db").exists() && dir.join(".removed/film-list.1/film-list.db").exists(), "moved, never deleted");
+    drop(c);
+    let mut c = Cauldron::open(&dir, SpineConfig::default()).expect("the soup opens without it");
+    assert!(c.add_pool(&films).unwrap(), "the name is free again: it minted nothing");
+}
+
+/// **`rebind` never takes another cauldron's records** (U3i L1), even from
+/// a file whose part log was emptied by hand; and **a pool `rebind` left
+/// with no record can be removed and added again** (U3i L2), with no id
+/// minted twice.
+// RED: (a) `rebind` judging the part log only — the emptied foreign file is
+// rebound and the next mint is `duplicate_node_id`; (b) `pool_has_history`
+// counting forgiven parts — the re-add is refused.
+#[test]
+fn rebind_refuses_records_the_spine_never_created_and_a_fully_lost_pool_comes_back_empty() {
+    let file_text = include_str!("../../../schema/soup/examples/reading-list.grammar.json");
+    let g = spine::user_grammar::parse_file(file_text.as_bytes(), None).unwrap().grammar;
+    let book = |h: &str| format!(r#"CREATE (b: reading-list/book {{ handle: "{h}", state: "reading" }}) RETURN b.id"#);
+    let (dir, mut c) = soup("rebind-strangers", true);
+    assert!(c.add_pool(&g).unwrap());
+    committed(&c, commit(&book("ours"), &[]));
+    drop(c);
+    let pool = dir.join("reading-list.db");
+    let ours = settle(&pool);
+    let (other, mut o) = soup("rebind-strangers-other", true);
+    assert!(o.add_pool(&g).unwrap());
+    committed(&o, commit(&book("theirs one"), &[]));
+    committed(&o, commit(&book("theirs two"), &[]));
+    drop(o);
+    let theirs = other.join("reading-list.db");
+    settle(&theirs);
+    let conn = rusqlite::Connection::open(&theirs).unwrap();
+    conn.execute("DELETE FROM applied_parts", []).unwrap();
+    drop(conn);
+    std::fs::write(&pool, settle(&theirs)).unwrap();
+    let err = format!("{}", spine::user_registry::rebind(&dir, "reading-list", true, "test").unwrap_err());
+    // (Its `BK-1` is caught first, by its creating write; its `BK-2` is one
+    // this spine never created at all.)
+    assert!(err.contains("another cauldron's file") && (err.contains("`BK-1`") || err.contains("`BK-2`")), "{err}");
+    std::fs::write(&pool, &ours).unwrap();
+    // A pool whose every record was lost by rebind: removed, then added again.
+    let mut c = Cauldron::open(&dir, SpineConfig::default()).unwrap();
+    let mut games = g.clone();
+    games.kind = PoolKind::new("game-list");
+    games.pool = PoolName::new("game-list");
+    games.node_types = BTreeMap::from([("game".to_string(), {
+        let mut d = g.node_types["author"].clone();
+        d.id_prefix = Some("GM".into());
+        d
+    })]);
+    games.edge_kinds = BTreeMap::new();
+    assert!(c.add_pool(&games).unwrap());
+    drop(c);
+    let gfile = dir.join("game-list.db");
+    let empty = settle(&gfile);
+    let c = Cauldron::open(&dir, SpineConfig::default()).unwrap();
+    committed(&c, commit(r#"CREATE (x: game-list/game { handle: "GM one" }) RETURN x.id"#, &[]));
+    drop(c);
+    settle(&gfile);
+    std::fs::write(&gfile, &empty).unwrap();
+    assert_eq!(spine::user_registry::rebind(&dir, "game-list", true, "test").unwrap()["lost_ids"], serde_json::json!(["GM-1"]));
+    let mut c = Cauldron::open(&dir, SpineConfig::default()).unwrap();
+    assert_eq!(c.remove_user_pool(&PoolName::new("game-list"), true).unwrap()["outcome"], "removed");
+    assert!(c.add_pool(&games).expect("its writes were all accepted as lost: the name comes back, empty"));
+    let (_, rows) = committed(&c, commit(r#"CREATE (x: game-list/game { handle: "GM again" }) RETURN x.id"#, &[]));
+    assert_eq!(returned_id(&rows, "x.id").0, "GM-2", "GM-1 is never minted again");
+}
+
+/// **A registry row in an earlier digest form is migrated, never refused**
+/// (LG1 D1, U3i D2): a soup whose user pool was registered by a development
+/// build that hashed the grammar structs directly (form 0), with no
+/// `digest_input` column, opens; the open for writing rewrites the row to
+/// this release's form. A row from a NEWER release's form is refused saying
+/// so, and a pin that really differs is refused naming what differs (not
+/// "edited by hand" for a file nobody touched).
+// RED: `user_grammar::refusal` comparing `digest()` alone — the form-0 row
+// is refused "edited by hand", as one development build refused an earlier one's soups.
+#[test]
+fn a_registry_row_in_an_earlier_digest_form_is_migrated_and_a_newer_one_is_named() {
+    let file_text = include_str!("../../../schema/soup/examples/reading-list.grammar.json");
+    let g = spine::user_grammar::parse_file(file_text.as_bytes(), None).unwrap().grammar;
+    let (dir, mut c) = soup("digest-forms", true);
+    assert!(c.add_pool(&g).unwrap());
+    committed(&c, commit(r#"CREATE (b: reading-list/book { handle: "A book", state: "reading" }) RETURN b.id"#, &[]));
+    drop(c);
+    let spine_file = dir.join(SPINE_FILE);
+    // The registry as a development build left it: form-0 digest, no column.
+    let conn = rusqlite::Connection::open(&spine_file).unwrap();
+    conn.execute_batch("ALTER TABLE user_pools DROP COLUMN digest_input").unwrap();
+    conn.execute("UPDATE user_pools SET digest = ?1", [spine::user_grammar::digest_v0(&g)]).unwrap();
+    drop(conn);
+    assert_ne!(spine::user_grammar::digest_v0(&g), spine::user_grammar::digest(&g), "the two forms differ, so the test can fail");
+    let c = Cauldron::open(&dir, SpineConfig::default()).expect("an earlier digest form opens");
+    drop(c);
+    let conn = rusqlite::Connection::open(&spine_file).unwrap();
+    let (digest, form): (String, i64) = conn.query_row("SELECT digest, digest_input FROM user_pools", [], |r| Ok((r.get(0)?, r.get(1)?))).unwrap();
+    assert_eq!((digest.as_str(), form), (spine::user_grammar::digest(&g).as_str(), 1), "migrated to this release's form");
+    // A newer release's form: named, not called a hand edit.
+    conn.execute("UPDATE user_pools SET digest_input = 99, digest = 'sha256:future'", []).unwrap();
+    drop(conn);
+    let err = format!("{}", Cauldron::open(&dir, SpineConfig::default()).err().expect("a newer form is not judged"));
+    assert!(err.contains("written by a newer release (digest form 99") && !err.contains("by hand"), "{err}");
+    let conn = rusqlite::Connection::open(&spine_file).unwrap();
+    conn.execute("UPDATE user_pools SET digest_input = 1, digest = ?1", [spine::user_grammar::digest(&g)]).unwrap();
+    drop(conn);
+    // A pin that differs: what differs is named.
+    let pool = dir.join("reading-list.db");
+    settle(&pool);
+    edit_pin(&pool, |g| g["node_types"]["book"]["states"] = serde_json::json!([]));
+    let err = format!("{}", Cauldron::open(&dir, SpineConfig::default()).err().unwrap());
+    assert!(err.contains("type `book` differs"), "{err}");
+}
+
+/// **`rebind` compares each record with the write that created it here**
+/// (U4i L1): another cauldron's file whose every id this spine also created
+/// (its `BK-1` beside ours), part log emptied by hand, is refused: the
+/// record's creating transaction is not the one this spine recorded for
+/// that id.
+// RED: `rebind` comparing ids only — the other cauldron's `BK-1` is taken.
+#[test]
+fn rebind_refuses_a_record_another_cauldron_created_under_an_id_ours_also_has() {
+    let file_text = include_str!("../../../schema/soup/examples/reading-list.grammar.json");
+    let g = spine::user_grammar::parse_file(file_text.as_bytes(), None).unwrap().grammar;
+    let (dir, mut c) = soup("rebind-same-ids", true);
+    assert!(c.add_pool(&g).unwrap());
+    committed(&c, commit(r#"CREATE (b: reading-list/book { handle: "own", state: "reading" }) RETURN b.id"#, &[]));
+    drop(c);
+    let (other, mut o) = soup("rebind-same-ids-other", true);
+    assert!(o.add_pool(&g).unwrap());
+    committed(&o, commit(r#"CREATE (b: reading-list/book { handle: "OTHER cauldron BK-1 text", state: "read" }) RETURN b.id"#, &[]));
+    drop(o);
+    let theirs = other.join("reading-list.db");
+    settle(&theirs);
+    let conn = rusqlite::Connection::open(&theirs).unwrap();
+    conn.execute("DELETE FROM applied_parts", []).unwrap();
+    drop(conn);
+    let pool = dir.join("reading-list.db");
+    settle(&pool);
+    std::fs::write(&pool, settle(&theirs)).unwrap();
+    let err = format!("{}", spine::user_registry::rebind(&dir, "reading-list", false, "test").unwrap_err());
+    assert!(err.contains("`BK-1`") && err.contains("not the write this soup's spine recorded"), "{err}");
+}

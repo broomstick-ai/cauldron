@@ -368,17 +368,130 @@ pub fn rest_check(dir: &Path) -> Result<Vec<String>> {
         if p.extension().and_then(|e| e.to_str()) != Some("db") || p.file_name().and_then(|n| n.to_str()) == Some(SPINE_FILE) {
             continue;
         }
-        let c = read_only_connection(&p)?;
-        let sealed: i64 = c.query_row(
-            "SELECT count(*) FROM pragma_table_info('nodes') WHERE name = 'sealed'",
-            [],
-            |r| r.get(0),
-        )?;
+        let (is_pool, sealed): (i64, i64) = read_only_connection(&p)
+            .and_then(|c| {
+                let is_pool: i64 = c.query_row("SELECT count(*) FROM sqlite_master WHERE type = 'table' AND name = 'pool_meta'", [], |r| r.get(0))?;
+                let sealed: i64 = c.query_row("SELECT count(*) FROM pragma_table_info('nodes') WHERE name = 'sealed'", [], |r| r.get(0))?;
+                Ok((is_pool, sealed))
+            })
+            .map_err(|e| crate::user_grammar::unreadable(&p, e))?;
+        // An empty or foreign file is not a pool that predates the seal flag:
+        // it is no pool at all.
+        if is_pool == 0 {
+            return Err(crate::user_grammar::unreadable(&p, SpineError::hard(format!("`{}` holds no pool (no `pool_meta` table)", p.display()))));
+        }
         if sealed == 0 {
             why.push(format!("pool file `{}` predates the seal flag (an open would add the column)", p.display()));
         }
     }
     Ok(why)
+}
+
+/// **Is `<dir>/<pool>.db` this soup's own pool file?** Answers `None` when
+/// it is, else the sentence that says why not. Every part a write landed in
+/// the pool is recorded twice: in the spine (`tx_parts`, under the pool's
+/// name, `landed`) and in the pool file (`applied_parts`, same transaction
+/// as its deltas). So the pool file is bound to its spine without anything
+/// stored beside either: every part the spine says landed in the pool must
+/// be in the file (a file that lacks one is an older copy, or a pool made
+/// again under the same name), and every part the file holds must be one
+/// the spine wrote to this pool (a file that holds another is another
+/// cauldron's). A part the file holds whose spine row has not yet been
+/// marked landed is a write in flight, and counts as the spine's. Read
+/// through connections that cannot write.
+pub fn pool_bound(dir: &Path, pool: &str) -> Result<Option<String>> {
+    let b = binding(dir, pool)?;
+    Ok(b.why(pool))
+}
+
+/// What [`pool_bound`] found: the parts the file holds that the spine never
+/// wrote to the pool (`foreign`), and the parts the spine landed there that
+/// the file lacks (`lost`: hash, part, seq, ts), less those the owner
+/// accepted as lost (`cauldron soup grammar rebind`).
+#[derive(Debug, Clone, Default)]
+pub struct Binding {
+    pub foreign: Vec<(String, i64)>,
+    pub lost: Vec<(String, i64, i64, String)>,
+}
+
+impl Binding {
+    /// `None` when the file is the pool's own; else why not, and what to do.
+    pub fn why(&self, pool: &str) -> Option<String> {
+        let (f, l) = (self.foreign.len(), self.lost.len());
+        match (f, l) {
+            (0, 0) => None,
+            (0, l) => Some(format!(
+                "this soup's spine records {l} write(s) to pool `{pool}` that the file does not hold (the last at {}), so it is \
+                 an older copy of the pool's file, such as one restored from a backup taken before those writes. Either \
+                 restore the whole soup directory from one backup, or accept this copy, losing those writes: `cauldron soup \
+                 grammar rebind {pool} --env <env> --cauldron <name>` names what they wrote, and with `--yes` records them \
+                 as lost (their ids are never minted again)",
+                self.lost.last().map(|x| x.3.as_str()).unwrap_or("?")
+            )),
+            (f, _) => Some(format!(
+                "it holds {f} write(s) this soup's spine never made to pool `{pool}`: it is another cauldron's pool file, or \
+                 this soup's `spine.db` is older than the pool file (a spine restored alone). Put back this cauldron's own \
+                 pool file, or restore the whole soup directory (spine and every pool) from one backup"
+            )),
+        }
+    }
+}
+
+/// [`pool_bound`]'s facts.
+pub fn binding(dir: &Path, pool: &str) -> Result<Binding> {
+    use std::collections::BTreeSet;
+    let spine = read_only_connection(&dir.join(SPINE_FILE))?;
+    let forgiven = crate::user_registry::forgiven(&spine, pool)?;
+    let mut written: BTreeSet<(String, i64)> = BTreeSet::new();
+    let mut landed: Vec<(String, i64, i64, String)> = Vec::new();
+    {
+        let mut q = spine.prepare(
+            "SELECT t.hash, p.part, p.landed, t.seq, t.ts FROM tx_parts p JOIN transactions t ON t.seq = p.seq WHERE p.pool = ?1 ORDER BY t.seq",
+        )?;
+        let rows = q.query_map([pool], |r| {
+            Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?, r.get::<_, i64>(2)?, r.get::<_, i64>(3)?, r.get::<_, String>(4)?))
+        })?;
+        for row in rows {
+            let (h, part, l, seq, ts) = row?;
+            if l != 0 && !forgiven.contains(&(h.clone(), part)) {
+                landed.push((h.clone(), part, seq, ts));
+            }
+            written.insert((h, part));
+        }
+    }
+    let file = dir.join(format!("{pool}.db"));
+    let conn = read_only_connection(&file)?;
+    let mut applied: BTreeSet<(String, i64)> = BTreeSet::new();
+    {
+        let mut q = conn.prepare("SELECT tx_hash, part FROM applied_parts")?;
+        let rows = q.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?)))?;
+        for row in rows {
+            applied.insert(row?);
+        }
+    }
+    Ok(Binding {
+        foreign: applied.iter().filter(|x| !written.contains(*x)).cloned().collect(),
+        lost: landed.into_iter().filter(|(h, p, _, _)| !applied.contains(&(h.clone(), *p))).collect(),
+    })
+}
+
+/// Has this soup's spine ever recorded a write to pool `pool`? (A pool name
+/// with a history is never made again as a new, empty pool: its ids would be
+/// minted again, and edges into its old records would point at new ones.)
+pub fn pool_has_history(dir: &Path, pool: &str) -> Result<bool> {
+    // Parts the owner accepted as lost (`rebind`) left no record behind, and
+    // their ids are kept as lost and their counters stay: they are not a
+    // history a new, empty pool of the name would collide with.
+    let spine = read_only_connection(&dir.join(SPINE_FILE))?;
+    let forgiven = crate::user_registry::forgiven(&spine, pool)?;
+    let mut q = spine.prepare("SELECT t.hash, p.part FROM tx_parts p JOIN transactions t ON t.seq = p.seq WHERE p.pool = ?1 AND p.landed = 1")?;
+    let rows = q.query_map([pool], |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?)))?;
+    for r in rows {
+        if !forgiven.contains(&r?) {
+            return Ok(true);
+        }
+    }
+    Ok(false)
 }
 
 /// **The commit order of every landed transaction** of the cauldron at

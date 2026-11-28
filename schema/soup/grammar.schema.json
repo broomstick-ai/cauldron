@@ -1,0 +1,297 @@
+{
+  "$defs": {
+    "counts": {
+      "additionalProperties": {
+        "maximum": 16,
+        "minimum": 0,
+        "type": "integer"
+      },
+      "propertyNames": {
+        "$ref": "#/$defs/ident"
+      },
+      "type": "object"
+    },
+    "edge_kind": {
+      "additionalProperties": false,
+      "properties": {
+        "at_most_one_per_from": {
+          "type": "boolean"
+        },
+        "at_most_one_per_to": {
+          "type": "boolean"
+        },
+        "fields": {
+          "additionalProperties": {
+            "$ref": "#/$defs/field"
+          },
+          "maxProperties": 16,
+          "propertyNames": {
+            "$ref": "#/$defs/ident"
+          },
+          "type": "object"
+        },
+        "from": {
+          "items": {
+            "$ref": "#/$defs/type_ref"
+          },
+          "maxItems": 16,
+          "minItems": 1,
+          "type": "array"
+        },
+        "to": {
+          "items": {
+            "$ref": "#/$defs/type_ref"
+          },
+          "maxItems": 16,
+          "minItems": 1,
+          "type": "array"
+        }
+      },
+      "required": [
+        "from",
+        "to"
+      ],
+      "type": "object"
+    },
+    "field": {
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "enum": [
+            "any",
+            "text",
+            "integer",
+            "boolean",
+            "object"
+          ]
+        },
+        "max_chars": {
+          "maximum": 10000,
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "min_chars": {
+          "maximum": 10000,
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "required": {
+          "type": "boolean"
+        }
+      },
+      "type": "object"
+    },
+    "handle": {
+      "additionalProperties": false,
+      "description": "The display contract: every type's `handle` is required text, at least 1 character and at most 235.",
+      "properties": {
+        "kind": {
+          "const": "text"
+        },
+        "max_chars": {
+          "maximum": 235,
+          "minimum": 1,
+          "type": "integer"
+        },
+        "min_chars": {
+          "maximum": 235,
+          "minimum": 1,
+          "type": "integer"
+        },
+        "required": {
+          "const": true
+        }
+      },
+      "required": [
+        "required",
+        "kind",
+        "min_chars",
+        "max_chars"
+      ],
+      "type": "object"
+    },
+    "ident": {
+      "pattern": "^[a-z][a-z0-9_]{0,39}$",
+      "type": "string"
+    },
+    "kind": {
+      "maxLength": 32,
+      "pattern": "^[a-z][a-z0-9]*(-[a-z0-9]+)+$",
+      "type": "string"
+    },
+    "node_type": {
+      "additionalProperties": false,
+      "properties": {
+        "count_cells": {
+          "maxProperties": 0,
+          "type": "object"
+        },
+        "fields": {
+          "additionalProperties": {
+            "$ref": "#/$defs/field"
+          },
+          "maxProperties": 48,
+          "properties": {
+            "handle": {
+              "$ref": "#/$defs/handle"
+            }
+          },
+          "propertyNames": {
+            "$ref": "#/$defs/ident"
+          },
+          "required": [
+            "handle"
+          ],
+          "type": "object"
+        },
+        "id_prefix": {
+          "pattern": "^[A-Z][A-Z0-9]{0,5}$",
+          "type": "string"
+        },
+        "required_at_mint_any_of": {
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "edges": {
+                "$ref": "#/$defs/counts"
+              },
+              "fields": {
+                "items": {
+                  "$ref": "#/$defs/ident"
+                },
+                "type": "array"
+              }
+            },
+            "type": "object"
+          },
+          "maxItems": 8,
+          "type": "array"
+        },
+        "required_edges_at_mint": {
+          "$ref": "#/$defs/counts"
+        },
+        "states": {
+          "items": {
+            "pattern": "^[a-z][a-z0-9_-]{0,39}$",
+            "type": "string"
+          },
+          "maxItems": 32,
+          "type": "array"
+        }
+      },
+      "required": [
+        "fields",
+        "id_prefix"
+      ],
+      "type": "object"
+    },
+    "type_ref": {
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "at": {
+              "const": "local"
+            },
+            "node_type": {
+              "$ref": "#/$defs/ident"
+            }
+          },
+          "required": [
+            "at",
+            "node_type"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "at": {
+              "const": "reach"
+            },
+            "kind": {
+              "$ref": "#/$defs/kind"
+            },
+            "node_type": {
+              "$ref": "#/$defs/ident"
+            }
+          },
+          "required": [
+            "at",
+            "kind",
+            "node_type"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "at": {
+              "const": "same_as_source"
+            }
+          },
+          "required": [
+            "at"
+          ],
+          "type": "object"
+        }
+      ]
+    }
+  },
+  "$id": "https://github.com/broomstick-ai/cauldron/schema/soup/grammar.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "A grammar a cauldron can register as a new pool (`cauldron soup grammar check | add`). This schema describes the file's shape and names. `cauldron soup grammar check` also judges what needs the cauldron (names, kinds and prefixes already taken; reach targets), the reach rules (which built-in types an edge may reach, and edge names reserved to the built-in grammars) and that a pool's id prefixes and type names are once per cauldron. The display contract (every type's `handle`, `$defs/handle`) is here. Generated from libs/spine/src/user_grammar.rs; do not edit by hand.",
+  "properties": {
+    "edge_kinds": {
+      "additionalProperties": {
+        "$ref": "#/$defs/edge_kind"
+      },
+      "maxProperties": 64,
+      "propertyNames": {
+        "$ref": "#/$defs/ident"
+      },
+      "type": "object"
+    },
+    "format": {
+      "const": "cauldron-grammar/1"
+    },
+    "kind": {
+      "$ref": "#/$defs/kind",
+      "description": "A user kind always has a hyphen."
+    },
+    "node_types": {
+      "additionalProperties": {
+        "$ref": "#/$defs/node_type"
+      },
+      "maxProperties": 64,
+      "minProperties": 1,
+      "propertyNames": {
+        "$ref": "#/$defs/ident"
+      },
+      "type": "object"
+    },
+    "pool": {
+      "$ref": "#/$defs/kind"
+    },
+    "version": {
+      "maximum": 9999,
+      "minimum": 1,
+      "type": "integer"
+    }
+  },
+  "required": [
+    "format",
+    "kind",
+    "version",
+    "node_types"
+  ],
+  "title": "A user-defined grammar file (cauldron-grammar/1)",
+  "type": "object"
+}
